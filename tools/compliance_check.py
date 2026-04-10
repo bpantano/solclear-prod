@@ -613,8 +613,9 @@ def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
 
     pool = candidates[:MAX_CANDIDATE_PHOTOS]
 
-    # Download and encode all candidate images
+    # Download and encode all candidate images, track URLs by index
     image_blocks = []
+    photo_urls = {}  # {1: "https://...", 2: "https://...", ...}
     for i, photo in enumerate(pool):
         url = get_photo_web_url(photo)
         if not url:
@@ -623,16 +624,18 @@ def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
         if not result:
             continue
         data, media_type = result
+        idx = len(photo_urls) + 1
+        photo_urls[idx] = url
         image_blocks.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
-        image_blocks.append({"type": "text", "text": f"[Photo {i + 1}]"})
+        image_blocks.append({"type": "text", "text": f"[Photo {idx}]"})
 
     if not image_blocks:
-        return {"result": "ERROR", "reason": "Could not download any candidate photos"}
+        return {"result": "ERROR", "reason": "Could not download any candidate photos", "photo_urls": {}}
 
     multi_photo_note = (
-        f"You are shown {len(image_blocks) // 2} photos from the same checklist task. "
+        f"You are shown {len(photo_urls)} photos from the same checklist task. "
         "Find the one that best satisfies the requirement below and assess that photo.\n\n"
-        if len(image_blocks) // 2 > 1 else ""
+        if len(photo_urls) > 1 else ""
     )
 
     prompt = (
@@ -651,11 +654,11 @@ def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
 
     text = _call_anthropic(payload, requirement["id"])
     if text and text.startswith("ERROR"):
-        return {"result": "ERROR", "reason": text}
+        return {"result": "ERROR", "reason": text, "photo_urls": photo_urls}
 
     first_word = (text or "").strip().split()[0].upper().rstrip(".:,")
     passed = first_word == "PASS"
-    return {"result": "PASS" if passed else "FAIL", "reason": text}
+    return {"result": "PASS" if passed else "FAIL", "reason": text, "photo_urls": photo_urls}
 
 
 # ── Photo matching ────────────────────────────────────────────────────────────
@@ -714,7 +717,7 @@ def get_photo_web_url(photo: dict) -> Optional[str]:
 
 # ── Main compliance check ─────────────────────────────────────────────────────
 
-def run_compliance_check(project_id: str, params: dict, run_vision: bool = True) -> dict:
+def run_compliance_check(project_id: str, params: dict, run_vision: bool = True, progress_callback=None) -> dict:
     # Load photos
     photos_path = TMP_DIR / f"photos_{project_id}.json"
     if not photos_path.exists():
@@ -736,7 +739,9 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True)
             checklists = resp.json()
 
             checklist_tasks = []
+            checklist_ids = []
             for cl in checklists:
+                checklist_ids.append(cl.get("id"))
                 for task in cl.get("sectionless_tasks", []):
                     checklist_tasks.append(task)
                 for section in cl.get("sections", []):
@@ -747,7 +752,9 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True)
             print(f"WARNING: Could not load checklists: {e}", file=sys.stderr)
 
     # Determine applicable requirements
+    total_applicable = sum(1 for r in REQUIREMENTS if r["condition"](params))
     results = []
+    checked = 0
     for req in REQUIREMENTS:
         applies = req["condition"](params)
         if not applies:
@@ -763,32 +770,41 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True)
 
         candidates = find_candidate_photos(req, photos, checklist_tasks)
 
+        checked += 1
+
         if not candidates:
-            results.append({
+            result_entry = {
                 "id": req["id"],
                 "title": req["title"],
                 "section": req["section"],
                 "status": "MISSING",
                 "reason": "No matching photo found in CompanyCam",
                 "optional": req.get("optional", False),
-            })
+            }
+            results.append(result_entry)
+            if progress_callback:
+                progress_callback(result_entry, checked, total_applicable)
             continue
 
         if run_vision:
             # Single-pass: send all candidates, Haiku selects best and validates in one call
             import time; time.sleep(1)  # ~19 calls/run — stay well under 240/min limit
             vision_result = check_candidates_with_vision(candidates, req)
-            results.append({
+            result_entry = {
                 "id": req["id"],
                 "title": req["title"],
                 "section": req["section"],
                 "status": vision_result["result"],
                 "reason": vision_result["reason"],
                 "candidates": len(candidates),
+                "photo_urls": vision_result.get("photo_urls", {}),
                 "optional": req.get("optional", False),
-            })
+            }
+            results.append(result_entry)
+            if progress_callback:
+                progress_callback(result_entry, checked, total_applicable)
         else:
-            results.append({
+            result_entry = {
                 "id": req["id"],
                 "title": req["title"],
                 "section": req["section"],
@@ -796,12 +812,16 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True)
                 "reason": f"{len(candidates)} candidate photo(s) found — vision check skipped",
                 "candidates": len(candidates),
                 "optional": req.get("optional", False),
-            })
+            }
+            results.append(result_entry)
+            if progress_callback:
+                progress_callback(result_entry, checked, total_applicable)
 
     return {
         "project_id": project_id,
         "params": params,
         "total_photos": len(photos),
+        "checklist_ids": checklist_ids if COMPANYCAM_API_KEY else [],
         "requirements": results,
     }
 
