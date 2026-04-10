@@ -111,7 +111,7 @@ def derive_params_from_checklist(project_id, checklist_id, manufacturer, project
 
 # ── Background check thread ──────────────────────────────────────────────────
 
-def run_check_thread(project_id, params):
+def run_check_thread(project_id, params, rerun_ids=None):
     global _check_running
     try:
         # Ensure photos are cached
@@ -124,15 +124,51 @@ def run_check_thread(project_id, params):
                 json.dump(photos, f, indent=2)
             _result_queue.put(json.dumps({"type": "status", "message": f"Fetched {len(photos)} photos. Starting check..."}))
 
-        def on_progress(result, index, total):
-            _result_queue.put(json.dumps({
-                "type": "progress",
-                "index": index,
-                "total": total,
-                "requirement": result,
-            }))
+        if rerun_ids:
+            # Rerun failed only — load previous report, re-check only failed IDs
+            _result_queue.put(json.dumps({"type": "status", "message": f"Re-checking {len(rerun_ids)} failed requirements..."}))
+            prev_path = TMP_DIR / f"compliance_{project_id}.json"
+            prev_report = {}
+            if prev_path.exists():
+                with open(prev_path) as f:
+                    prev_report = json.load(f)
+            prev_results = {r["id"]: r for r in prev_report.get("requirements", [])}
 
-        report = run_compliance_check(project_id, params, run_vision=True, progress_callback=on_progress)
+            def on_progress(result, index, total):
+                _result_queue.put(json.dumps({
+                    "type": "progress",
+                    "index": index,
+                    "total": total,
+                    "requirement": result,
+                }))
+
+            report = run_compliance_check(project_id, params, run_vision=True,
+                                          progress_callback=on_progress, only_ids=rerun_ids)
+
+            # Merge: use new results for rerun IDs, keep old results for the rest
+            new_results = {r["id"]: r for r in report.get("requirements", [])}
+            merged = []
+            for r in prev_report.get("requirements", []):
+                if r["id"] in new_results:
+                    merged.append(new_results[r["id"]])
+                else:
+                    merged.append(r)
+            # Add any new IDs not in previous (unlikely but safe)
+            for r in report.get("requirements", []):
+                if r["id"] not in {m["id"] for m in merged}:
+                    merged.append(r)
+
+            report["requirements"] = merged
+        else:
+            def on_progress(result, index, total):
+                _result_queue.put(json.dumps({
+                    "type": "progress",
+                    "index": index,
+                    "total": total,
+                    "requirement": result,
+                }))
+
+            report = run_compliance_check(project_id, params, run_vision=True, progress_callback=on_progress)
 
         # Save report JSON
         TMP_DIR.mkdir(exist_ok=True)
@@ -188,6 +224,11 @@ class LiveHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/projects/") and path.endswith("/checklists"):
             pid = path.split("/")[3]
             self._api_checklists(pid)
+        elif path == "/api/reports":
+            self._api_reports()
+        elif path.startswith("/report/"):
+            pid = path.split("/")[2]
+            self._serve_report(pid)
         elif path == "/start":
             self._start_check(qs)
         elif path == "/stream":
@@ -250,6 +291,8 @@ class LiveHandler(BaseHTTPRequestHandler):
         checklist_id = qs.get("checklist_id", [""])[0]
         manufacturer = qs.get("manufacturer", ["SolarEdge"])[0]
         project_state = qs.get("project_state", [""])[0]
+        rerun_ids_raw = qs.get("rerun_ids", [""])[0]
+        rerun_ids = set(rerun_ids_raw.split(",")) if rerun_ids_raw else None
 
         if not project_id or not checklist_id:
             with _check_lock:
@@ -261,9 +304,12 @@ class LiveHandler(BaseHTTPRequestHandler):
         _result_queue.put(json.dumps({"type": "status", "message": "Reading checklist and deriving job parameters..."}))
         params = derive_params_from_checklist(project_id, checklist_id, manufacturer, project_state)
 
-        total = sum(1 for r in REQUIREMENTS if r["condition"](params))
+        if rerun_ids:
+            total = len(rerun_ids)
+        else:
+            total = sum(1 for r in REQUIREMENTS if r["condition"](params))
 
-        t = threading.Thread(target=run_check_thread, args=(project_id, params), daemon=True)
+        t = threading.Thread(target=run_check_thread, args=(project_id, params, rerun_ids), daemon=True)
         t.start()
 
         self._send_json({"ok": True, "total": total, "project_id": project_id, "derived_params": params})
@@ -291,6 +337,108 @@ class LiveHandler(BaseHTTPRequestHandler):
                     self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+    def _api_reports(self):
+        """Return a list of previously generated compliance reports."""
+        import glob
+        reports = []
+        for f in sorted(glob.glob(str(TMP_DIR / "compliance_*.json")), reverse=True):
+            try:
+                with open(f) as fh:
+                    data = json.load(fh)
+                pid = data.get("project_id", "")
+                reqs = data.get("requirements", [])
+                required = [r for r in reqs if r.get("status") != "N/A" and not r.get("optional")]
+                passed = sum(1 for r in required if r["status"] == "PASS")
+                failed = sum(1 for r in required if r["status"] in ("FAIL", "MISSING", "ERROR"))
+                # Get project name from CompanyCam
+                name = pid
+                try:
+                    r = http_requests.get(f"{API_BASE}/projects/{pid}",
+                                          headers=cc_headers(), timeout=5)
+                    if r.status_code == 200:
+                        name = r.json().get("name", pid)
+                except Exception:
+                    pass
+                mtime = os.path.getmtime(f)
+                reports.append({
+                    "project_id": pid,
+                    "name": name,
+                    "passed": passed,
+                    "failed": failed,
+                    "total": len(required),
+                    "timestamp": int(mtime),
+                })
+            except Exception:
+                continue
+        self._send_json(reports)
+
+    def _serve_report(self, project_id):
+        """Generate and serve a static HTML report from saved compliance JSON."""
+        report_path = TMP_DIR / f"compliance_{project_id}.json"
+        if not report_path.exists():
+            self.send_error(404, f"No report found for project {project_id}")
+            return
+        try:
+            with open(report_path) as f:
+                report = json.load(f)
+            # Fetch project details for the report header
+            project = {}
+            try:
+                r = http_requests.get(f"{API_BASE}/projects/{project_id}",
+                                      headers=cc_headers(), timeout=5)
+                if r.status_code == 200:
+                    project = r.json()
+            except Exception:
+                pass
+            from tools.generate_report_html import generate_html
+            html = generate_html(report, project)
+
+            # Count failed requirements for the rerun button
+            reqs = report.get("requirements", [])
+            failed_ids = [r["id"] for r in reqs if r.get("status") in ("FAIL", "MISSING", "ERROR") and r.get("status") != "N/A"]
+            n_failed = len(failed_ids)
+            params = report.get("params", {})
+            checklist_ids = report.get("checklist_ids", [])
+
+            # Inject back link at the top (after <body>)
+            back_bar = '''
+<div style="background:#111827;padding:10px 20px;">
+  <a href="/" style="color:#9ca3af;text-decoration:none;font-size:13px;font-weight:500;">&larr; Back to Solclear</a>
+</div>'''
+            html = html.replace("<body>", "<body>" + back_bar, 1)
+
+            # Inject rerun button right after the overall banner
+            if n_failed > 0:
+                rerun_btn = f'''
+<div style="padding:12px 32px;background:#fff;border-bottom:1px solid #e5e7eb;">
+  <button onclick="rerunFailed()" style="background:#ef4444;color:#fff;border:none;border-radius:8px;padding:12px 20px;font-size:14px;font-weight:600;cursor:pointer;min-height:44px;width:100%;">
+    Rerun {n_failed} Failed Item{"s" if n_failed != 1 else ""}
+  </button>
+</div>
+<script>
+function rerunFailed() {{
+  const qs = new URLSearchParams({{
+    project_id: "{project_id}",
+    checklist_id: "{checklist_ids[0] if checklist_ids else ""}",
+    manufacturer: "{params.get("manufacturer", "SolarEdge")}",
+    project_state: "",
+    rerun_ids: "{",".join(failed_ids)}",
+  }});
+  window.location.href = "/?rerun=" + encodeURIComponent(qs.toString());
+}}
+</script>'''
+                # Insert after the params-bar div
+                html = html.replace('class="body">', 'class="body">' + rerun_btn, 1)
+
+            body = html.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as e:
+            self.send_error(500, str(e))
 
     def _serve_html(self):
         body = EMBEDDED_HTML.encode()
@@ -459,8 +607,17 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- Recent reports -->
+  <div id="recentReports" class="step active" style="display:block;">
+    <div id="recentList"></div>
+    <div style="margin-top:16px;">
+      <button class="run-btn" onclick="showStep(1)" style="background:#111827;">New Compliance Check</button>
+    </div>
+  </div>
+
   <!-- Step 1: Select project -->
-  <div id="step1" class="step active">
+  <div id="step1" class="step">
+    <button class="back-btn" onclick="showStep('home')">&larr; Back to reports</button>
     <div class="step-label">Step 1 — Select Project</div>
     <input class="search-input" id="projectSearch" type="text" placeholder="Search by name or address..." autocomplete="off">
     <div id="projectList"></div>
@@ -520,8 +677,66 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     // ── Step navigation ──
     function showStep(n) {
       document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+      document.getElementById('recentReports').style.display = 'none';
+      if (n === 'home') {
+        document.getElementById('recentReports').style.display = 'block';
+        loadRecentReports();
+        return;
+      }
       document.getElementById('step' + n).classList.add('active');
     }
+
+    // ── Recent reports ──
+    async function loadRecentReports() {
+      const list = document.getElementById('recentList');
+      list.innerHTML = '<div style="color:#9ca3af;padding:12px;font-size:13px;">Loading reports...</div>';
+      try {
+        const r = await fetch('/api/reports');
+        const reports = await r.json();
+        if (!reports.length) {
+          list.innerHTML = '<div class="step-label">No reports yet</div><div style="color:#9ca3af;font-size:13px;padding:4px 0;">Run your first compliance check to see results here.</div>';
+          return;
+        }
+        list.innerHTML = '<div class="step-label">Recent Reports</div>' + reports.map(rpt => {
+          const isPass = rpt.failed === 0;
+          const date = new Date(rpt.timestamp * 1000).toLocaleDateString('en-US', {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
+          return `
+            <a href="/report/${rpt.project_id}" class="list-item" style="text-decoration:none;color:inherit;border-left:3px solid ${isPass ? '#10b981' : '#ef4444'};">
+              <div class="name">${esc(rpt.name)}</div>
+              <div class="detail">${rpt.passed}/${rpt.total} passed · ${date}</div>
+            </a>`;
+        }).join('');
+      } catch (e) {
+        list.innerHTML = '<div style="color:#ef4444;padding:12px;">Error loading reports</div>';
+      }
+    }
+
+    // Check for rerun parameter, otherwise load recent reports
+    (function checkRerun() {
+      const url = new URL(window.location.href);
+      const rerunQs = url.searchParams.get('rerun');
+      if (rerunQs) {
+        // Auto-start a rerun of failed items
+        const params = new URLSearchParams(rerunQs);
+        showStep(4);
+        document.getElementById('resultsList').innerHTML = '';
+        document.getElementById('doneBanner').style.display = 'none';
+        document.getElementById('progressFill').style.width = '0%';
+        document.getElementById('progressText').textContent = 'Re-checking failed items...';
+        document.getElementById('statusMsg').style.display = 'none';
+
+        fetch('/start?' + params).then(r => r.json()).then(data => {
+          if (!data.ok) { alert(data.error); showStep('home'); return; }
+          document.getElementById('progressText').textContent = `Checking 0 / ${data.total}...`;
+          listenSSE(data.total);
+        }).catch(e => { alert('Failed: ' + e.message); showStep('home'); });
+
+        // Clean up URL
+        window.history.replaceState({}, '', '/');
+        return;
+      }
+      loadRecentReports();
+    })();
 
     // ── Step 1: Project search ──
     const searchInput = document.getElementById('projectSearch');
@@ -530,8 +745,10 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       searchTimer = setTimeout(() => searchProjects(searchInput.value), 300);
     });
 
-    // Load initial list on page load
-    searchProjects('');
+    // Load initial list when step 1 is shown
+    searchInput.addEventListener('focus', () => {
+      if (!document.getElementById('projectList').children.length) searchProjects('');
+    });
 
     async function searchProjects(query) {
       const list = document.getElementById('projectList');
@@ -670,11 +887,15 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           if (s.checklist_ids && s.checklist_ids.length) {
             ccLink = `<a class="cc-link" href="https://app.companycam.com/projects/${s.project_id}/todos/${s.checklist_ids[0]}" target="_blank">Open in CompanyCam</a>`;
           }
+          const reportLink = `<a class="cc-link" href="/report/${s.project_id}" style="background:#111827;">View Full Report</a>`;
           banner.innerHTML = `
             <div>
               <div class="done-label">${isPass ? 'READY FOR SUBMISSION' : 'ACTION REQUIRED'}</div>
               <div class="done-stats">${s.passed} passed · ${s.failed} failed · ${s.missing} missing · ${s.total} required</div>
-              ${ccLink}
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                ${reportLink}
+                ${ccLink}
+              </div>
             </div>
           `;
           banner.style.display = 'flex';

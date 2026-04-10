@@ -717,7 +717,7 @@ def get_photo_web_url(photo: dict) -> Optional[str]:
 
 # ── Main compliance check ─────────────────────────────────────────────────────
 
-def run_compliance_check(project_id: str, params: dict, run_vision: bool = True, progress_callback=None) -> dict:
+def run_compliance_check(project_id: str, params: dict, run_vision: bool = True, progress_callback=None, only_ids=None) -> dict:
     # Load photos
     photos_path = TMP_DIR / f"photos_{project_id}.json"
     if not photos_path.exists():
@@ -752,11 +752,19 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
             print(f"WARNING: Could not load checklists: {e}", file=sys.stderr)
 
     # Determine applicable requirements
-    total_applicable = sum(1 for r in REQUIREMENTS if r["condition"](params))
+    if only_ids:
+        total_applicable = len(only_ids)
+    else:
+        total_applicable = sum(1 for r in REQUIREMENTS if r["condition"](params))
     results = []
     checked = 0
     for req in REQUIREMENTS:
         applies = req["condition"](params)
+
+        # If only_ids specified, skip requirements not in the set
+        if only_ids and req["id"] not in only_ids:
+            continue
+
         if not applies:
             results.append({
                 "id": req["id"],
