@@ -472,11 +472,46 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 
     /* ── Header ── */
     .top-bar {
-      background: #111827; color: #fff; padding: 16px 20px;
-      display: flex; align-items: center; justify-content: space-between;
+      background: #111827; color: #fff; padding: 12px 20px;
+      display: grid; grid-template-columns: 44px 1fr 44px; align-items: center;
     }
-    .top-bar h1 { font-size: 16px; font-weight: 600; }
     .top-bar .sub { font-size: 11px; color: #6b7280; }
+    .hamburger {
+      background: none; border: none; color: #fff; cursor: pointer;
+      width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;
+      padding: 0; -webkit-tap-highlight-color: transparent;
+    }
+    .hamburger svg { width: 24px; height: 24px; }
+    .logo-center { display: flex; justify-content: center; }
+    .header-spacer { width: 44px; }
+
+    /* ── Nav drawer ── */
+    .nav-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 200;
+      display: none; opacity: 0; transition: opacity 0.2s ease;
+    }
+    .nav-overlay.open { display: block; opacity: 1; }
+    .nav-drawer {
+      position: fixed; top: 0; left: -280px; width: 280px; height: 100%;
+      background: #111827; z-index: 201; transition: left 0.25s ease;
+      padding: 20px; overflow-y: auto;
+    }
+    .nav-drawer.open { left: 0; }
+    .nav-drawer-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid #1f2937;
+    }
+    .nav-close {
+      background: none; border: none; color: #9ca3af; cursor: pointer;
+      width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
+      font-size: 20px;
+    }
+    .nav-item {
+      display: block; width: 100%; padding: 14px 12px; border-radius: 8px;
+      color: #d1d5db; text-decoration: none; font-size: 14px; font-weight: 500;
+      margin-bottom: 4px; cursor: pointer; border: none; background: none; text-align: left;
+    }
+    .nav-item:hover, .nav-item:active { background: #1f2937; color: #fff; }
 
     /* ── Steps ── */
     .step { display: none; padding: 20px; }
@@ -595,16 +630,42 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       font-weight: 500; cursor: pointer; padding: 4px 0; margin-bottom: 12px;
     }
 
+    /* ── Loader animation ── */
+    .loader-anim {
+      display: flex; justify-content: center; padding: 20px 0 8px;
+    }
+    .loader-anim.hidden { display: none; }
+
     @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
   </style>
 </head>
 <body>
 
-  <div class="top-bar">
-    <div>
-      <h1>Solclear</h1>
-      <div class="sub">Palmetto M1 Compliance</div>
+  <!-- Nav drawer -->
+  <div class="nav-overlay" id="navOverlay" onclick="closeNav()"></div>
+  <div class="nav-drawer" id="navDrawer">
+    <div class="nav-drawer-header">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" height="28">
+        <g transform="translate(24,36)"><circle cx="44" cy="40" r="12" fill="#F59E0B"/><path d="M16 76 A 28 28 0 0 1 72 76" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round"/></g>
+        <text x="116" y="104" font-family="Inter,Helvetica,Arial,sans-serif" font-weight="600" font-size="80" fill="#ffffff" letter-spacing="-2.5">solclear</text>
+      </svg>
+      <button class="nav-close" onclick="closeNav()">&times;</button>
     </div>
+    <button class="nav-item" onclick="closeNav();showStep('home')">Recent Reports</button>
+    <button class="nav-item" onclick="closeNav();showStep(1)">New Compliance Check</button>
+  </div>
+
+  <div class="top-bar">
+    <button class="hamburger" onclick="openNav()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
+    <div class="logo-center">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" height="42" style="flex-shrink:0;">
+        <g transform="translate(24,36)"><circle cx="44" cy="40" r="12" fill="#F59E0B"/><path d="M16 76 A 28 28 0 0 1 72 76" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round"/></g>
+        <text x="116" y="104" font-family="Inter,Helvetica,Arial,sans-serif" font-weight="600" font-size="80" fill="#ffffff" letter-spacing="-2.5">solclear</text>
+      </svg>
+    </div>
+    <div class="header-spacer"></div>
   </div>
 
   <!-- Recent reports -->
@@ -658,6 +719,17 @@ EMBEDDED_HTML = """<!DOCTYPE html>
   <div id="step4" class="step">
     <div class="done-banner" id="doneBanner"></div>
     <div class="progress-wrap">
+      <div class="loader-anim" id="loaderAnim">
+        <svg viewBox="0 0 120 120" width="64" height="64">
+          <path d="M24 92 A 36 36 0 0 1 96 92" fill="none" stroke="#e5e7eb" stroke-width="8" stroke-linecap="round"/>
+          <circle cx="0" cy="0" r="10" fill="#F59E0B">
+            <animateMotion dur="1.4s" repeatCount="indefinite" keyPoints="0;1" keyTimes="0;1" calcMode="spline" keySplines="0.45 0 0.55 1">
+              <mpath href="#sunPath"/>
+            </animateMotion>
+          </circle>
+          <path id="sunPath" d="M24 92 A 36 36 0 0 1 96 92" fill="none" stroke="none"/>
+        </svg>
+      </div>
       <div class="status-msg" id="statusMsg"></div>
       <div class="progress-bar-bg"><div class="progress-bar-fill" id="progressFill"></div></div>
       <div class="progress-text" id="progressText">Preparing...</div>
@@ -673,6 +745,16 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     let selectedChecklistName = '';
     let selectedManufacturer = null;
     let searchTimer = null;
+
+    // ── Nav drawer ──
+    function openNav() {
+      document.getElementById('navDrawer').classList.add('open');
+      document.getElementById('navOverlay').classList.add('open');
+    }
+    function closeNav() {
+      document.getElementById('navDrawer').classList.remove('open');
+      document.getElementById('navOverlay').classList.remove('open');
+    }
 
     // ── Step navigation ──
     function showStep(n) {
@@ -721,6 +803,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         showStep(4);
         document.getElementById('resultsList').innerHTML = '';
         document.getElementById('doneBanner').style.display = 'none';
+        document.getElementById('loaderAnim').classList.remove('hidden');
         document.getElementById('progressFill').style.width = '0%';
         document.getElementById('progressText').textContent = 'Re-checking failed items...';
         document.getElementById('statusMsg').style.display = 'none';
@@ -837,6 +920,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         showStep(4);
         document.getElementById('resultsList').innerHTML = '';
         document.getElementById('doneBanner').style.display = 'none';
+        document.getElementById('loaderAnim').classList.remove('hidden');
         document.getElementById('progressFill').style.width = '0%';
         document.getElementById('progressText').textContent = `Checking 0 / ${data.total}...`;
         document.getElementById('statusMsg').style.display = 'none';
@@ -875,6 +959,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 
         if (data.type === 'done') {
           es.close();
+          document.getElementById('loaderAnim').classList.add('hidden');
           const s = data.summary;
           const pct = Math.round((s.passed / s.total) * 100);
           document.getElementById('progressFill').style.width = '100%';
@@ -907,6 +992,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 
         if (data.type === 'error') {
           es.close();
+          document.getElementById('loaderAnim').classList.add('hidden');
           document.getElementById('progressText').textContent = 'Error: ' + data.message;
           document.getElementById('runBtn').disabled = false;
           document.getElementById('runBtn').textContent = 'Run Compliance Check';
