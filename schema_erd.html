@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Solclear Schema ERD</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+      background: #f8f9fb;
+      padding: 40px;
+      color: #1a1a2e;
+    }
+    h1 { font-size: 20px; margin-bottom: 8px; }
+    .subtitle { font-size: 12px; color: #6b7280; margin-bottom: 32px; }
+    .erd {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 24px;
+      align-items: flex-start;
+    }
+    .table-card {
+      background: #fff;
+      border: 2px solid #e5e7eb;
+      border-radius: 10px;
+      width: 280px;
+      overflow: hidden;
+      font-size: 12px;
+    }
+    .table-card.primary { border-color: #3b82f6; }
+    .table-card.secondary { border-color: #10b981; }
+    .table-card.support { border-color: #f59e0b; }
+    .table-header {
+      padding: 10px 14px;
+      font-weight: 700;
+      font-size: 13px;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .primary .table-header { background: #3b82f6; }
+    .secondary .table-header { background: #10b981; }
+    .support .table-header { background: #f59e0b; }
+    .table-icon { font-size: 14px; }
+    .col-row {
+      padding: 5px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #f3f4f6;
+    }
+    .col-row:last-child { border-bottom: none; }
+    .col-name { font-weight: 500; color: #1f2937; }
+    .col-name.pk { color: #3b82f6; font-weight: 700; }
+    .col-name.fk { color: #8b5cf6; }
+    .col-type { color: #9ca3af; font-size: 11px; }
+    .tag {
+      font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px;
+      letter-spacing: 0.04em; text-transform: uppercase; margin-left: 6px;
+    }
+    .tag-pk { background: #eff6ff; color: #3b82f6; }
+    .tag-fk { background: #f5f3ff; color: #8b5cf6; }
+    .tag-idx { background: #fef3c7; color: #92400e; }
+
+    .relationships {
+      margin-top: 40px;
+      background: #fff;
+      border-radius: 10px;
+      border: 2px solid #e5e7eb;
+      padding: 20px 24px;
+      max-width: 640px;
+    }
+    .relationships h2 { font-size: 14px; margin-bottom: 12px; }
+    .rel-row {
+      font-size: 12px;
+      padding: 6px 0;
+      border-bottom: 1px solid #f3f4f6;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .rel-row:last-child { border-bottom: none; }
+    .rel-arrow { color: #3b82f6; font-weight: 700; flex-shrink: 0; }
+    .rel-label { color: #6b7280; font-style: italic; }
+  </style>
+</head>
+<body>
+
+  <h1>Solclear Database Schema — ERD</h1>
+  <div class="subtitle">PostgreSQL on Railway · April 2026</div>
+
+  <div class="erd">
+
+    <!-- Organizations -->
+    <div class="table-card primary">
+      <div class="table-header"><span class="table-icon">🏢</span> organizations</div>
+      <div class="col-row"><span class="col-name pk">id <span class="tag tag-pk">PK</span></span><span class="col-type">SERIAL</span></div>
+      <div class="col-row"><span class="col-name">name</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">companycam_api_key</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">created_at</span><span class="col-type">TIMESTAMPTZ</span></div>
+      <div class="col-row"><span class="col-name">updated_at</span><span class="col-type">TIMESTAMPTZ</span></div>
+    </div>
+
+    <!-- Users -->
+    <div class="table-card primary">
+      <div class="table-header"><span class="table-icon">👤</span> users</div>
+      <div class="col-row"><span class="col-name pk">id <span class="tag tag-pk">PK</span></span><span class="col-type">SERIAL</span></div>
+      <div class="col-row"><span class="col-name fk">organization_id <span class="tag tag-fk">FK</span></span><span class="col-type">INT nullable</span></div>
+      <div class="col-row"><span class="col-name">email</span><span class="col-type">TEXT UNIQUE</span></div>
+      <div class="col-row"><span class="col-name">name</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">role</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">password_hash</span><span class="col-type">TEXT nullable</span></div>
+      <div class="col-row"><span class="col-name">created_at</span><span class="col-type">TIMESTAMPTZ</span></div>
+      <div class="col-row"><span class="col-name">updated_at</span><span class="col-type">TIMESTAMPTZ</span></div>
+    </div>
+
+    <!-- Impersonation Log -->
+    <div class="table-card support">
+      <div class="table-header"><span class="table-icon">🔑</span> impersonation_log</div>
+      <div class="col-row"><span class="col-name pk">id <span class="tag tag-pk">PK</span></span><span class="col-type">SERIAL</span></div>
+      <div class="col-row"><span class="col-name fk">superadmin_id <span class="tag tag-fk">FK</span></span><span class="col-type">INT → users</span></div>
+      <div class="col-row"><span class="col-name fk">impersonated_user_id <span class="tag tag-fk">FK</span></span><span class="col-type">INT → users</span></div>
+      <div class="col-row"><span class="col-name">started_at</span><span class="col-type">TIMESTAMPTZ</span></div>
+      <div class="col-row"><span class="col-name">ended_at</span><span class="col-type">TIMESTAMPTZ nullable</span></div>
+      <div class="col-row"><span class="col-name">reason</span><span class="col-type">TEXT nullable</span></div>
+    </div>
+
+    <!-- Projects -->
+    <div class="table-card primary">
+      <div class="table-header"><span class="table-icon">📍</span> projects</div>
+      <div class="col-row"><span class="col-name pk">id <span class="tag tag-pk">PK</span></span><span class="col-type">SERIAL</span></div>
+      <div class="col-row"><span class="col-name fk">organization_id <span class="tag tag-fk">FK</span></span><span class="col-type">INT → organizations</span></div>
+      <div class="col-row"><span class="col-name">companycam_id</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">name</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">address</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">city</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">state</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">cached_at</span><span class="col-type">TIMESTAMPTZ</span></div>
+      <div class="col-row"><span class="col-name">created_at</span><span class="col-type">TIMESTAMPTZ</span></div>
+    </div>
+
+    <!-- Checklists -->
+    <div class="table-card secondary">
+      <div class="table-header"><span class="table-icon">✅</span> checklists</div>
+      <div class="col-row"><span class="col-name pk">id <span class="tag tag-pk">PK</span></span><span class="col-type">SERIAL</span></div>
+      <div class="col-row"><span class="col-name fk">project_id <span class="tag tag-fk">FK</span></span><span class="col-type">INT → projects</span></div>
+      <div class="col-row"><span class="col-name">companycam_checklist_id</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">companycam_template_id</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">name</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">manufacturer</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">has_battery</span><span class="col-type">BOOLEAN</span></div>
+      <div class="col-row"><span class="col-name">is_backup_battery</span><span class="col-type">BOOLEAN</span></div>
+      <div class="col-row"><span class="col-name">is_incentive_state</span><span class="col-type">BOOLEAN</span></div>
+      <div class="col-row"><span class="col-name">portal_access_granted</span><span class="col-type">BOOLEAN</span></div>
+      <div class="col-row"><span class="col-name">created_at</span><span class="col-type">TIMESTAMPTZ</span></div>
+    </div>
+
+    <!-- Requirements -->
+    <div class="table-card support">
+      <div class="table-header"><span class="table-icon">📋</span> requirements</div>
+      <div class="col-row"><span class="col-name pk">id <span class="tag tag-pk">PK</span></span><span class="col-type">SERIAL</span></div>
+      <div class="col-row"><span class="col-name">code</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">version</span><span class="col-type">INT</span></div>
+      <div class="col-row"><span class="col-name">section</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">title</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">condition_json</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">task_titles</span><span class="col-type">TEXT[]</span></div>
+      <div class="col-row"><span class="col-name">keywords</span><span class="col-type">TEXT[]</span></div>
+      <div class="col-row"><span class="col-name">validation_prompt</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">is_optional</span><span class="col-type">BOOLEAN</span></div>
+      <div class="col-row"><span class="col-name">is_active</span><span class="col-type">BOOLEAN</span></div>
+      <div class="col-row"><span class="col-name">created_at</span><span class="col-type">TIMESTAMPTZ</span></div>
+    </div>
+
+    <!-- Reports -->
+    <div class="table-card secondary">
+      <div class="table-header"><span class="table-icon">📊</span> reports</div>
+      <div class="col-row"><span class="col-name pk">id <span class="tag tag-pk">PK</span></span><span class="col-type">SERIAL</span></div>
+      <div class="col-row"><span class="col-name fk">project_id <span class="tag tag-fk">FK</span></span><span class="col-type">INT → projects</span></div>
+      <div class="col-row"><span class="col-name fk">checklist_id <span class="tag tag-fk">FK</span></span><span class="col-type">INT → checklists</span></div>
+      <div class="col-row"><span class="col-name fk">run_by <span class="tag tag-fk">FK</span></span><span class="col-type">INT → users</span></div>
+      <div class="col-row"><span class="col-name">manufacturer</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">has_battery</span><span class="col-type">BOOLEAN</span></div>
+      <div class="col-row"><span class="col-name">is_backup_battery</span><span class="col-type">BOOLEAN</span></div>
+      <div class="col-row"><span class="col-name">is_incentive_state</span><span class="col-type">BOOLEAN</span></div>
+      <div class="col-row"><span class="col-name">portal_access_granted</span><span class="col-type">BOOLEAN</span></div>
+      <div class="col-row"><span class="col-name">total_required</span><span class="col-type">INT</span></div>
+      <div class="col-row"><span class="col-name">total_passed</span><span class="col-type">INT</span></div>
+      <div class="col-row"><span class="col-name">total_failed</span><span class="col-type">INT</span></div>
+      <div class="col-row"><span class="col-name">total_missing</span><span class="col-type">INT</span></div>
+      <div class="col-row"><span class="col-name">status</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">started_at</span><span class="col-type">TIMESTAMPTZ</span></div>
+      <div class="col-row"><span class="col-name">completed_at</span><span class="col-type">TIMESTAMPTZ</span></div>
+      <div class="col-row"><span class="col-name">created_at</span><span class="col-type">TIMESTAMPTZ</span></div>
+    </div>
+
+    <!-- Requirement Results -->
+    <div class="table-card secondary">
+      <div class="table-header"><span class="table-icon">🔍</span> requirement_results</div>
+      <div class="col-row"><span class="col-name pk">id <span class="tag tag-pk">PK</span></span><span class="col-type">SERIAL</span></div>
+      <div class="col-row"><span class="col-name fk">report_id <span class="tag tag-fk">FK</span></span><span class="col-type">INT → reports</span></div>
+      <div class="col-row"><span class="col-name fk">requirement_id <span class="tag tag-fk">FK</span></span><span class="col-type">INT → requirements</span></div>
+      <div class="col-row"><span class="col-name">status</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">reason</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">photo_urls</span><span class="col-type">JSONB</span></div>
+      <div class="col-row"><span class="col-name">candidates</span><span class="col-type">INT</span></div>
+      <div class="col-row"><span class="col-name">created_at</span><span class="col-type">TIMESTAMPTZ</span></div>
+    </div>
+
+    <!-- Run Pricing -->
+    <div class="table-card support">
+      <div class="table-header"><span class="table-icon">💰</span> run_pricing</div>
+      <div class="col-row"><span class="col-name pk">id <span class="tag tag-pk">PK</span></span><span class="col-type">SERIAL</span></div>
+      <div class="col-row"><span class="col-name fk">report_id <span class="tag tag-fk">FK</span></span><span class="col-type">INT → reports</span></div>
+      <div class="col-row"><span class="col-name">model</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">input_tokens</span><span class="col-type">INT</span></div>
+      <div class="col-row"><span class="col-name">output_tokens</span><span class="col-type">INT</span></div>
+      <div class="col-row"><span class="col-name">api_calls</span><span class="col-type">INT</span></div>
+      <div class="col-row"><span class="col-name">estimated_cost</span><span class="col-type">NUMERIC</span></div>
+      <div class="col-row"><span class="col-name">created_at</span><span class="col-type">TIMESTAMPTZ</span></div>
+    </div>
+
+    <!-- Requirement Snapshots -->
+    <div class="table-card support">
+      <div class="table-header"><span class="table-icon">📸</span> requirement_snapshots</div>
+      <div class="col-row"><span class="col-name pk">id <span class="tag tag-pk">PK</span></span><span class="col-type">SERIAL</span></div>
+      <div class="col-row"><span class="col-name">url</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">content_hash</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">content_text</span><span class="col-type">TEXT</span></div>
+      <div class="col-row"><span class="col-name">checked_at</span><span class="col-type">TIMESTAMPTZ</span></div>
+    </div>
+
+  </div>
+
+  <!-- Relationships -->
+  <div class="relationships">
+    <h2>Relationships</h2>
+    <table style="width:100%;font-size:12px;border-collapse:collapse;">
+      <thead>
+        <tr style="text-align:left;border-bottom:2px solid #e5e7eb;">
+          <th style="padding:8px 4px;color:#6b7280;">From</th>
+          <th style="padding:8px 4px;color:#6b7280;">Type</th>
+          <th style="padding:8px 4px;color:#6b7280;">To</th>
+          <th style="padding:8px 4px;color:#6b7280;">Via</th>
+          <th style="padding:8px 4px;color:#6b7280;">Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:6px 4px;font-weight:600;">organizations</td><td style="color:#3b82f6;">1 → N</td><td>users</td><td style="color:#8b5cf6;">users.organization_id</td><td style="color:#6b7280;">Org has many users</td></tr>
+        <tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:6px 4px;font-weight:600;">organizations</td><td style="color:#3b82f6;">1 → N</td><td>projects</td><td style="color:#8b5cf6;">projects.organization_id</td><td style="color:#6b7280;">Org has many projects</td></tr>
+        <tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:6px 4px;font-weight:600;">projects</td><td style="color:#3b82f6;">1 → N</td><td>checklists</td><td style="color:#8b5cf6;">checklists.project_id</td><td style="color:#6b7280;">Project has many checklists</td></tr>
+        <tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:6px 4px;font-weight:600;">projects</td><td style="color:#3b82f6;">1 → N</td><td>reports</td><td style="color:#8b5cf6;">reports.project_id</td><td style="color:#6b7280;">Project has many compliance runs</td></tr>
+        <tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:6px 4px;font-weight:600;">checklists</td><td style="color:#3b82f6;">1 → N</td><td>reports</td><td style="color:#8b5cf6;">reports.checklist_id</td><td style="color:#6b7280;">Checklist checked by many runs</td></tr>
+        <tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:6px 4px;font-weight:600;">users</td><td style="color:#3b82f6;">1 → N</td><td>reports</td><td style="color:#8b5cf6;">reports.run_by</td><td style="color:#6b7280;">User triggers compliance runs</td></tr>
+        <tr style="border-bottom:1px solid #f3f4f6;background:#f0fdf4;"><td style="padding:6px 4px;font-weight:600;">reports</td><td style="color:#3b82f6;">1 → N</td><td>requirement_results</td><td style="color:#8b5cf6;">requirement_results.report_id</td><td style="color:#6b7280;">Report has one result per requirement</td></tr>
+        <tr style="border-bottom:1px solid #f3f4f6;background:#f0fdf4;"><td style="padding:6px 4px;font-weight:600;">requirements</td><td style="color:#3b82f6;">1 → N</td><td>requirement_results</td><td style="color:#8b5cf6;">requirement_results.requirement_id</td><td style="color:#6b7280;">Requirement checked across many reports</td></tr>
+        <tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:6px 4px;font-weight:600;">reports</td><td style="color:#3b82f6;">1 → 1</td><td>run_pricing</td><td style="color:#8b5cf6;">run_pricing.report_id</td><td style="color:#6b7280;">Each run has one cost record</td></tr>
+        <tr><td style="padding:6px 4px;font-weight:600;">users</td><td style="color:#3b82f6;">1 → N</td><td>impersonation_log</td><td style="color:#8b5cf6;">impersonation_log.superadmin_id</td><td style="color:#6b7280;">Superadmin impersonation audit</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Analytics key path -->
+  <div class="relationships" style="margin-top:20px;border-color:#10b981;">
+    <h2 style="color:#065f46;">Key Analytics Path</h2>
+    <div style="font-size:12px;color:#374151;padding:8px 0;line-height:1.8;">
+      <strong>"Which sections fail most?"</strong><br>
+      <code style="background:#f3f4f6;padding:2px 6px;border-radius:3px;">requirement_results</code>
+      → JOIN <code style="background:#f3f4f6;padding:2px 6px;border-radius:3px;">requirements</code> on requirement_id
+      → GROUP BY section, code → COUNT by status<br><br>
+      <strong>"Which projects have the most failures?"</strong><br>
+      <code style="background:#f3f4f6;padding:2px 6px;border-radius:3px;">requirement_results</code>
+      → JOIN <code style="background:#f3f4f6;padding:2px 6px;border-radius:3px;">reports</code> on report_id
+      → JOIN <code style="background:#f3f4f6;padding:2px 6px;border-radius:3px;">projects</code> on project_id
+      → GROUP BY project → COUNT failures<br><br>
+      <strong>"Cost per org this month?"</strong><br>
+      <code style="background:#f3f4f6;padding:2px 6px;border-radius:3px;">run_pricing</code>
+      → JOIN <code style="background:#f3f4f6;padding:2px 6px;border-radius:3px;">reports</code> on report_id
+      → JOIN <code style="background:#f3f4f6;padding:2px 6px;border-radius:3px;">projects</code> on project_id
+      → JOIN <code style="background:#f3f4f6;padding:2px 6px;border-radius:3px;">organizations</code> on organization_id
+      → SUM estimated_cost
+    </div>
+  </div>
+
+  <div style="margin-top:32px;font-size:11px;color:#9ca3af;">
+    Color key: <span style="color:#3b82f6;font-weight:600;">Blue</span> = core entities ·
+    <span style="color:#10b981;font-weight:600;">Green</span> = operational data ·
+    <span style="color:#f59e0b;font-weight:600;">Amber</span> = support/config
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Solclear Schema — Demo Data Lineage</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8f9fb; color: #1a1a2e; font-size: 13px; padding: 32px; line-height: 1.5; }
+    h1 { font-size: 20px; margin-bottom: 4px; }
+    .subtitle { font-size: 12px; color: #6b7280; margin-bottom: 28px; }
+    h2 { font-size: 14px; margin: 28px 0 12px; color: #374151; border-bottom: 2px solid #111827; padding-bottom: 6px; }
+    h3 { font-size: 12px; color: #6b7280; margin: 20px 0 8px; text-transform: uppercase; letter-spacing: 0.08em; }
+
+    table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; margin-bottom: 16px; }
+    th { background: #111827; color: #fff; text-align: left; padding: 8px 12px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+    td { padding: 7px 12px; border-bottom: 1px solid #f3f4f6; font-size: 12px; }
+    tr:last-child td { border-bottom: none; }
+    .pass { color: #065f46; background: #ecfdf5; }
+    .fail { color: #991b1b; background: #fef2f2; }
+    .missing { color: #92400e; background: #fffbeb; }
+    .badge { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 3px; }
+    .superadmin { color: #7c3aed; }
+    .admin { color: #2563eb; }
+    .reviewer { color: #0891b2; }
+    .crew { color: #059669; }
+    .muted { color: #9ca3af; }
+    .money { font-family: monospace; }
+    .highlight { background: #eff6ff; }
+
+    .analytics { background: #fff; border-radius: 8px; padding: 20px; margin-top: 24px; border: 2px solid #10b981; }
+    .analytics h2 { border-bottom-color: #10b981; color: #065f46; margin-top: 0; }
+    .analytics table { margin-bottom: 0; }
+    .analytics th { background: #065f46; }
+    .bar { display: inline-block; height: 14px; border-radius: 3px; vertical-align: middle; }
+    .bar-fail { background: #ef4444; }
+    .bar-pass { background: #10b981; }
+  </style>
+</head>
+<body>
+
+<h1>Solclear Schema — Demo Data Lineage</h1>
+<div class="subtitle">Showing how data flows from Organizations → Projects → Reports → Results</div>
+
+<!-- ORGANIZATIONS -->
+<h2>Organizations</h2>
+<table>
+  <tr><th>ID</th><th>Name</th><th>Projects</th><th>Users</th></tr>
+  <tr><td>1</td><td><strong>Independent Solar</strong></td><td>3 projects</td><td>4 users</td></tr>
+  <tr><td>2</td><td><strong>Sunrise Power Co</strong></td><td>2 projects</td><td>2 users</td></tr>
+</table>
+
+<!-- USERS -->
+<h2>Users</h2>
+<table>
+  <tr><th>ID</th><th>Name</th><th>Org</th><th>Role</th><th>Email</th></tr>
+  <tr><td>1</td><td><strong>Brandon Pantano</strong></td><td class="muted">— (platform)</td><td><span class="superadmin">superadmin</span></td><td>brandon@solclear.io</td></tr>
+  <tr><td>2</td><td>Dylan Mitchell</td><td>Independent Solar</td><td><span class="admin">admin</span></td><td>dylan@independentsolar.com</td></tr>
+  <tr><td>3</td><td>Micah Izquierdo</td><td>Independent Solar</td><td><span class="reviewer">reviewer</span></td><td>micah@independentsolar.com</td></tr>
+  <tr><td>4</td><td>Carlos Reyes</td><td>Independent Solar</td><td><span class="crew">crew</span></td><td>carlos@independentsolar.com</td></tr>
+  <tr><td>5</td><td>Jose Ramirez</td><td>Independent Solar</td><td><span class="crew">crew</span></td><td>jose@independentsolar.com</td></tr>
+  <tr><td>6</td><td>Sarah Chen</td><td>Sunrise Power Co</td><td><span class="admin">admin</span></td><td>sarah@sunrisepower.com</td></tr>
+  <tr><td>7</td><td>Mike Thompson</td><td>Sunrise Power Co</td><td><span class="crew">crew</span></td><td>mike@sunrisepower.com</td></tr>
+</table>
+
+<!-- LINEAGE: Independent Solar -->
+<h2>Independent Solar — Full Lineage</h2>
+
+<h3>Projects</h3>
+<table>
+  <tr><th>ID</th><th>Name</th><th>Address</th><th>State</th><th>Reports</th></tr>
+  <tr><td>1</td><td><strong>IND-5453 Reynaldo Melgoza</strong></td><td>3656 W Palmaire Ave, Phoenix</td><td>AZ</td><td>2 runs</td></tr>
+  <tr><td>2</td><td><strong>IND-5210 Maria Santos</strong></td><td>1422 E Baseline Rd, Tempe</td><td>AZ</td><td>1 run</td></tr>
+  <tr><td>3</td><td><strong>IND-5501 James Wilson</strong></td><td>8801 N 12th St, Phoenix</td><td>AZ</td><td>1 run</td></tr>
+</table>
+
+<h3>Reports</h3>
+<table>
+  <tr><th>ID</th><th>Project</th><th>Manufacturer</th><th>Battery</th><th>Run By</th><th>Passed</th><th>Failed</th><th>Missing</th><th>Status</th><th>Cost</th></tr>
+  <tr>
+    <td>1</td><td>IND-5453 Melgoza</td><td>Tesla</td><td>Yes</td><td><span class="crew">Carlos</span></td>
+    <td>6</td><td class="fail">11</td><td class="missing">2</td><td><span class="badge fail">ACTION REQUIRED</span></td><td class="money">$0.135</td>
+  </tr>
+  <tr class="highlight">
+    <td>5</td><td>IND-5453 Melgoza</td><td>Tesla</td><td>Yes</td><td><span class="crew">Carlos</span></td>
+    <td>14</td><td class="fail">4</td><td class="missing">1</td><td><span class="badge fail">RERUN — improved</span></td><td class="money">$0.042</td>
+  </tr>
+  <tr>
+    <td>2</td><td>IND-5210 Santos</td><td>SolarEdge</td><td>No</td><td><span class="crew">Jose</span></td>
+    <td>12</td><td class="fail">2</td><td>0</td><td><span class="badge fail">ACTION REQUIRED</span></td><td class="money">$0.098</td>
+  </tr>
+  <tr>
+    <td>3</td><td>IND-5501 Wilson</td><td>Enphase</td><td>No</td><td><span class="crew">Carlos</span></td>
+    <td>15</td><td>0</td><td>0</td><td><span class="badge pass">READY</span></td><td class="money">$0.105</td>
+  </tr>
+</table>
+
+<h3>Report #1 → Requirement Results (IND-5453 Melgoza, first run)</h3>
+<table>
+  <tr><th>Req Code</th><th>Section</th><th>Title</th><th>Status</th><th>Reason (truncated)</th><th>Photos</th></tr>
+  <tr><td>PS4</td><td>Project Site</td><td>Module Manufacturer Label</td><td><span class="badge pass">PASS</span></td><td>LONGi LR5-54HPB-405M with full specs readable</td><td>8</td></tr>
+  <tr><td>PS5</td><td>Project Site</td><td>Module Serial Number</td><td><span class="badge fail">FAIL</span></td><td>Serial number partially obscured by glare</td><td>8</td></tr>
+  <tr><td>R3</td><td>Roof</td><td>Complete Array / Rail Trimmed</td><td><span class="badge fail">FAIL</span></td><td>Rail extends past last module on right side</td><td>9</td></tr>
+  <tr><td>R4</td><td>Roof</td><td>Under-Array Wire Management</td><td><span class="badge fail">FAIL</span></td><td>Wires in direct contact with roof surface</td><td>7</td></tr>
+  <tr><td>R5</td><td>Roof</td><td>Tilt Measurement</td><td><span class="badge pass">PASS</span></td><td>30° on Empire inclinometer, on module</td><td>4</td></tr>
+  <tr><td>E2</td><td>Electrical</td><td>Main Breaker Rating</td><td><span class="badge fail">FAIL</span></td><td>Amperage rating not readable from this angle</td><td>6</td></tr>
+  <tr><td>SC1</td><td>Commissioning</td><td>Tesla Commissioning</td><td><span class="badge fail">FAIL</span></td><td>Wrong screenshot — customer registration, not commissioning</td><td>18</td></tr>
+  <tr><td>S2</td><td>Storage</td><td>Comms Cable & Drain Wire</td><td><span class="badge fail">FAIL</span></td><td>Drain wire landed on both ends instead of one</td><td>10</td></tr>
+</table>
+
+<h3>Report #5 → Requirement Results (IND-5453 Melgoza, RERUN after fixes)</h3>
+<table>
+  <tr><th>Req Code</th><th>Section</th><th>Title</th><th>Status</th><th>Reason</th><th>Changed?</th></tr>
+  <tr><td>PS4</td><td>Project Site</td><td>Module Manufacturer Label</td><td><span class="badge pass">PASS</span></td><td>Still passing</td><td class="muted">—</td></tr>
+  <tr class="highlight"><td>PS5</td><td>Project Site</td><td>Module Serial Number</td><td><span class="badge pass">PASS</span></td><td>Now clearly readable after retake</td><td><strong>FIXED</strong></td></tr>
+  <tr class="highlight"><td>R3</td><td>Roof</td><td>Complete Array / Rail Trimmed</td><td><span class="badge pass">PASS</span></td><td>Rail trimmed after crew returned</td><td><strong>FIXED</strong></td></tr>
+  <tr class="highlight"><td>R4</td><td>Roof</td><td>Under-Array Wire Management</td><td><span class="badge pass">PASS</span></td><td>Wires now elevated and clipped</td><td><strong>FIXED</strong></td></tr>
+  <tr><td>R5</td><td>Roof</td><td>Tilt Measurement</td><td><span class="badge pass">PASS</span></td><td>Unchanged</td><td class="muted">—</td></tr>
+  <tr><td>E2</td><td>Electrical</td><td>Main Breaker Rating</td><td><span class="badge fail">FAIL</span></td><td>Still taken from poor angle</td><td class="muted">still failing</td></tr>
+  <tr><td>SC1</td><td>Commissioning</td><td>Tesla Commissioning</td><td><span class="badge fail">FAIL</span></td><td>Still wrong screenshot</td><td class="muted">still failing</td></tr>
+  <tr><td>S2</td><td>Storage</td><td>Comms Cable & Drain Wire</td><td><span class="badge fail">FAIL</span></td><td>Drain wire issue not addressed</td><td class="muted">still failing</td></tr>
+</table>
+
+<!-- LINEAGE: Sunrise Power -->
+<h2>Sunrise Power Co — Full Lineage</h2>
+
+<h3>Projects & Reports</h3>
+<table>
+  <tr><th>Project</th><th>Address</th><th>State</th><th>Manufacturer</th><th>Battery</th><th>Incentive</th><th>Passed</th><th>Failed</th><th>Cost</th></tr>
+  <tr>
+    <td><strong>SUN-1001 David Park</strong></td><td>245 Maple Ave, San Jose</td><td>CA</td><td>Tesla</td><td>Backup</td><td>Yes</td>
+    <td>17</td><td class="fail">3</td><td class="money">$0.147</td>
+  </tr>
+  <tr>
+    <td><strong>SUN-1002 Lisa Nguyen</strong></td><td colspan="8" class="muted">No compliance check run yet</td>
+  </tr>
+</table>
+
+<!-- ANALYTICS -->
+<div class="analytics">
+  <h2>Analytics Queries (what the data enables)</h2>
+
+  <h3>"Which requirements fail most across all projects?"</h3>
+  <table>
+    <tr><th>Code</th><th>Section</th><th>Title</th><th>Fail Rate</th><th>Visual</th></tr>
+    <tr><td>R3</td><td>Roof</td><td>Complete Array / Rail Trimmed</td><td><strong>50%</strong> (2/4)</td>
+      <td><span class="bar bar-fail" style="width:50px;"></span><span class="bar bar-pass" style="width:50px;"></span></td></tr>
+    <tr><td>E2</td><td>Electrical</td><td>Main Breaker Rating</td><td><strong>50%</strong> (2/4)</td>
+      <td><span class="bar bar-fail" style="width:50px;"></span><span class="bar bar-pass" style="width:50px;"></span></td></tr>
+    <tr><td>R4</td><td>Roof</td><td>Under-Array Wire Management</td><td><strong>40%</strong> (2/5)</td>
+      <td><span class="bar bar-fail" style="width:40px;"></span><span class="bar bar-pass" style="width:60px;"></span></td></tr>
+    <tr><td>SC1</td><td>Commissioning</td><td>Tesla Commissioning</td><td><strong>67%</strong> (2/3)</td>
+      <td><span class="bar bar-fail" style="width:67px;"></span><span class="bar bar-pass" style="width:33px;"></span></td></tr>
+    <tr><td>PS4</td><td>Project Site</td><td>Module Manufacturer Label</td><td><strong>0%</strong> (0/4)</td>
+      <td><span class="bar bar-pass" style="width:100px;"></span></td></tr>
+    <tr><td>R5</td><td>Roof</td><td>Tilt Measurement</td><td><strong>0%</strong> (0/4)</td>
+      <td><span class="bar bar-pass" style="width:100px;"></span></td></tr>
+  </table>
+
+  <h3>"Cost by organization this month"</h3>
+  <table>
+    <tr><th>Organization</th><th>Runs</th><th>Total Cost</th><th>Avg/Run</th></tr>
+    <tr><td>Independent Solar</td><td>4</td><td class="money">$0.380</td><td class="money">$0.095</td></tr>
+    <tr><td>Sunrise Power Co</td><td>1</td><td class="money">$0.147</td><td class="money">$0.147</td></tr>
+    <tr style="font-weight:700;border-top:2px solid #111827;"><td>Total</td><td>5</td><td class="money">$0.527</td><td class="money">$0.105</td></tr>
+  </table>
+
+  <h3>"Rerun impact — did the crew actually fix things?"</h3>
+  <table>
+    <tr><th>Project</th><th>Run #1</th><th>Rerun</th><th>Improvement</th><th>Remaining</th></tr>
+    <tr>
+      <td>IND-5453 Melgoza</td>
+      <td>6/19 passed (32%)</td>
+      <td>14/19 passed (74%)</td>
+      <td><strong>+8 items fixed</strong></td>
+      <td>E2, SC1, S2 still failing</td>
+    </tr>
+  </table>
+
+  <h3>Impersonation Audit</h3>
+  <table>
+    <tr><th>Superadmin</th><th>Impersonated</th><th>When</th><th>Duration</th><th>Reason</th></tr>
+    <tr><td>Brandon Pantano</td><td>Carlos Reyes (crew)</td><td>2 days ago</td><td>15 min</td><td>Testing crew view for IND-5453</td></tr>
+    <tr><td>Brandon Pantano</td><td>Sarah Chen (admin)</td><td>1 day ago</td><td>5 min</td><td>Verifying Sunrise Power onboarding</td></tr>
+  </table>
+</div>
+
+<div style="margin-top:32px;font-size:11px;color:#9ca3af;">
+  Demo data — not connected to a live database. Shows schema relationships and analytics capabilities.
+</div>
+
+</body>
+</html>
