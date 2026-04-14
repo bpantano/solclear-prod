@@ -47,6 +47,11 @@ _check_lock = threading.Lock()
 _check_running = False
 _result_queue = queue.Queue()
 
+# Track recently detected requirement changes (persists until server restart)
+_recently_new = {}       # {"PS7": {"section": "...", "title": "..."}, ...}
+_recently_changed = set() # {"PS1", "R3"}
+_recently_removed = set() # {"E8"}
+
 # Template IDs that indicate battery installs
 BATTERY_TEMPLATE_IDS = {"95194", "184407"}  # Install - Battery, LightReach : PV + Battery
 
@@ -224,11 +229,21 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._serve_html()
         elif path == "/api/projects":
             self._api_projects(qs)
+        elif path.startswith("/api/projects/") and path.endswith("/thumbnail"):
+            pid = path.split("/")[3]
+            self._api_project_thumbnail(pid)
         elif path.startswith("/api/projects/") and path.endswith("/checklists"):
             pid = path.split("/")[3]
             self._api_checklists(pid)
         elif path == "/api/reports":
             self._api_reports()
+        elif path == "/api/requirements":
+            self._api_requirements_list()
+        elif path == "/api/requirements/monitor/status":
+            self._api_requirements_monitor()
+        elif path.startswith("/api/requirements/") and len(path.split("/")) == 4:
+            req_id = path.split("/")[3]
+            self._api_requirement_detail(req_id)
         elif path == "/api/organizations":
             self._api_orgs_list()
         elif path.startswith("/api/users/"):
@@ -270,6 +285,11 @@ class LiveHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/users/"):
             uid = path.split("/")[3]
             self._api_user_update(uid, body)
+        elif path == "/api/requirements/check":
+            self._api_requirements_check_now()
+        elif path.startswith("/api/requirements/"):
+            req_id = path.split("/")[3]
+            self._api_requirement_update(req_id, body)
         elif path.startswith("/api/organizations/"):
             oid = path.split("/")[3]
             self._api_org_update(oid, body)
@@ -285,16 +305,48 @@ class LiveHandler(BaseHTTPRequestHandler):
             r = http_requests.get(f"{API_BASE}/projects", headers=cc_headers(), params=api_params, timeout=10)
             r.raise_for_status()
             projects = r.json()
-            slim = [{
-                "id": p["id"],
-                "name": p.get("name", ""),
-                "address": p.get("address", {}).get("street_address_1", ""),
-                "city": p.get("address", {}).get("city", ""),
-                "state": p.get("address", {}).get("state", ""),
-            } for p in projects]
+            slim = []
+            for p in projects:
+                # feature_image is an array of {type, uri} — grab thumbnail or first available
+                thumb_url = None
+                for fi in (p.get("feature_image") or []):
+                    if fi.get("type") == "thumbnail":
+                        thumb_url = fi.get("uri")
+                        break
+                if not thumb_url:
+                    for fi in (p.get("feature_image") or []):
+                        thumb_url = fi.get("uri")
+                        break
+                slim.append({
+                    "id": p["id"],
+                    "name": p.get("name", ""),
+                    "address": p.get("address", {}).get("street_address_1", ""),
+                    "city": p.get("address", {}).get("city", ""),
+                    "state": p.get("address", {}).get("state", ""),
+                    "featured_image": thumb_url,
+                    "updated_at": p.get("updated_at"),
+                })
             self._send_json(slim)
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
+
+    def _api_project_thumbnail(self, project_id):
+        """Return the thumbnail URL from the project's first photo."""
+        try:
+            r = http_requests.get(
+                f"{API_BASE}/projects/{project_id}/photos",
+                headers=cc_headers(), params={"per_page": 1}, timeout=10
+            )
+            r.raise_for_status()
+            photos = r.json()
+            if photos:
+                for uri in photos[0].get("uris", []):
+                    if uri.get("type") == "thumbnail":
+                        self._send_json({"url": uri["url"]})
+                        return
+            self._send_json({"url": None})
+        except Exception:
+            self._send_json({"url": None})
 
     def _api_checklists(self, project_id):
         try:
@@ -619,6 +671,208 @@ class LiveHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 
+    # ── Requirements handlers ────────────────────────────────────────────────
+
+    def _api_requirements_list(self):
+        """Return all requirements from compliance_check.py, grouped by section."""
+        try:
+            reqs = []
+            for i, r in enumerate(REQUIREMENTS):
+                req_id = r["id"]
+                change_status = None
+                if req_id in _recently_new:
+                    change_status = "new"
+                elif req_id in _recently_changed:
+                    change_status = "changed"
+                elif req_id in _recently_removed:
+                    change_status = "removed"
+                reqs.append({
+                    "index": i,
+                    "id": req_id,
+                    "section": r["section"],
+                    "title": r["title"],
+                    "task_titles": r.get("task_titles", []),
+                    "keywords": r.get("keywords", []),
+                    "validation_prompt": r.get("validation_prompt", ""),
+                    "optional": r.get("optional", False),
+                    "is_stub": r.get("_stub", False),
+                    "change_status": change_status,
+                })
+            self._send_json(reqs)
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_requirement_detail(self, req_id):
+        """Return a single requirement by its ID (e.g., 'PS1', 'R3')."""
+        for i, r in enumerate(REQUIREMENTS):
+            if r["id"] == req_id:
+                self._send_json({
+                    "index": i,
+                    "id": r["id"],
+                    "section": r["section"],
+                    "title": r["title"],
+                    "task_titles": r.get("task_titles", []),
+                    "keywords": r.get("keywords", []),
+                    "validation_prompt": r.get("validation_prompt", ""),
+                    "optional": r.get("optional", False),
+                })
+                return
+        self._send_json({"error": "Requirement not found"}, 404)
+
+    def _api_requirement_update(self, req_id, body):
+        """Update a requirement's editable fields in-memory. Note: does not persist across restarts yet."""
+        try:
+            data = json.loads(body)
+            for r in REQUIREMENTS:
+                if r["id"] == req_id:
+                    if "validation_prompt" in data:
+                        r["validation_prompt"] = data["validation_prompt"]
+                    if "task_titles" in data:
+                        r["task_titles"] = data["task_titles"]
+                    if "keywords" in data:
+                        r["keywords"] = data["keywords"]
+                    if "title" in data:
+                        r["title"] = data["title"]
+                    self._send_json({"ok": True, "id": req_id, "message": "Updated in memory. Will reset on server restart until DB migration."})
+                    return
+            self._send_json({"error": "Requirement not found"}, 404)
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_requirements_monitor(self):
+        """Return the current monitor status — last check time, hash, and whether changes were detected."""
+        try:
+            meta_path = TMP_DIR / "palmetto_requirements_meta.json"
+            snapshot_path = TMP_DIR / "palmetto_requirements_snapshot.txt"
+            if not meta_path.exists():
+                self._send_json({"status": "no_baseline", "message": "No baseline snapshot saved yet."})
+                return
+            with open(meta_path) as f:
+                meta = json.load(f)
+            self._send_json({
+                "status": "ok",
+                "url": meta.get("url", ""),
+                "saved_at": meta.get("saved_at", ""),
+                "hash": meta.get("hash", "")[:16],
+                "length": meta.get("length", 0),
+                "has_snapshot": snapshot_path.exists(),
+            })
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_requirements_check_now(self):
+        """Run the requirements monitor check and return results."""
+        try:
+            from tools.monitor_requirements import fetch_page, load_snapshot, compare
+            import hashlib
+            current = fetch_page()
+            current_hash = hashlib.sha256(current.encode()).hexdigest()
+            previous = load_snapshot()
+            if not previous:
+                self._send_json({"status": "no_baseline", "message": "No baseline to compare against. Save a baseline first."})
+                return
+            prev_hash = hashlib.sha256(previous.encode()).hexdigest()
+            if current_hash == prev_hash:
+                self._send_json({"status": "no_changes", "hash": current_hash[:16]})
+            else:
+                diff = compare(previous, current)
+                diff_text = '\n'.join(diff[:100])
+                added = sum(1 for l in diff if l.startswith('+') and not l.startswith('+++'))
+                removed = sum(1 for l in diff if l.startswith('-') and not l.startswith('---'))
+                # Get structured AI analysis (~$0.001)
+                analysis = {"summary": "", "new_ids": [], "changed_ids": [], "removed_ids": []}
+                try:
+                    from tools.monitor_requirements import analyze_changes_structured
+                    analysis = analyze_changes_structured(diff_text)
+                except Exception as ex:
+                    analysis["summary"] = f"{added} lines added, {removed} lines removed. Review the diff for details."
+
+                # Update tracking sets
+                global _recently_new, _recently_changed, _recently_removed
+                for new_req in analysis.get("new_ids", []):
+                    req_id = new_req.get("id", "")
+                    if req_id and not any(r["id"] == req_id for r in REQUIREMENTS):
+                        # Generate a suggested validation prompt for the new requirement
+                        suggested_prompt = f"NEW: This requirement ({req_id}) was recently added by Palmetto. Configure the validation prompt before running checks."
+                        try:
+                            suggested_prompt = self._generate_validation_prompt(
+                                req_id, new_req.get("title", ""), new_req.get("section", ""), diff_text
+                            )
+                        except Exception:
+                            pass
+                        # Create stub requirement
+                        REQUIREMENTS.append({
+                            "id": req_id,
+                            "section": new_req.get("section", "Unknown"),
+                            "title": new_req.get("title", f"New requirement {req_id} — needs configuration"),
+                            "condition": lambda params: True,
+                            "task_titles": [],
+                            "keywords": [],
+                            "validation_prompt": suggested_prompt,
+                            "optional": True,
+                            "_stub": True,
+                        })
+                    _recently_new[req_id] = {"section": new_req.get("section", ""), "title": new_req.get("title", "")}
+
+                for cid in analysis.get("changed_ids", []):
+                    _recently_changed.add(cid)
+
+                for rid in analysis.get("removed_ids", []):
+                    _recently_removed.add(rid)
+
+                self._send_json({
+                    "status": "changes_detected",
+                    "added": added,
+                    "removed": removed,
+                    "summary": analysis.get("summary", ""),
+                    "new_ids": analysis.get("new_ids", []),
+                    "changed_ids": analysis.get("changed_ids", []),
+                    "removed_ids": analysis.get("removed_ids", []),
+                    "diff_preview": diff_text,
+                    "hash": current_hash[:16],
+                })
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _generate_validation_prompt(self, req_id, title, section, diff_text):
+        """Generate a suggested validation prompt for a new requirement. Cost: ~$0.001."""
+        import requests as req_lib
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            return f"Verify this photo meets the {req_id} ({title}) requirement. Respond: PASS or FAIL, then one sentence explaining why."
+
+        resp = req_lib.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 200,
+                "messages": [{
+                    "role": "user",
+                    "content": (
+                        f"A new solar installation photo requirement was added by Palmetto Finance:\n"
+                        f"- ID: {req_id}\n"
+                        f"- Section: {section}\n"
+                        f"- Title: {title}\n\n"
+                        f"Context from the page diff:\n```\n{diff_text[:1500]}\n```\n\n"
+                        f"Write a concise validation prompt for an AI vision model that will check a photo against this requirement. "
+                        f"The prompt should:\n"
+                        f"1. Describe what the photo should show\n"
+                        f"2. List 2-3 specific things to verify\n"
+                        f"3. End with: 'Respond: PASS or FAIL, then one sentence explaining why.'\n\n"
+                        f"Return ONLY the prompt text, nothing else."
+                    ),
+                }],
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()["content"][0]["text"].strip()
+
     # ── Report handlers ──────────────────────────────────────────────────────
 
     def _api_reports(self):
@@ -634,13 +888,23 @@ class LiveHandler(BaseHTTPRequestHandler):
                 required = [r for r in reqs if r.get("status") != "N/A" and not r.get("optional")]
                 passed = sum(1 for r in required if r["status"] == "PASS")
                 failed = sum(1 for r in required if r["status"] in ("FAIL", "MISSING", "ERROR"))
-                # Get project name from CompanyCam
+                # Get project name and image from CompanyCam
                 name = pid
+                thumb_url = None
                 try:
                     r = http_requests.get(f"{API_BASE}/projects/{pid}",
                                           headers=cc_headers(), timeout=5)
                     if r.status_code == 200:
-                        name = r.json().get("name", pid)
+                        proj = r.json()
+                        name = proj.get("name", pid)
+                        for fi in (proj.get("feature_image") or []):
+                            if fi.get("type") == "thumbnail":
+                                thumb_url = fi.get("uri")
+                                break
+                        if not thumb_url:
+                            for fi in (proj.get("feature_image") or []):
+                                thumb_url = fi.get("uri")
+                                break
                 except Exception:
                     pass
                 mtime = os.path.getmtime(f)
@@ -651,6 +915,7 @@ class LiveHandler(BaseHTTPRequestHandler):
                     "failed": failed,
                     "total": len(required),
                     "timestamp": int(mtime),
+                    "featured_image": thumb_url,
                 })
             except Exception:
                 continue
@@ -746,19 +1011,47 @@ EMBEDDED_HTML = """<!DOCTYPE html>
   <title>Solclear Compliance</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #f8f9fb; --bg-card: #fff; --bg-input: #fff;
+      --text: #1a1a2e; --text-secondary: #6b7280; --text-muted: #9ca3af;
+      --border: #e5e7eb; --border-light: #f3f4f6;
+      --header-bg: #111827;
+      --badge-pass-bg: #ecfdf5; --badge-pass-text: #065f46;
+      --badge-fail-bg: #fef2f2; --badge-fail-text: #991b1b;
+      --badge-missing-bg: #fffbeb; --badge-missing-text: #92400e;
+    }
+
+    [data-theme="dark"] {
+      --bg: #0f172a; --bg-card: #1e293b; --bg-input: #1e293b;
+      --text: #e2e8f0; --text-secondary: #94a3b8; --text-muted: #64748b;
+      --border: #334155; --border-light: #1e293b;
+      --header-bg: #020617;
+      --badge-pass-bg: #064e3b; --badge-pass-text: #6ee7b7;
+      --badge-fail-bg: #7f1d1d; --badge-fail-text: #fca5a5;
+      --badge-missing-bg: #78350f; --badge-missing-text: #fcd34d;
+    }
+
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #f8f9fb; color: #1a1a2e; font-size: 14px; line-height: 1.5;
+      background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5;
       -webkit-font-smoothing: antialiased;
       min-height: 100dvh;
+      transition: background 0.2s, color 0.2s;
     }
 
     /* ── Header ── */
     .top-bar {
-      background: #111827; color: #fff; padding: 12px 20px;
+      background: var(--header-bg); color: #fff; padding: 12px 20px;
       display: grid; grid-template-columns: 44px 1fr 44px; align-items: center;
     }
-    .top-bar .sub { font-size: 11px; color: #6b7280; }
+    .top-bar .sub { font-size: 11px; color: var(--text-secondary); }
+    .theme-toggle {
+      background: none; border: none; color: #fff; cursor: pointer;
+      width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;
+      padding: 0; -webkit-tap-highlight-color: transparent;
+    }
+    .theme-toggle svg { width: 20px; height: 20px; }
     .hamburger {
       background: none; border: none; color: #fff; cursor: pointer;
       width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;
@@ -801,36 +1094,36 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     .step.active { display: block; }
     .step-label {
       font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em;
-      color: #9ca3af; font-weight: 600; margin-bottom: 12px;
+      color: var(--text-muted); font-weight: 600; margin-bottom: 12px;
     }
 
     /* ── Search ── */
     .search-input {
-      width: 100%; padding: 12px 14px; font-size: 16px; border: 2px solid #e5e7eb;
-      border-radius: 8px; outline: none; -webkit-appearance: none;
+      width: 100%; padding: 12px 14px; font-size: 16px; border: 2px solid var(--border);
+      border-radius: 8px; outline: none; -webkit-appearance: none; background: var(--bg-input); color: var(--text);
     }
     .search-input:focus { border-color: #3b82f6; }
 
     /* ── List items ── */
     .list-item {
-      background: #fff; border-radius: 8px; padding: 14px 16px; margin-top: 8px;
+      background: var(--bg-card); border-radius: 8px; padding: 14px 16px; margin-top: 8px;
       border: 2px solid transparent; cursor: pointer; transition: border-color 0.1s;
       min-height: 44px; display: flex; flex-direction: column; justify-content: center;
     }
     .list-item:hover, .list-item:active { border-color: #3b82f6; }
-    .list-item .name { font-weight: 600; font-size: 14px; }
-    .list-item .detail { font-size: 12px; color: #6b7280; }
+    .list-item .name { font-weight: 600; font-size: 14px; color: var(--text); }
+    .list-item .detail { font-size: 12px; color: var(--text-secondary); }
 
     /* ── Toggles ── */
     .param-group { margin-bottom: 16px; }
     .param-group label {
       display: block; font-size: 11px; text-transform: uppercase;
-      letter-spacing: 0.06em; color: #6b7280; margin-bottom: 6px; font-weight: 600;
+      letter-spacing: 0.06em; color: var(--text-secondary); margin-bottom: 6px; font-weight: 600;
     }
     .toggle-row { display: flex; gap: 8px; flex-wrap: wrap; }
     .toggle-btn {
-      padding: 10px 20px; border-radius: 8px; border: 2px solid #e5e7eb;
-      background: #fff; font-size: 14px; font-weight: 500; cursor: pointer;
+      padding: 10px 20px; border-radius: 8px; border: 2px solid var(--border);
+      background: var(--bg-card); color: var(--text); font-size: 14px; font-weight: 500; cursor: pointer;
       min-height: 44px; transition: all 0.1s; flex: 1; text-align: center;
     }
     .toggle-btn.selected { border-color: #3b82f6; background: #eff6ff; color: #1d4ed8; }
@@ -846,14 +1139,14 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     /* ── Progress ── */
     .progress-wrap { padding: 20px; }
     .progress-bar-bg {
-      width: 100%; height: 8px; background: #e5e7eb; border-radius: 4px;
+      width: 100%; height: 8px; background: var(--border); border-radius: 4px;
       overflow: hidden; margin-bottom: 8px;
     }
     .progress-bar-fill {
       height: 100%; background: #3b82f6; border-radius: 4px;
       transition: width 0.3s ease; width: 0%;
     }
-    .progress-text { font-size: 12px; color: #6b7280; margin-bottom: 16px; }
+    .progress-text { font-size: 12px; color: var(--text-secondary); margin-bottom: 16px; }
 
     /* ── Status message ── */
     .status-msg {
@@ -863,8 +1156,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 
     /* ── Result rows ── */
     .result-row {
-      background: #fff; border-radius: 6px; padding: 10px 14px; margin-bottom: 6px;
-      border-left: 3px solid #e5e7eb; animation: fadeIn 0.2s ease;
+      background: var(--bg-card); border-radius: 6px; padding: 10px 14px; margin-bottom: 6px;
+      border-left: 3px solid var(--border); animation: fadeIn 0.2s ease;
     }
     .result-row.pass { border-left-color: #10b981; }
     .result-row.fail { border-left-color: #ef4444; }
@@ -876,13 +1169,13 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 3px;
       letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap;
     }
-    .badge-pass { background: #ecfdf5; color: #065f46; }
-    .badge-fail { background: #fef2f2; color: #991b1b; }
-    .badge-missing { background: #fffbeb; color: #92400e; }
+    .badge-pass { background: var(--badge-pass-bg); color: var(--badge-pass-text); }
+    .badge-fail { background: var(--badge-fail-bg); color: var(--badge-fail-text); }
+    .badge-missing { background: var(--badge-missing-bg); color: var(--badge-missing-text); }
     .badge-error { background: #f5f3ff; color: #5b21b6; }
-    .result-id { font-size: 10px; font-weight: 700; color: #9ca3af; }
-    .result-title { font-size: 13px; font-weight: 500; flex: 1; }
-    .result-reason { font-size: 12px; color: #6b7280; margin-top: 6px; padding-left: 10px; border-left: 2px solid #f3f4f6; }
+    .result-id { font-size: 10px; font-weight: 700; color: var(--text-muted); }
+    .result-title { font-size: 13px; font-weight: 500; flex: 1; color: var(--text); }
+    .result-reason { font-size: 12px; color: var(--text-secondary); margin-top: 6px; padding-left: 10px; border-left: 2px solid var(--border-light); }
     .expand-btn {
       margin-top: 4px; background: none; border: none; color: #3b82f6;
       font-size: 11px; font-weight: 500; cursor: pointer; padding: 2px 0;
@@ -900,7 +1193,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     .done-label { font-size: 13px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
     .done-pass .done-label { color: #065f46; }
     .done-fail .done-label { color: #991b1b; }
-    .done-stats { font-size: 12px; color: #6b7280; }
+    .done-stats { font-size: 12px; color: var(--text-secondary); }
     .cc-link {
       display: inline-block; margin-top: 8px; padding: 10px 16px; background: #3b82f6;
       color: #fff; border-radius: 8px; text-decoration: none; font-size: 13px; font-weight: 600;
@@ -919,6 +1212,38 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     }
     .loader-anim.hidden { display: none; }
 
+    /* ── Project cards ── */
+    .project-card {
+      background: var(--bg-card); border-radius: 10px; margin-top: 8px;
+      border: 2px solid transparent; cursor: pointer; transition: border-color 0.1s;
+      display: flex; overflow: hidden;
+    }
+    .project-card:hover, .project-card:active { border-color: #3b82f6; }
+    .project-card-img {
+      width: 80px; height: 80px; object-fit: cover; flex-shrink: 0; background: var(--border);
+    }
+    .project-card-info { padding: 12px 14px; flex: 1; display: flex; flex-direction: column; justify-content: center; }
+    .project-card-name { font-weight: 600; font-size: 13px; color: var(--text); }
+    .project-card-addr { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .project-card-meta { font-size: 10px; color: var(--text-muted); margin-top: 4px; display: flex; align-items: center; gap: 6px; }
+    .project-card-dot { width: 6px; height: 6px; border-radius: 50%; background: #10b981; }
+
+    /* ── Home cards ── */
+    .home-cards { display: flex; flex-direction: column; gap: 8px; }
+    .home-card {
+      background: var(--bg-card); border-radius: 10px; padding: 16px; cursor: pointer;
+      display: flex; align-items: center; gap: 14px;
+      border: 2px solid transparent; transition: border-color 0.1s;
+    }
+    .home-card:hover, .home-card:active { border-color: #3b82f6; }
+    .home-card-icon {
+      width: 44px; height: 44px; border-radius: 10px; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .home-card-text { flex: 1; }
+    .home-card-title { font-size: 14px; font-weight: 600; color: var(--text); }
+    .home-card-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
     @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
   </style>
 </head>
@@ -934,11 +1259,13 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       </svg>
       <button class="nav-close" onclick="closeNav()">&times;</button>
     </div>
-    <button class="nav-item" onclick="closeNav();showStep('home')">Recent Reports</button>
+    <button class="nav-item" onclick="closeNav();showStep('home')">Home</button>
+    <button class="nav-item" onclick="closeNav();showStep('reports')">Recent Reports</button>
     <button class="nav-item" onclick="closeNav();showStep(1)">New Compliance Check</button>
     <div style="border-top:1px solid #1f2937;margin:16px 0 8px;"></div>
     <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:#4b5563;padding:0 12px 8px;font-weight:600;">Admin</div>
     <button class="nav-item" onclick="closeNav();showStep('orgs')">Organizations</button>
+    <button class="nav-item" onclick="closeNav();showStep('reqs')">Requirements</button>
   </div>
 
   <div class="top-bar">
@@ -951,22 +1278,78 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         <text x="116" y="104" font-family="Inter,Helvetica,Arial,sans-serif" font-weight="600" font-size="80" fill="#ffffff" letter-spacing="-2.5">solclear</text>
       </svg>
     </div>
-    <div class="header-spacer"></div>
+    <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn" title="Toggle dark mode">
+      <svg id="themeIconSun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+      <svg id="themeIconMoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:none;"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
   </div>
 
-  <!-- Recent reports -->
-  <div id="recentReports" class="step active" style="display:block;">
-    <div id="recentList"></div>
-    <div style="margin-top:16px;">
-      <button class="run-btn" onclick="showStep(1)" style="background:#111827;">New Compliance Check</button>
+  <!-- Landing page -->
+  <div id="homePage" class="step active" style="display:block;">
+    <div style="padding:4px 0 20px;">
+      <div style="font-size:15px;font-weight:600;color:var(--text);">Welcome to Solclear</div>
+      <div style="font-size:12px;color:var(--text-muted);">Solar compliance, simplified.</div>
     </div>
+
+    <!-- Action cards -->
+    <div class="home-cards">
+      <div class="home-card" onclick="showStep(1)">
+        <div class="home-card-icon" style="background:#eff6ff;color:#3b82f6;">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        </div>
+        <div class="home-card-text">
+          <div class="home-card-title">New Compliance Check</div>
+          <div class="home-card-desc">Run a photo compliance check on a project</div>
+        </div>
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#9ca3af" stroke-width="2" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg>
+      </div>
+
+      <div class="home-card" onclick="showStep('reports')">
+        <div class="home-card-icon" style="background:#ecfdf5;color:#10b981;">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
+        </div>
+        <div class="home-card-text">
+          <div class="home-card-title">Recent Reports</div>
+          <div class="home-card-desc">View and share previous compliance results</div>
+        </div>
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#9ca3af" stroke-width="2" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg>
+      </div>
+
+      <div class="home-card" onclick="showStep('orgs')">
+        <div class="home-card-icon" style="background:#fffbeb;color:#f59e0b;">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 21h18M9 8h1M9 12h1M9 16h1M14 8h1M14 12h1M14 16h1"/><rect x="5" y="3" width="14" height="18" rx="1"/></svg>
+        </div>
+        <div class="home-card-text">
+          <div class="home-card-title">Organizations</div>
+          <div class="home-card-desc">Manage companies, users, and settings</div>
+        </div>
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#9ca3af" stroke-width="2" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg>
+      </div>
+    </div>
+
+    <!-- Recent reports preview -->
+    <div style="margin-top:28px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.1em;color:#9ca3af;font-weight:600;">Latest Reports</div>
+        <button onclick="showStep('reports')" style="background:none;border:none;color:#3b82f6;font-size:12px;font-weight:500;cursor:pointer;">View all</button>
+      </div>
+      <div id="homeRecentList"></div>
+    </div>
+  </div>
+
+  <!-- Full reports list -->
+  <div id="reportsPage" class="step">
+    <button class="back-btn" onclick="showStep('home')">&larr; Back to home</button>
+    <div class="step-label">All Reports</div>
+    <div id="recentList"></div>
   </div>
 
   <!-- Step 1: Select project -->
   <div id="step1" class="step">
-    <button class="back-btn" onclick="showStep('home')">&larr; Back to reports</button>
+    <button class="back-btn" onclick="showStep('home')">&larr; Back to home</button>
     <div class="step-label">Step 1 — Select Project</div>
     <input class="search-input" id="projectSearch" type="text" placeholder="Search by name or address..." autocomplete="off">
+    <div id="projectListLoading" style="color:var(--text-muted);padding:12px;font-size:13px;">Loading recent projects...</div>
     <div id="projectList"></div>
   </div>
 
@@ -1056,7 +1439,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <div class="step-label" id="orgDetailLabel">Organization</div>
 
     <!-- Org info -->
-    <div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;">
+    <div style="background:var(--bg-card);border-radius:8px;padding:16px;margin-bottom:16px;">
       <div class="param-group">
         <label>Name</label>
         <input class="search-input" id="orgEditName" type="text" style="font-size:14px;">
@@ -1074,36 +1457,36 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         <label>CompanyCam API Key</label>
         <div style="display:flex;gap:8px;align-items:center;">
           <input class="search-input" id="orgCcKey" type="password" style="font-size:13px;font-family:monospace;flex:1;" placeholder="Not set">
-          <button onclick="toggleKeyVis('orgCcKey')" style="background:#f3f4f6;border:none;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:12px;min-height:44px;">Show</button>
+          <button onclick="toggleKeyVis('orgCcKey')" style="background:var(--border-light);border:none;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:12px;min-height:44px;color:var(--text);">Show</button>
         </div>
       </div>
       <div class="param-group">
         <label>Anthropic API Key</label>
         <div style="display:flex;gap:8px;align-items:center;">
           <input class="search-input" id="orgAnthKey" type="password" style="font-size:13px;font-family:monospace;flex:1;" placeholder="Not set">
-          <button onclick="toggleKeyVis('orgAnthKey')" style="background:#f3f4f6;border:none;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:12px;min-height:44px;">Show</button>
+          <button onclick="toggleKeyVis('orgAnthKey')" style="background:var(--border-light);border:none;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:12px;min-height:44px;color:var(--text);">Show</button>
         </div>
       </div>
       <button class="run-btn" onclick="saveOrg()" style="background:#10b981;">Save Changes</button>
     </div>
 
     <!-- Users -->
-    <div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;">
+    <div style="background:var(--bg-card);border-radius:8px;padding:16px;margin-bottom:16px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <label style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#6b7280;font-weight:600;margin:0;">Users</label>
-        <span id="orgUserCount" style="font-size:11px;color:#9ca3af;"></span>
+        <label style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-secondary);font-weight:600;margin:0;">Users</label>
+        <span id="orgUserCount" style="font-size:11px;color:var(--text-muted);"></span>
       </div>
       <div id="orgUsersList"></div>
 
       <!-- Add user form -->
-      <div style="margin-top:12px;padding-top:12px;border-top:1px solid #f3f4f6;">
-        <div style="font-size:11px;color:#6b7280;font-weight:600;margin-bottom:8px;">ADD USER</div>
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-light);">
+        <div style="font-size:11px;color:var(--text-secondary);font-weight:600;margin-bottom:8px;">ADD USER</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <input class="search-input" id="addUserFirst" type="text" placeholder="First Name" style="flex:1;min-width:100px;font-size:13px;">
           <input class="search-input" id="addUserLast" type="text" placeholder="Last Name" style="flex:1;min-width:100px;font-size:13px;">
           <input class="search-input" id="addUserEmail" type="email" placeholder="Email" style="flex:1;min-width:160px;font-size:13px;">
           <input class="search-input" id="addUserPhone" type="tel" placeholder="Phone (optional)" style="flex:1;min-width:120px;font-size:13px;">
-          <select id="addUserRole" style="padding:8px;border:2px solid #e5e7eb;border-radius:8px;font-size:13px;min-height:44px;">
+          <select id="addUserRole" style="padding:8px;border:2px solid var(--border);border-radius:8px;font-size:13px;min-height:44px;">
             <option value="crew">Crew</option>
             <option value="reviewer">Reviewer</option>
             <option value="admin">Admin</option>
@@ -1113,9 +1496,9 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       </div>
 
       <!-- CSV upload -->
-      <div style="margin-top:12px;padding-top:12px;border-top:1px solid #f3f4f6;">
-        <div style="font-size:11px;color:#6b7280;font-weight:600;margin-bottom:8px;">BULK IMPORT (CSV)</div>
-        <div style="font-size:11px;color:#9ca3af;margin-bottom:8px;">Format: email, first_name, last_name, role, phone (one per line)</div>
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-light);">
+        <div style="font-size:11px;color:var(--text-secondary);font-weight:600;margin-bottom:8px;">BULK IMPORT (CSV)</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Format: email, first_name, last_name, role, phone (one per line)</div>
         <input type="file" id="csvUpload" accept=".csv" onchange="uploadCsv()" style="font-size:12px;">
         <div id="csvResult" style="margin-top:8px;font-size:12px;"></div>
       </div>
@@ -1127,7 +1510,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <button class="back-btn" id="userDetailBack">&larr; Back to organization</button>
     <div class="step-label" id="userDetailLabel">Edit User</div>
 
-    <div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;">
+    <div style="background:var(--bg-card);border-radius:8px;padding:16px;margin-bottom:16px;">
       <div style="display:flex;gap:12px;flex-wrap:wrap;">
         <div class="param-group" style="flex:1;min-width:140px;">
           <label>First Name</label>
@@ -1157,7 +1540,77 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       <button class="run-btn" onclick="saveUser()" style="background:#10b981;">Save Changes</button>
     </div>
 
-    <div id="userStatusInfo" style="background:#fff;border-radius:8px;padding:16px;font-size:12px;color:#6b7280;"></div>
+    <div id="userStatusInfo" style="background:var(--bg-card);border-radius:8px;padding:16px;font-size:12px;color:var(--text-secondary);"></div>
+  </div>
+
+  <!-- Requirements list -->
+  <div id="adminReqs" class="step">
+    <button class="back-btn" onclick="showStep('home')">&larr; Back to home</button>
+    <div class="step-label">Palmetto M1 Requirements</div>
+
+    <!-- Change alert banner (hidden by default) -->
+    <div id="changeAlert" style="display:none;background:#fef2f2;border:2px solid #ef4444;border-radius:10px;padding:16px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <div style="font-size:14px;font-weight:700;color:#991b1b;">Requirements Changed</div>
+        <button onclick="dismissAlert()" style="margin-left:auto;background:none;border:none;color:#991b1b;cursor:pointer;font-size:16px;">&times;</button>
+      </div>
+      <div id="changeSummary" style="font-size:13px;color:#991b1b;line-height:1.6;margin-bottom:12px;"></div>
+      <div id="changeDiff" style="display:none;">
+        <button onclick="toggleDiff()" id="diffToggleBtn" class="expand-btn" style="color:#991b1b;">Show raw diff <span class="arrow">&#9662;</span></button>
+        <pre id="changeDiffContent" style="display:none;margin-top:8px;padding:10px;background:#fff;border-radius:6px;font-size:11px;overflow-x:auto;max-height:250px;color:#374151;border:1px solid #fecaca;"></pre>
+      </div>
+    </div>
+
+    <!-- Monitor status -->
+    <div id="monitorCard" style="background:var(--bg-card);border-radius:8px;padding:14px 16px;margin-bottom:16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div style="font-size:12px;font-weight:600;color:var(--text);">Palmetto M1 Change Detection</div>
+          <div id="monitorBadge" style="display:none;"></div>
+        </div>
+        <button onclick="checkRequirementsNow()" id="checkNowBtn" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:11px;font-weight:600;cursor:pointer;min-height:32px;">Check Now</button>
+      </div>
+      <div id="monitorStatus" style="font-size:12px;color:var(--text-muted);">Loading...</div>
+    </div>
+
+    <!-- Requirements by section -->
+    <div id="reqsList"></div>
+  </div>
+
+  <!-- Requirement detail/edit -->
+  <div id="adminReqDetail" class="step">
+    <button class="back-btn" onclick="showStep('reqs')">&larr; Back to requirements</button>
+    <div class="step-label" id="reqDetailLabel">Requirement</div>
+
+    <div style="background:var(--bg-card);border-radius:8px;padding:16px;margin-bottom:16px;">
+      <div class="param-group">
+        <label>ID</label>
+        <div id="reqEditId" style="font-size:14px;font-weight:600;color:var(--text);"></div>
+      </div>
+      <div class="param-group">
+        <label>Section</label>
+        <div id="reqEditSection" style="font-size:13px;color:var(--text-secondary);"></div>
+      </div>
+      <div class="param-group">
+        <label>Title</label>
+        <input class="search-input" id="reqEditTitle" type="text" style="font-size:14px;">
+      </div>
+      <div class="param-group">
+        <label>Validation Prompt</label>
+        <textarea class="search-input" id="reqEditPrompt" rows="5" style="font-size:13px;resize:vertical;font-family:inherit;"></textarea>
+      </div>
+      <div class="param-group">
+        <label>CompanyCam Task Titles (comma-separated)</label>
+        <input class="search-input" id="reqEditTaskTitles" type="text" style="font-size:13px;" placeholder="e.g. Main Breaker, Breaker Rating">
+      </div>
+      <div class="param-group">
+        <label>Keywords (comma-separated)</label>
+        <input class="search-input" id="reqEditKeywords" type="text" style="font-size:13px;" placeholder="e.g. main breaker, ampere">
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">Changes are saved in memory. They will reset on server restart until requirements are migrated to the database.</div>
+      <button class="run-btn" onclick="saveRequirement()" style="background:#10b981;">Save Changes</button>
+    </div>
   </div>
 
   <script>
@@ -1181,13 +1634,50 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       document.getElementById('navOverlay').classList.remove('open');
     }
 
+    // ── Theme toggle ──
+    function toggleTheme() {
+      const html = document.documentElement;
+      const isDark = html.getAttribute('data-theme') === 'dark';
+      html.setAttribute('data-theme', isDark ? 'light' : 'dark');
+      localStorage.setItem('solclear-theme', isDark ? 'light' : 'dark');
+      updateThemeIcon();
+    }
+    function updateThemeIcon() {
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      document.getElementById('themeIconSun').style.display = isDark ? 'block' : 'none';
+      document.getElementById('themeIconMoon').style.display = isDark ? 'none' : 'block';
+    }
+    // Apply saved theme on load
+    (function() {
+      const saved = localStorage.getItem('solclear-theme');
+      if (saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+      updateThemeIcon();
+    })();
+
     // ── Step navigation ──
     function showStep(n) {
       document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
-      document.getElementById('recentReports').style.display = 'none';
+      document.getElementById('homePage').style.display = 'none';
       if (n === 'home') {
-        document.getElementById('recentReports').style.display = 'block';
-        loadRecentReports();
+        document.getElementById('homePage').style.display = 'block';
+        loadHomeReports();
+        return;
+      }
+      if (n === 'reports') {
+        document.getElementById('reportsPage').classList.add('active');
+        loadAllReports();
+        return;
+      }
+      if (n === 'reqs') {
+        document.getElementById('adminReqs').classList.add('active');
+        loadRequirements();
+        loadMonitorStatus();
+        return;
+      }
+      if (n === 'reqDetail') {
+        document.getElementById('adminReqDetail').classList.add('active');
         return;
       }
       if (n === 'orgs') {
@@ -1208,6 +1698,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         return;
       }
       document.getElementById('step' + n).classList.add('active');
+      if (n === 1 && !projectsLoaded) loadRecentProjects();
     }
 
     // ── Generic toggle helper ──
@@ -1309,10 +1800,10 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       const list = document.getElementById('orgUsersList');
       if (!users.length) { list.innerHTML = '<div style="color:#9ca3af;font-size:12px;">No users yet.</div>'; return; }
       list.innerHTML = users.map(u => `
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f3f4f6;${u.is_active ? '' : 'opacity:0.5;'}">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light);${u.is_active ? '' : 'opacity:0.5;'}">
           <div style="flex:1;cursor:pointer;" onclick="openUser(${u.id})">
             <div style="font-weight:500;font-size:13px;color:#3b82f6;">${esc(u.full_name || (u.first_name + ' ' + u.last_name))}${u.is_active ? '' : ' <span style="font-size:10px;color:#ef4444;font-weight:700;">INACTIVE</span>'}</div>
-            <div style="font-size:11px;color:#9ca3af;">${esc(u.email)}${u.phone ? ' · ' + esc(u.phone) : ''}</div>
+            <div style="font-size:11px;color:var(--text-muted)">${esc(u.email)}${u.phone ? ' · ' + esc(u.phone) : ''}</div>
           </div>
           <div style="display:flex;align-items:center;gap:8px;">
             ${roleBadgeHtml(u.role)}
@@ -1448,31 +1939,236 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     }
 
     // ── Recent reports ──
-    async function loadRecentReports() {
+    // ── Requirements ──
+    let reqsData = [];
+
+    async function loadRequirements() {
+      const list = document.getElementById('reqsList');
+      list.innerHTML = '<div style="color:var(--text-muted);font-size:13px;">Loading...</div>';
+      try {
+        const r = await fetch('/api/requirements');
+        reqsData = await r.json();
+        // Group by section
+        const sections = {};
+        reqsData.forEach(req => {
+          (sections[req.section] = sections[req.section] || []).push(req);
+        });
+        let html = '';
+        for (const [section, reqs] of Object.entries(sections)) {
+          html += `<div style="margin-bottom:16px;">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-muted);font-weight:600;padding:8px 0;border-bottom:2px solid var(--border);">${esc(section)}</div>`;
+          reqs.forEach(req => {
+            let changeBadge = '';
+            let borderColor = req.optional ? 'var(--border)' : '#3b82f6';
+            if (req.change_status === 'new') {
+              changeBadge = '<span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:3px;background:#ecfdf5;color:#065f46;">+ NEW</span>';
+              borderColor = '#10b981';
+            } else if (req.change_status === 'changed') {
+              changeBadge = '<span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:3px;background:#fffbeb;color:#92400e;">UPDATED</span>';
+              borderColor = '#f59e0b';
+            } else if (req.change_status === 'removed') {
+              changeBadge = '<span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:3px;background:#fef2f2;color:#991b1b;">REMOVED</span>';
+              borderColor = '#ef4444';
+            }
+            const stubNote = req.is_stub ? '<div style="font-size:11px;color:#f59e0b;margin-top:4px;font-weight:600;">Needs configuration before use in checks</div>' : '';
+            html += `
+              <div class="list-item" onclick="openRequirement('${req.id}')" style="margin-top:6px;border-left:3px solid ${borderColor};">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                  <span style="font-size:10px;font-weight:700;color:var(--text-muted);min-width:28px;">${req.id}</span>
+                  <span style="font-size:13px;font-weight:500;color:var(--text);">${esc(req.title)}</span>
+                  ${changeBadge}
+                  ${req.optional ? '<span style="font-size:9px;background:var(--border-light);color:var(--text-muted);padding:1px 5px;border-radius:3px;font-weight:600;">OPTIONAL</span>' : ''}
+                </div>
+                <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Tasks: ${req.task_titles.length ? req.task_titles.join(', ') : 'none mapped'}</div>
+                ${stubNote}
+              </div>`;
+          });
+          html += '</div>';
+        }
+        list.innerHTML = html;
+      } catch (e) {
+        list.innerHTML = '<div style="color:#ef4444;">Error loading requirements</div>';
+      }
+    }
+
+    async function loadMonitorStatus() {
+      const el = document.getElementById('monitorStatus');
+      try {
+        const r = await fetch('/api/requirements/monitor/status');
+        const data = await r.json();
+        if (data.status === 'no_baseline') {
+          el.innerHTML = 'No baseline saved yet. Click "Check Now" to create one.';
+        } else {
+          const date = new Date(data.saved_at).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric', hour:'numeric', minute:'2-digit'});
+          el.innerHTML = `Last checked: ${date} · Hash: ${data.hash}...`;
+        }
+      } catch (e) {
+        el.innerHTML = 'Could not load monitor status';
+      }
+    }
+
+    async function checkRequirementsNow() {
+      const btn = document.getElementById('checkNowBtn');
+      const el = document.getElementById('monitorStatus');
+      const badge = document.getElementById('monitorBadge');
+      btn.disabled = true;
+      btn.textContent = 'Checking...';
+      el.innerHTML = 'Fetching Palmetto requirements page...';
+      document.getElementById('changeAlert').style.display = 'none';
+      try {
+        const r = await fetch('/api/requirements/check', {method: 'POST'});
+        const data = await r.json();
+        if (data.status === 'no_changes') {
+          el.innerHTML = `<span style="color:#10b981;font-weight:600;">No changes detected.</span> Hash: ${data.hash}...`;
+          badge.style.display = 'inline-block';
+          badge.innerHTML = '<span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:3px;background:var(--badge-pass-bg);color:var(--badge-pass-text);">UP TO DATE</span>';
+        } else if (data.status === 'changes_detected') {
+          el.innerHTML = `<span style="color:#ef4444;font-weight:600;">Changes detected</span> · ${data.added} added, ${data.removed} removed`;
+          badge.style.display = 'inline-block';
+          badge.innerHTML = '<span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:3px;background:var(--badge-fail-bg);color:var(--badge-fail-text);">CHANGED</span>';
+          // Show alert banner
+          const alert = document.getElementById('changeAlert');
+          alert.style.display = 'block';
+          let rawSummary = data.summary || '';
+          // Clean up any JSON/markdown artifacts from AI response
+          rawSummary = rawSummary.replace(/^```(?:json)?/gm, '').replace(/```$/gm, '').trim();
+          let summaryHtml = esc(rawSummary).replace(/\\n/g, '<br>');
+          // Add structured badges
+          const parts = [];
+          if (data.new_ids && data.new_ids.length) {
+            parts.push('<div style="margin-top:8px;"><span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;background:#ecfdf5;color:#065f46;">NEW</span> ' +
+              data.new_ids.map(n => '<strong>' + esc(n.id) + '</strong> — ' + esc(n.title)).join(', ') + '</div>');
+          }
+          if (data.changed_ids && data.changed_ids.length) {
+            parts.push('<div style="margin-top:4px;"><span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;background:#fffbeb;color:#92400e;">UPDATED</span> ' +
+              data.changed_ids.map(c => '<strong>' + esc(c) + '</strong>').join(', ') + '</div>');
+          }
+          if (data.removed_ids && data.removed_ids.length) {
+            parts.push('<div style="margin-top:4px;"><span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;background:#fef2f2;color:#991b1b;">REMOVED</span> ' +
+              data.removed_ids.map(r => '<strong>' + esc(r) + '</strong>').join(', ') + '</div>');
+          }
+          document.getElementById('changeSummary').innerHTML = summaryHtml + parts.join('');
+          document.getElementById('changeDiff').style.display = 'block';
+          document.getElementById('changeDiffContent').textContent = data.diff_preview || '';
+          document.getElementById('changeDiffContent').style.display = 'none';
+          // Refresh requirements list to show badges
+          loadRequirements();
+        } else if (data.status === 'no_baseline') {
+          el.innerHTML = data.message;
+        } else if (data.error) {
+          el.innerHTML = `<span style="color:#ef4444;">Error: ${esc(data.error)}</span>`;
+        }
+      } catch (e) {
+        el.innerHTML = `<span style="color:#ef4444;">Error: ${e.message}</span>`;
+      }
+      btn.disabled = false;
+      btn.textContent = 'Check Now';
+    }
+
+    function dismissAlert() {
+      document.getElementById('changeAlert').style.display = 'none';
+    }
+
+    function toggleDiff() {
+      const content = document.getElementById('changeDiffContent');
+      const btn = document.getElementById('diffToggleBtn');
+      if (content.style.display === 'none') {
+        content.style.display = 'block';
+        btn.innerHTML = 'Hide raw diff <span class="arrow">&#9652;</span>';
+      } else {
+        content.style.display = 'none';
+        btn.innerHTML = 'Show raw diff <span class="arrow">&#9662;</span>';
+      }
+    }
+
+    let currentReqId = null;
+
+    function openRequirement(reqId) {
+      currentReqId = reqId;
+      const req = reqsData.find(r => r.id === reqId);
+      if (!req) return;
+      document.getElementById('reqDetailLabel').textContent = req.id + ' — ' + req.title;
+      document.getElementById('reqEditId').textContent = req.id;
+      document.getElementById('reqEditSection').textContent = req.section;
+      document.getElementById('reqEditTitle').value = req.title;
+      document.getElementById('reqEditPrompt').value = req.validation_prompt;
+      document.getElementById('reqEditTaskTitles').value = req.task_titles.join(', ');
+      document.getElementById('reqEditKeywords').value = req.keywords.join(', ');
+      showStep('reqDetail');
+    }
+
+    async function saveRequirement() {
+      const data = {
+        title: document.getElementById('reqEditTitle').value.trim(),
+        validation_prompt: document.getElementById('reqEditPrompt').value.trim(),
+        task_titles: document.getElementById('reqEditTaskTitles').value.split(',').map(s => s.trim()).filter(Boolean),
+        keywords: document.getElementById('reqEditKeywords').value.split(',').map(s => s.trim()).filter(Boolean),
+      };
+      try {
+        const r = await fetch('/api/requirements/' + currentReqId, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(data)
+        });
+        const result = await r.json();
+        if (result.error) { alert(result.error); return; }
+        alert('Requirement updated (in memory).');
+        showStep('reqs');
+      } catch (e) { alert('Error: ' + e.message); }
+    }
+
+    // ── Reports ──
+    function renderReportList(reports) {
+      return reports.map(rpt => {
+        const isPass = rpt.failed === 0;
+        const date = new Date(rpt.timestamp * 1000).toLocaleDateString('en-US', {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
+        const img = rpt.featured_image
+          ? `<img class="project-card-img" src="${rpt.featured_image}" alt="" loading="lazy">`
+          : `<div class="project-card-img"></div>`;
+        return `
+          <a href="/report/${rpt.project_id}" class="project-card" style="text-decoration:none;color:inherit;border-left:3px solid ${isPass ? '#10b981' : '#ef4444'};">
+            ${img}
+            <div class="project-card-info">
+              <div class="project-card-name">${esc(rpt.name)}</div>
+              <div class="project-card-addr">${rpt.passed}/${rpt.total} passed · ${date}</div>
+            </div>
+          </a>`;
+      }).join('');
+    }
+
+    async function loadHomeReports() {
+      const list = document.getElementById('homeRecentList');
+      list.innerHTML = '<div style="color:#9ca3af;font-size:12px;">Loading...</div>';
+      try {
+        const r = await fetch('/api/reports');
+        const reports = await r.json();
+        if (!reports.length) {
+          list.innerHTML = '<div style="color:#9ca3af;font-size:12px;">No reports yet. Run your first compliance check!</div>';
+          return;
+        }
+        list.innerHTML = renderReportList(reports.slice(0, 3));
+      } catch (e) {
+        list.innerHTML = '<div style="color:#ef4444;font-size:12px;">Error loading reports</div>';
+      }
+    }
+
+    async function loadAllReports() {
       const list = document.getElementById('recentList');
       list.innerHTML = '<div style="color:#9ca3af;padding:12px;font-size:13px;">Loading reports...</div>';
       try {
         const r = await fetch('/api/reports');
         const reports = await r.json();
         if (!reports.length) {
-          list.innerHTML = '<div class="step-label">No reports yet</div><div style="color:#9ca3af;font-size:13px;padding:4px 0;">Run your first compliance check to see results here.</div>';
+          list.innerHTML = '<div style="color:#9ca3af;font-size:13px;">No reports yet.</div>';
           return;
         }
-        list.innerHTML = '<div class="step-label">Recent Reports</div>' + reports.map(rpt => {
-          const isPass = rpt.failed === 0;
-          const date = new Date(rpt.timestamp * 1000).toLocaleDateString('en-US', {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
-          return `
-            <a href="/report/${rpt.project_id}" class="list-item" style="text-decoration:none;color:inherit;border-left:3px solid ${isPass ? '#10b981' : '#ef4444'};">
-              <div class="name">${esc(rpt.name)}</div>
-              <div class="detail">${rpt.passed}/${rpt.total} passed · ${date}</div>
-            </a>`;
-        }).join('');
+        list.innerHTML = renderReportList(reports);
       } catch (e) {
         list.innerHTML = '<div style="color:#ef4444;padding:12px;">Error loading reports</div>';
       }
     }
 
-    // Check for rerun parameter, otherwise load recent reports
+    // Check for rerun parameter, otherwise load home page
     (function checkRerun() {
       const url = new URL(window.location.href);
       const rerunQs = url.searchParams.get('rerun');
@@ -1497,35 +2193,105 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         window.history.replaceState({}, '', '/');
         return;
       }
-      loadRecentReports();
+      loadHomeReports();
     })();
 
     // ── Step 1: Project search ──
     const searchInput = document.getElementById('projectSearch');
+    let projectsLoaded = false;
     searchInput.addEventListener('input', () => {
       clearTimeout(searchTimer);
       searchTimer = setTimeout(() => searchProjects(searchInput.value), 300);
     });
 
-    // Load initial list when step 1 is shown
-    searchInput.addEventListener('focus', () => {
-      if (!document.getElementById('projectList').children.length) searchProjects('');
-    });
+    function renderProjectCard(p) {
+      const img = p.featured_image
+        ? `<img class="project-card-img" src="${p.featured_image}" alt="" loading="lazy">`
+        : `<div class="project-card-img" id="thumb-${p.id}"></div>`;
+      const addr = [p.address, p.city, p.state].filter(Boolean).join(', ');
+      return `
+        <div class="project-card" onclick="selectProject('${p.id}', '${esc(p.name)}', '${esc(p.state)}')">
+          ${img}
+          <div class="project-card-info">
+            <div class="project-card-name">${esc(p.name)}</div>
+            <div class="project-card-addr">${esc(addr)}</div>
+            ${p.checklist_count !== undefined ? `<div class="project-card-meta"><span class="project-card-dot"></span>${p.checklist_count} checklist${p.checklist_count !== 1 ? 's' : ''}</div>` : ''}
+          </div>
+        </div>`;
+    }
+
+    function loadThumbnails(projects) {
+      // Lazy-load thumbnails for projects without a featured_image
+      projects.forEach(p => {
+        if (p.featured_image) return;
+        const el = document.getElementById('thumb-' + p.id);
+        if (!el) return;
+        fetch('/api/projects/' + p.id + '/thumbnail')
+          .then(r => r.json())
+          .then(data => {
+            if (data.url) {
+              const img = document.createElement('img');
+              img.className = 'project-card-img';
+              img.src = data.url;
+              img.loading = 'lazy';
+              el.replaceWith(img);
+            }
+          })
+          .catch(() => {});
+      });
+    }
+
+    async function loadRecentProjects() {
+      // Load recent projects and async-check for checklists
+      const list = document.getElementById('projectList');
+      const loading = document.getElementById('projectListLoading');
+      loading.style.display = 'block';
+      list.innerHTML = '';
+      try {
+        const r = await fetch('/api/projects');
+        const projects = await r.json();
+        if (!projects.length) { loading.textContent = 'No projects found'; return; }
+        loading.style.display = 'none';
+
+        // Show all projects immediately, then async-enrich with checklist counts
+        list.innerHTML = projects.map(p => renderProjectCard(p)).join('');
+        loadThumbnails(projects);
+
+        // Async check checklists for each project and re-render with counts
+        const enriched = await Promise.all(projects.map(async p => {
+          try {
+            const cr = await fetch('/api/projects/' + p.id + '/checklists');
+            const cls = await cr.json();
+            p.checklist_count = cls.length;
+          } catch (e) { p.checklist_count = 0; }
+          return p;
+        }));
+
+        // Re-render sorted: projects with checklists first
+        const sorted = enriched.sort((a, b) => b.checklist_count - a.checklist_count);
+        list.innerHTML = sorted.map(p => renderProjectCard(p)).join('');
+        loadThumbnails(sorted);
+        projectsLoaded = true;
+      } catch (e) {
+        loading.textContent = 'Error loading projects';
+      }
+    }
 
     async function searchProjects(query) {
       const list = document.getElementById('projectList');
-      list.innerHTML = '<div style="color:#9ca3af;padding:12px;font-size:13px;">Searching...</div>';
+      const loading = document.getElementById('projectListLoading');
+      if (!query && projectsLoaded) return;  // don't re-fetch if clearing search
+      loading.style.display = 'block';
+      loading.textContent = 'Searching...';
+      list.innerHTML = '';
       try {
         const r = await fetch('/api/projects?query=' + encodeURIComponent(query));
         const projects = await r.json();
-        if (!projects.length) { list.innerHTML = '<div style="color:#9ca3af;padding:12px;font-size:13px;">No projects found</div>'; return; }
-        list.innerHTML = projects.map(p => `
-          <div class="list-item" onclick="selectProject('${p.id}', '${esc(p.name)}', '${esc(p.state)}')">
-            <div class="name">${esc(p.name)}</div>
-            <div class="detail">${esc([p.address, p.city, p.state].filter(Boolean).join(', '))}</div>
-          </div>
-        `).join('');
-      } catch (e) { list.innerHTML = '<div style="color:#ef4444;padding:12px;">Error loading projects</div>'; }
+        loading.style.display = 'none';
+        if (!projects.length) { loading.style.display = 'block'; loading.textContent = 'No projects found'; return; }
+        list.innerHTML = projects.map(p => renderProjectCard(p)).join('');
+        loadThumbnails(projects);
+      } catch (e) { loading.textContent = 'Error loading projects'; }
     }
 
     function selectProject(id, name, state) {
@@ -1747,6 +2513,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 
     function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
   </script>
+
+  <div style="text-align:center;padding:32px 20px;font-size:11px;color:var(--text-muted);opacity:0.5;">&copy; 2026 Solclear. All rights reserved.</div>
 
 </body>
 </html>"""

@@ -126,6 +126,57 @@ def summarize_changes(diff_text: str) -> str:
     return resp.json()["content"][0]["text"]
 
 
+def analyze_changes_structured(diff_text: str) -> dict:
+    """Use Haiku to return structured JSON about what changed. Cost: ~$0.001.
+    Returns: {"summary": "...", "new_ids": [{"id": "PS7", "section": "...", "title": "..."}], "changed_ids": ["PS1", "R3"], "removed_ids": ["E8"]}
+    """
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        return {"summary": "Cannot analyze — API key not set", "new_ids": [], "changed_ids": [], "removed_ids": []}
+
+    resp = requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        json={
+            "model": "claude-haiku-4-5-20251001",
+            "max_tokens": 500,
+            "messages": [{
+                "role": "user",
+                "content": (
+                    "This is a diff of the Palmetto Finance solar installation M1 photo documentation requirements page. "
+                    "Analyze the changes and respond with ONLY valid JSON (no markdown, no backticks) in this format:\n"
+                    '{"summary": "Plain English summary of changes", '
+                    '"new_ids": [{"id": "PS7", "section": "Project Site", "title": "Short description of new requirement"}], '
+                    '"changed_ids": ["PS1", "R3"], '
+                    '"removed_ids": ["E8"]}\n\n'
+                    "Rules:\n"
+                    "- new_ids: requirements that were added (didn't exist before). Include the photo ID, section, and title.\n"
+                    "- changed_ids: existing requirements whose wording, conditions, or details changed.\n"
+                    "- removed_ids: requirements that were deleted.\n"
+                    "- If no changes to a category, use an empty array.\n"
+                    "- Photo IDs follow patterns like PS1-PS6, R1-R6, E1-E9, S1-S6, SC1-SC2, SI1-SI2, AMS1-AMS2.\n\n"
+                    f"Diff:\n```\n{diff_text[:3000]}\n```"
+                ),
+            }],
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    text = resp.json()["content"][0]["text"].strip()
+    # Strip markdown code blocks if Haiku wraps the JSON
+    if text.startswith("```"):
+        text = re.sub(r'^```(?:json)?\s*', '', text)
+        text = re.sub(r'\s*```$', '', text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {"summary": text, "new_ids": [], "changed_ids": [], "removed_ids": []}
+
+
 def main():
     parser = argparse.ArgumentParser(description="Monitor Palmetto requirements for changes")
     parser.add_argument("--save", action="store_true", help="Save current page as baseline snapshot")
