@@ -58,8 +58,32 @@ def fetch_page() -> str:
     return '\n'.join(lines)
 
 
+def _use_db():
+    """Check if database is available."""
+    try:
+        from tools.db import fetch_one
+        return True
+    except Exception:
+        return False
+
+
 def save_snapshot(text: str):
     """Save current page text as the baseline snapshot."""
+    content_hash = hashlib.sha256(text.encode()).hexdigest()
+
+    if _use_db():
+        from tools.db import execute
+        # Clear old snapshots and insert new one
+        execute("DELETE FROM requirement_snapshots WHERE url = %s", (PALMETTO_URL,))
+        execute(
+            "INSERT INTO requirement_snapshots (url, content_hash, content_text) VALUES (%s, %s, %s)",
+            (PALMETTO_URL, content_hash, text)
+        )
+        print(f"Snapshot saved to database ({len(text)} chars)")
+        print(f"Hash: {content_hash[:16]}...")
+        return
+
+    # Fallback to local file
     TMP_DIR.mkdir(exist_ok=True)
     with open(SNAPSHOT_PATH, 'w') as f:
         f.write(text)
@@ -67,18 +91,27 @@ def save_snapshot(text: str):
     meta = {
         "url": PALMETTO_URL,
         "saved_at": datetime.now().isoformat(),
-        "hash": hashlib.sha256(text.encode()).hexdigest(),
+        "hash": content_hash,
         "length": len(text),
     }
     with open(SNAPSHOT_META_PATH, 'w') as f:
         json.dump(meta, f, indent=2)
 
-    print(f"Snapshot saved ({len(text)} chars)")
-    print(f"Hash: {meta['hash'][:16]}...")
+    print(f"Snapshot saved to file ({len(text)} chars)")
+    print(f"Hash: {content_hash[:16]}...")
 
 
 def load_snapshot() -> str:
     """Load the previously saved snapshot."""
+    if _use_db():
+        from tools.db import fetch_one
+        row = fetch_one(
+            "SELECT content_text FROM requirement_snapshots WHERE url = %s ORDER BY checked_at DESC LIMIT 1",
+            (PALMETTO_URL,)
+        )
+        return row["content_text"] if row else ""
+
+    # Fallback to local file
     if not SNAPSHOT_PATH.exists():
         return ""
     with open(SNAPSHOT_PATH) as f:

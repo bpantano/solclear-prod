@@ -742,10 +742,26 @@ class LiveHandler(BaseHTTPRequestHandler):
     def _api_requirements_monitor(self):
         """Return the current monitor status — last check time, hash, and whether changes were detected."""
         try:
+            # Try database first
+            row = fetch_one(
+                "SELECT url, content_hash, checked_at, LENGTH(content_text) as length FROM requirement_snapshots WHERE url = %s ORDER BY checked_at DESC LIMIT 1",
+                ("https://help.palmetto.finance/en/articles/8306274-solar-energy-plan-install-m1-photo-documentation",)
+            )
+            if row:
+                self._send_json({
+                    "status": "ok",
+                    "url": row["url"],
+                    "saved_at": row["checked_at"].isoformat() if row["checked_at"] else "",
+                    "hash": row["content_hash"][:16] if row["content_hash"] else "",
+                    "length": row["length"] or 0,
+                    "has_snapshot": True,
+                })
+                return
+
+            # Fallback to local file
             meta_path = TMP_DIR / "palmetto_requirements_meta.json"
-            snapshot_path = TMP_DIR / "palmetto_requirements_snapshot.txt"
             if not meta_path.exists():
-                self._send_json({"status": "no_baseline", "message": "No baseline snapshot saved yet."})
+                self._send_json({"status": "no_baseline", "message": "No baseline snapshot saved yet. Click 'Check Now' to create one."})
                 return
             with open(meta_path) as f:
                 meta = json.load(f)
@@ -755,7 +771,7 @@ class LiveHandler(BaseHTTPRequestHandler):
                 "saved_at": meta.get("saved_at", ""),
                 "hash": meta.get("hash", "")[:16],
                 "length": meta.get("length", 0),
-                "has_snapshot": snapshot_path.exists(),
+                "has_snapshot": True,
             })
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
@@ -763,13 +779,15 @@ class LiveHandler(BaseHTTPRequestHandler):
     def _api_requirements_check_now(self):
         """Run the requirements monitor check and return results."""
         try:
-            from tools.monitor_requirements import fetch_page, load_snapshot, compare
+            from tools.monitor_requirements import fetch_page, load_snapshot, save_snapshot, compare
             import hashlib
             current = fetch_page()
             current_hash = hashlib.sha256(current.encode()).hexdigest()
             previous = load_snapshot()
             if not previous:
-                self._send_json({"status": "no_baseline", "message": "No baseline to compare against. Save a baseline first."})
+                # First run — save current as baseline
+                save_snapshot(current)
+                self._send_json({"status": "baseline_created", "message": "Baseline created. Next check will compare against this version.", "hash": current_hash[:16]})
                 return
             prev_hash = hashlib.sha256(previous.encode()).hexdigest()
             if current_hash == prev_hash:
@@ -2018,7 +2036,11 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       try {
         const r = await fetch('/api/requirements/check', {method: 'POST'});
         const data = await r.json();
-        if (data.status === 'no_changes') {
+        if (data.status === 'baseline_created') {
+          el.innerHTML = `<span style="color:#3b82f6;font-weight:600;">Baseline created.</span> Next check will compare against this version. Hash: ${data.hash}...`;
+          badge.style.display = 'inline-block';
+          badge.innerHTML = '<span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:3px;background:#eff6ff;color:#3b82f6;">BASELINE SET</span>';
+        } else if (data.status === 'no_changes') {
           el.innerHTML = `<span style="color:#10b981;font-weight:600;">No changes detected.</span> Hash: ${data.hash}...`;
           badge.style.display = 'inline-block';
           badge.innerHTML = '<span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:3px;background:var(--badge-pass-bg);color:var(--badge-pass-text);">UP TO DATE</span>';
