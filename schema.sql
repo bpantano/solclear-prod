@@ -27,8 +27,13 @@ CREATE TABLE users (
     id              SERIAL PRIMARY KEY,
     organization_id INTEGER REFERENCES organizations(id),  -- null for superadmins
     email           TEXT NOT NULL UNIQUE,
-    name            TEXT NOT NULL,
+    first_name      TEXT NOT NULL,
+    last_name       TEXT NOT NULL,
+    full_name       TEXT GENERATED ALWAYS AS (first_name || ' ' || last_name) STORED,
+    phone           TEXT,                          -- optional phone number
     role            TEXT NOT NULL DEFAULT 'crew',  -- 'superadmin', 'admin', 'reviewer', 'crew'
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE, -- deactivate instead of delete
+    deactivated_at  TIMESTAMPTZ,                   -- when the user was deactivated (null if active)
     password_hash   TEXT,                          -- null until auth is implemented
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()

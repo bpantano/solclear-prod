@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Solclear — Brand Sheet</title>
+<style>
+  :root { --ink:#0F172A; --accent:#F59E0B; --bg:#F7F7F5; --card:#fff; --muted:#64748B; --line:#E5E7EB; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family: Inter, -apple-system, Helvetica, Arial, sans-serif; }
+  header { padding: 44px 48px 8px; }
+  h1 { margin:0; font-size: 28px; font-weight:600; letter-spacing:-0.5px; }
+  p.sub { color:var(--muted); margin:6px 0 0; max-width:720px; line-height:1.5; }
+  section { padding: 0 48px; margin-top: 32px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:1.4px; color:var(--muted); font-weight:600; margin:0 0 12px; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:22px; display:flex; flex-direction:column; gap:14px; }
+  .card.dark { background:#0F172A; border-color:#0F172A; }
+  .frame { display:flex; align-items:center; justify-content:center; min-height:140px; }
+  .label { font-size:12px; color:var(--muted); }
+  .dark .label { color:#94A3B8; }
+  .row { display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  .swatch { width:56px; height:56px; border-radius:10px; border:1px solid rgba(0,0,0,0.06); }
+  .swatch-row { display:flex; gap:16px; flex-wrap:wrap; }
+  .swatch-meta { display:flex; flex-direction:column; gap:2px; font-size:12px; color:var(--muted); }
+  .swatch-meta b { color:var(--ink); font-weight:600; font-size:13px; }
+  .stack { display:flex; align-items:center; gap:16px; }
+  .appicon { width:96px; height:96px; border-radius:22px; box-shadow:0 6px 20px rgba(15,23,42,0.08); }
+  footer { padding: 40px 48px 60px; color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Solclear — brand sheet</h1>
+  <p class="sub">Minimalist wordmark paired with a dot-and-arc mark: a sun rising over a horizon. Single warm accent, neutral ink, designed to stay legible from a favicon to a hard-hat sticker.</p>
+</header>
+
+<section>
+  <h2>Primary wordmark</h2>
+  <div class="card">
+    <div class="frame"><object data="solclear-wordmark-primary.svg" type="image/svg+xml" width="520" height="120"></object></div>
+    <div class="label">Use on light backgrounds. Clear space = height of the "o".</div>
+  </div>
+</section>
+
+<section>
+  <h2>Variants</h2>
+  <div class="grid">
+    <div class="card dark">
+      <div class="frame"><object data="solclear-wordmark-dark.svg" type="image/svg+xml" width="380" height="95"></object></div>
+      <div class="label">Dark background</div>
+    </div>
+    <div class="card">
+      <div class="frame"><object data="solclear-wordmark-mono.svg" type="image/svg+xml" width="380" height="95"></object></div>
+      <div class="label">Monochrome (single-color print)</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Mark, favicon, app icon</h2>
+  <div class="grid">
+    <div class="card">
+      <div class="frame"><object data="solclear-mark.svg" type="image/svg+xml" width="120" height="120"></object></div>
+      <div class="label">Standalone mark</div>
+    </div>
+    <div class="card">
+      <div class="frame stack">
+        <object data="solclear-favicon.svg" type="image/svg+xml" width="64" height="64"></object>
+        <object data="solclear-favicon.svg" type="image/svg+xml" width="32" height="32"></object>
+        <object data="solclear-favicon.svg" type="image/svg+xml" width="16" height="16"></object>
+      </div>
+      <div class="label">Favicon @ 64 / 32 / 16 px</div>
+    </div>
+    <div class="card">
+      <div class="frame">
+        <object class="appicon" data="solclear-app-icon.svg" type="image/svg+xml"></object>
+      </div>
+      <div class="label">iOS-style app icon (512×512, rounded)</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Color</h2>
+  <div class="card">
+    <div class="swatch-row">
+      <div class="row">
+        <div class="swatch" style="background:#0F172A"></div>
+        <div class="swatch-meta"><b>Ink</b><span>#0F172A</span><span>Primary text &amp; mark</span></div>
+      </div>
+      <div class="row">
+        <div class="swatch" style="background:#F59E0B"></div>
+        <div class="swatch-meta"><b>Sun</b><span>#F59E0B</span><span>Accent only</span></div>
+      </div>
+      <div class="row">
+        <div class="swatch" style="background:#F7F7F5;border-color:#e5e7eb"></div>
+        <div class="swatch-meta"><b>Paper</b><span>#F7F7F5</span><span>Background</span></div>
+      </div>
+      <div class="row">
+        <div class="swatch" style="background:#64748B"></div>
+        <div class="swatch-meta"><b>Slate</b><span>#64748B</span><span>Secondary text</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Type</h2>
+  <div class="card">
+    <div style="font-size:44px;font-weight:600;letter-spacing:-1px;">Inter, 600, −2.5 tracking</div>
+    <div class="label">Wordmark is set in Inter Semibold with tight negative tracking. Body copy: Inter 400/500.</div>
+  </div>
+</section>
+
+<footer>
+  All assets are SVG — infinitely scalable. The accent color is the only hue in the system; everything else is a neutral.
+</footer>
+</body>
+</html>

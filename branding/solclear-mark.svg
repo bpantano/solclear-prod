@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <title>Solclear — Standalone Mark</title>
+  <circle cx="60" cy="54" r="14" fill="#F59E0B"/>
+  <path d="M24 92 A 36 36 0 0 1 96 92" fill="none" stroke="#0F172A" stroke-width="8" stroke-linecap="round"/>
+</svg>

@@ -12,6 +12,8 @@ Crew connects via phone: http://<your-ip>:8080
 """
 
 import argparse
+import csv
+import io
 import json
 import os
 import queue
@@ -33,6 +35,7 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 import requests as http_requests
 from tools.compliance_check import run_compliance_check, REQUIREMENTS
 from tools.companycam_get_project_photos import get_all_photos
+from tools.db import fetch_all, fetch_one, execute, execute_returning
 
 TMP_DIR = Path(__file__).parent.parent / ".tmp"
 API_BASE = "https://api.companycam.com/v2"
@@ -226,6 +229,17 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._api_checklists(pid)
         elif path == "/api/reports":
             self._api_reports()
+        elif path == "/api/organizations":
+            self._api_orgs_list()
+        elif path.startswith("/api/users/"):
+            uid = path.split("/")[3]
+            self._api_user_detail(uid)
+        elif path.startswith("/api/organizations/") and path.endswith("/users"):
+            oid = path.split("/")[3]
+            self._api_org_users(oid)
+        elif path.startswith("/api/organizations/"):
+            oid = path.split("/")[3]
+            self._api_org_detail(oid)
         elif path.startswith("/report/"):
             pid = path.split("/")[2]
             self._serve_report(pid)
@@ -233,6 +247,32 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._start_check(qs)
         elif path == "/stream":
             self._stream_sse()
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length) if content_length else b""
+
+        if path == "/api/organizations":
+            self._api_org_create(body)
+        elif path.startswith("/api/organizations/") and path.endswith("/users/csv"):
+            oid = path.split("/")[3]
+            self._api_org_users_csv(oid, body)
+        elif path.startswith("/api/organizations/") and path.endswith("/users"):
+            oid = path.split("/")[3]
+            self._api_org_user_create(oid, body)
+        elif path.startswith("/api/users/") and path.endswith("/toggle"):
+            uid = path.split("/")[3]
+            self._api_user_toggle(uid)
+        elif path.startswith("/api/users/"):
+            uid = path.split("/")[3]
+            self._api_user_update(uid, body)
+        elif path.startswith("/api/organizations/"):
+            oid = path.split("/")[3]
+            self._api_org_update(oid, body)
         else:
             self.send_error(404)
 
@@ -337,6 +377,249 @@ class LiveHandler(BaseHTTPRequestHandler):
                     self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+    # ── Organization API handlers ──────────────────────────────────────────────
+
+    def _api_orgs_list(self):
+        """List all organizations with user and report counts."""
+        try:
+            orgs = fetch_all("""
+                SELECT o.*,
+                    (SELECT COUNT(*) FROM users u WHERE u.organization_id = o.id) AS user_count,
+                    (SELECT COUNT(*) FROM reports r
+                        JOIN projects p ON p.id = r.project_id
+                        WHERE p.organization_id = o.id) AS report_count
+                FROM organizations o
+                ORDER BY o.created_at DESC
+            """)
+            for o in orgs:
+                o["created_at"] = o["created_at"].isoformat() if o.get("created_at") else None
+                o["updated_at"] = o["updated_at"].isoformat() if o.get("updated_at") else None
+            self._send_json(orgs)
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_org_detail(self, org_id):
+        """Get a single organization with its users."""
+        try:
+            org = fetch_one("SELECT * FROM organizations WHERE id = %s", (org_id,))
+            if not org:
+                self._send_json({"error": "Organization not found"}, 404)
+                return
+            org["created_at"] = org["created_at"].isoformat() if org.get("created_at") else None
+            org["updated_at"] = org["updated_at"].isoformat() if org.get("updated_at") else None
+            # Mask API keys — show last 4 chars only
+            for key_field in ("companycam_api_key", "anthropic_api_key"):
+                val = org.get(key_field)
+                if val:
+                    org[key_field + "_masked"] = "••••" + val[-4:]
+                else:
+                    org[key_field + "_masked"] = None
+            users = fetch_all("""
+                SELECT id, email, first_name, last_name, full_name, phone, role, is_active, created_at
+                FROM users WHERE organization_id = %s ORDER BY is_active DESC, created_at
+            """, (org_id,))
+            for u in users:
+                u["created_at"] = u["created_at"].isoformat() if u.get("created_at") else None
+            org["users"] = users
+            self._send_json(org)
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_org_users(self, org_id):
+        """List users for an organization."""
+        try:
+            users = fetch_all("""
+                SELECT id, email, first_name, last_name, full_name, phone, role, is_active, created_at
+                FROM users WHERE organization_id = %s ORDER BY is_active DESC, created_at
+            """, (org_id,))
+            for u in users:
+                u["created_at"] = u["created_at"].isoformat() if u.get("created_at") else None
+            self._send_json(users)
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_org_create(self, body):
+        """Create a new organization."""
+        try:
+            data = json.loads(body)
+            name = data.get("name", "").strip()
+            if not name:
+                self._send_json({"error": "Name is required"}, 400)
+                return
+            status = data.get("status", "onboarding")
+            org = execute_returning(
+                "INSERT INTO organizations (name, status) VALUES (%s, %s) RETURNING *",
+                (name, status)
+            )
+            org["created_at"] = org["created_at"].isoformat() if org.get("created_at") else None
+            org["updated_at"] = org["updated_at"].isoformat() if org.get("updated_at") else None
+            self._send_json(org, 201)
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_org_update(self, org_id, body):
+        """Update an organization's name, status, API keys, or settings."""
+        try:
+            data = json.loads(body)
+            fields = []
+            values = []
+            for field in ("name", "status", "companycam_api_key", "anthropic_api_key"):
+                if field in data:
+                    fields.append(f"{field} = %s")
+                    values.append(data[field])
+            if "settings" in data:
+                fields.append("settings = %s")
+                values.append(json.dumps(data["settings"]))
+            if not fields:
+                self._send_json({"error": "No fields to update"}, 400)
+                return
+            fields.append("updated_at = NOW()")
+            values.append(org_id)
+            org = execute_returning(
+                f"UPDATE organizations SET {', '.join(fields)} WHERE id = %s RETURNING *",
+                tuple(values)
+            )
+            if not org:
+                self._send_json({"error": "Organization not found"}, 404)
+                return
+            org["created_at"] = org["created_at"].isoformat() if org.get("created_at") else None
+            org["updated_at"] = org["updated_at"].isoformat() if org.get("updated_at") else None
+            self._send_json(org)
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_org_user_create(self, org_id, body):
+        """Add a single user to an organization."""
+        try:
+            data = json.loads(body)
+            email = data.get("email", "").strip()
+            first_name = data.get("first_name", "").strip()
+            last_name = data.get("last_name", "").strip()
+            phone = (data.get("phone") or "").strip() or None
+            role = data.get("role", "crew")
+            if not email or not first_name or not last_name:
+                self._send_json({"error": "Email, first name, and last name are required"}, 400)
+                return
+            user = execute_returning(
+                "INSERT INTO users (organization_id, email, first_name, last_name, phone, role) VALUES (%s, %s, %s, %s, %s, %s) RETURNING *",
+                (org_id, email, first_name, last_name, phone, role)
+            )
+            user["created_at"] = user["created_at"].isoformat() if user.get("created_at") else None
+            user["updated_at"] = user["updated_at"].isoformat() if user.get("updated_at") else None
+            self._send_json(user, 201)
+        except Exception as e:
+            if "unique" in str(e).lower():
+                self._send_json({"error": f"User with email {email} already exists"}, 409)
+            else:
+                self._send_json({"error": str(e)}, 500)
+
+    def _api_user_toggle(self, user_id):
+        """Toggle a user's is_active status and set/clear deactivated_at."""
+        try:
+            user = execute_returning(
+                """UPDATE users SET
+                    is_active = NOT is_active,
+                    deactivated_at = CASE WHEN is_active THEN NOW() ELSE NULL END,
+                    updated_at = NOW()
+                WHERE id = %s RETURNING id, is_active, deactivated_at""",
+                (user_id,)
+            )
+            if not user:
+                self._send_json({"error": "User not found"}, 404)
+                return
+            self._send_json(user)
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_user_detail(self, user_id):
+        """Get a single user."""
+        try:
+            user = fetch_one(
+                "SELECT id, email, first_name, last_name, full_name, phone, role, is_active, deactivated_at, created_at, updated_at FROM users WHERE id = %s",
+                (user_id,)
+            )
+            if not user:
+                self._send_json({"error": "User not found"}, 404)
+                return
+            for ts in ("created_at", "updated_at", "deactivated_at"):
+                if user.get(ts):
+                    user[ts] = user[ts].isoformat()
+            self._send_json(user)
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_user_update(self, user_id, body):
+        """Update a user's first_name, last_name, email, phone, or role."""
+        try:
+            data = json.loads(body)
+            fields = []
+            values = []
+            for field in ("first_name", "last_name", "email", "phone", "role"):
+                if field in data:
+                    fields.append(f"{field} = %s")
+                    values.append(data[field] if data[field] else None)
+            if not fields:
+                self._send_json({"error": "No fields to update"}, 400)
+                return
+            fields.append("updated_at = NOW()")
+            values.append(user_id)
+            user = execute_returning(
+                f"UPDATE users SET {', '.join(fields)} WHERE id = %s RETURNING id, email, first_name, last_name, full_name, phone, role, is_active",
+                tuple(values)
+            )
+            if not user:
+                self._send_json({"error": "User not found"}, 404)
+                return
+            self._send_json(user)
+        except Exception as e:
+            if "unique" in str(e).lower():
+                self._send_json({"error": "Email already in use"}, 409)
+            else:
+                self._send_json({"error": str(e)}, 500)
+
+    def _api_org_users_csv(self, org_id, body):
+        """Bulk create users from CSV. Format: email,first_name,last_name,role,phone (header optional)."""
+        try:
+            text = body.decode("utf-8")
+            reader = csv.reader(io.StringIO(text))
+            created = []
+            errors = []
+            for i, row in enumerate(reader):
+                if len(row) < 3:
+                    if len(row) >= 1 and row[0].strip().lower() == "email":
+                        continue
+                    errors.append(f"Row {i+1}: need at least email, first_name, last_name")
+                    continue
+                email = row[0].strip()
+                first_name = row[1].strip()
+                last_name = row[2].strip()
+                role = row[3].strip() if len(row) > 3 else "crew"
+                phone = row[4].strip() if len(row) > 4 else None
+                # Skip header row
+                if email.lower() == "email":
+                    continue
+                if not email or not first_name or not last_name:
+                    errors.append(f"Row {i+1}: missing email, first_name, or last_name")
+                    continue
+                if role not in ("admin", "reviewer", "crew"):
+                    role = "crew"
+                try:
+                    user = execute_returning(
+                        "INSERT INTO users (organization_id, email, first_name, last_name, phone, role) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id, email, first_name, last_name, role",
+                        (org_id, email, first_name, last_name, phone, role)
+                    )
+                    created.append(user)
+                except Exception as e:
+                    if "unique" in str(e).lower():
+                        errors.append(f"Row {i+1}: {email} already exists")
+                    else:
+                        errors.append(f"Row {i+1}: {str(e)}")
+            self._send_json({"created": created, "errors": errors, "total": len(created)})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    # ── Report handlers ──────────────────────────────────────────────────────
 
     def _api_reports(self):
         """Return a list of previously generated compliance reports."""
@@ -653,6 +936,9 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     </div>
     <button class="nav-item" onclick="closeNav();showStep('home')">Recent Reports</button>
     <button class="nav-item" onclick="closeNav();showStep(1)">New Compliance Check</button>
+    <div style="border-top:1px solid #1f2937;margin:16px 0 8px;"></div>
+    <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:#4b5563;padding:0 12px 8px;font-weight:600;">Admin</div>
+    <button class="nav-item" onclick="closeNav();showStep('orgs')">Organizations</button>
   </div>
 
   <div class="top-bar">
@@ -737,6 +1023,143 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- Organizations list -->
+  <div id="adminOrgs" class="step">
+    <button class="back-btn" onclick="showStep('home')">&larr; Back to home</button>
+    <div class="step-label">Organizations</div>
+    <button class="run-btn" onclick="showCreateOrg()" style="margin-bottom:16px;background:#3b82f6;">+ Create Organization</button>
+    <div id="orgsList"></div>
+  </div>
+
+  <!-- Create org form -->
+  <div id="adminOrgCreate" class="step">
+    <button class="back-btn" onclick="showStep('orgs')">&larr; Back to organizations</button>
+    <div class="step-label">Create Organization</div>
+    <div class="param-group">
+      <label>Organization Name</label>
+      <input class="search-input" id="newOrgName" type="text" placeholder="e.g. Independent Solar" autocomplete="off">
+    </div>
+    <div class="param-group">
+      <label>Initial Status</label>
+      <div class="toggle-row">
+        <button class="toggle-btn selected" data-param="org-status" data-value="onboarding" onclick="selectToggle(this)">Onboarding</button>
+        <button class="toggle-btn" data-param="org-status" data-value="demo" onclick="selectToggle(this)">Demo</button>
+        <button class="toggle-btn" data-param="org-status" data-value="active" onclick="selectToggle(this)">Active</button>
+      </div>
+    </div>
+    <button class="run-btn" onclick="createOrg()">Create Organization</button>
+  </div>
+
+  <!-- Org detail -->
+  <div id="adminOrgDetail" class="step">
+    <button class="back-btn" onclick="showStep('orgs')">&larr; Back to organizations</button>
+    <div class="step-label" id="orgDetailLabel">Organization</div>
+
+    <!-- Org info -->
+    <div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;">
+      <div class="param-group">
+        <label>Name</label>
+        <input class="search-input" id="orgEditName" type="text" style="font-size:14px;">
+      </div>
+      <div class="param-group">
+        <label>Status</label>
+        <div class="toggle-row" id="orgStatusToggles">
+          <button class="toggle-btn" data-param="org-edit-status" data-value="onboarding" onclick="selectToggle(this)">Onboarding</button>
+          <button class="toggle-btn" data-param="org-edit-status" data-value="demo" onclick="selectToggle(this)">Demo</button>
+          <button class="toggle-btn" data-param="org-edit-status" data-value="active" onclick="selectToggle(this)">Active</button>
+          <button class="toggle-btn" data-param="org-edit-status" data-value="inactive" onclick="selectToggle(this)">Inactive</button>
+        </div>
+      </div>
+      <div class="param-group">
+        <label>CompanyCam API Key</label>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input class="search-input" id="orgCcKey" type="password" style="font-size:13px;font-family:monospace;flex:1;" placeholder="Not set">
+          <button onclick="toggleKeyVis('orgCcKey')" style="background:#f3f4f6;border:none;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:12px;min-height:44px;">Show</button>
+        </div>
+      </div>
+      <div class="param-group">
+        <label>Anthropic API Key</label>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input class="search-input" id="orgAnthKey" type="password" style="font-size:13px;font-family:monospace;flex:1;" placeholder="Not set">
+          <button onclick="toggleKeyVis('orgAnthKey')" style="background:#f3f4f6;border:none;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:12px;min-height:44px;">Show</button>
+        </div>
+      </div>
+      <button class="run-btn" onclick="saveOrg()" style="background:#10b981;">Save Changes</button>
+    </div>
+
+    <!-- Users -->
+    <div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <label style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#6b7280;font-weight:600;margin:0;">Users</label>
+        <span id="orgUserCount" style="font-size:11px;color:#9ca3af;"></span>
+      </div>
+      <div id="orgUsersList"></div>
+
+      <!-- Add user form -->
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid #f3f4f6;">
+        <div style="font-size:11px;color:#6b7280;font-weight:600;margin-bottom:8px;">ADD USER</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <input class="search-input" id="addUserFirst" type="text" placeholder="First Name" style="flex:1;min-width:100px;font-size:13px;">
+          <input class="search-input" id="addUserLast" type="text" placeholder="Last Name" style="flex:1;min-width:100px;font-size:13px;">
+          <input class="search-input" id="addUserEmail" type="email" placeholder="Email" style="flex:1;min-width:160px;font-size:13px;">
+          <input class="search-input" id="addUserPhone" type="tel" placeholder="Phone (optional)" style="flex:1;min-width:120px;font-size:13px;">
+          <select id="addUserRole" style="padding:8px;border:2px solid #e5e7eb;border-radius:8px;font-size:13px;min-height:44px;">
+            <option value="crew">Crew</option>
+            <option value="reviewer">Reviewer</option>
+            <option value="admin">Admin</option>
+          </select>
+          <button onclick="addUser()" style="background:#3b82f6;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;min-height:44px;">Add</button>
+        </div>
+      </div>
+
+      <!-- CSV upload -->
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid #f3f4f6;">
+        <div style="font-size:11px;color:#6b7280;font-weight:600;margin-bottom:8px;">BULK IMPORT (CSV)</div>
+        <div style="font-size:11px;color:#9ca3af;margin-bottom:8px;">Format: email, first_name, last_name, role, phone (one per line)</div>
+        <input type="file" id="csvUpload" accept=".csv" onchange="uploadCsv()" style="font-size:12px;">
+        <div id="csvResult" style="margin-top:8px;font-size:12px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- User detail/edit -->
+  <div id="adminUserDetail" class="step">
+    <button class="back-btn" id="userDetailBack">&larr; Back to organization</button>
+    <div class="step-label" id="userDetailLabel">Edit User</div>
+
+    <div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;">
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <div class="param-group" style="flex:1;min-width:140px;">
+          <label>First Name</label>
+          <input class="search-input" id="editUserFirst" type="text" style="font-size:14px;">
+        </div>
+        <div class="param-group" style="flex:1;min-width:140px;">
+          <label>Last Name</label>
+          <input class="search-input" id="editUserLast" type="text" style="font-size:14px;">
+        </div>
+      </div>
+      <div class="param-group">
+        <label>Email</label>
+        <input class="search-input" id="editUserEmail" type="email" style="font-size:14px;">
+      </div>
+      <div class="param-group">
+        <label>Phone</label>
+        <input class="search-input" id="editUserPhone" type="tel" style="font-size:14px;" placeholder="Optional">
+      </div>
+      <div class="param-group">
+        <label>Role</label>
+        <div class="toggle-row" id="editUserRoleToggles">
+          <button class="toggle-btn" data-param="edit-user-role" data-value="crew" onclick="selectToggle(this)">Crew</button>
+          <button class="toggle-btn" data-param="edit-user-role" data-value="reviewer" onclick="selectToggle(this)">Reviewer</button>
+          <button class="toggle-btn" data-param="edit-user-role" data-value="admin" onclick="selectToggle(this)">Admin</button>
+        </div>
+      </div>
+      <button class="run-btn" onclick="saveUser()" style="background:#10b981;">Save Changes</button>
+    </div>
+
+    <div id="userStatusInfo" style="background:#fff;border-radius:8px;padding:16px;font-size:12px;color:#6b7280;"></div>
+  </div>
+
   <script>
     let selectedProjectId = null;
     let selectedProjectName = '';
@@ -745,6 +1168,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     let selectedChecklistName = '';
     let selectedManufacturer = null;
     let searchTimer = null;
+    let currentOrgId = null;
+    let currentUserId = null;
 
     // ── Nav drawer ──
     function openNav() {
@@ -765,7 +1190,261 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         loadRecentReports();
         return;
       }
+      if (n === 'orgs') {
+        document.getElementById('adminOrgs').classList.add('active');
+        loadOrgs();
+        return;
+      }
+      if (n === 'orgCreate') {
+        document.getElementById('adminOrgCreate').classList.add('active');
+        return;
+      }
+      if (n === 'orgDetail') {
+        document.getElementById('adminOrgDetail').classList.add('active');
+        return;
+      }
+      if (n === 'userDetail') {
+        document.getElementById('adminUserDetail').classList.add('active');
+        return;
+      }
       document.getElementById('step' + n).classList.add('active');
+    }
+
+    // ── Generic toggle helper ──
+    function selectToggle(btn) {
+      btn.parentElement.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+    }
+
+    function toggleKeyVis(inputId) {
+      const inp = document.getElementById(inputId);
+      const btn = inp.nextElementSibling;
+      if (inp.type === 'password') { inp.type = 'text'; btn.textContent = 'Hide'; }
+      else { inp.type = 'password'; btn.textContent = 'Show'; }
+    }
+
+    function statusBadgeHtml(status) {
+      const colors = {active:'#10b981',demo:'#3b82f6',inactive:'#9ca3af',onboarding:'#f59e0b'};
+      const bg = {active:'#ecfdf5',demo:'#eff6ff',inactive:'#f3f4f6',onboarding:'#fffbeb'};
+      return '<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;background:'+
+        (bg[status]||'#f3f4f6')+';color:'+(colors[status]||'#6b7280')+';">'+status.toUpperCase()+'</span>';
+    }
+
+    function roleBadgeHtml(role) {
+      const colors = {superadmin:'#7c3aed',admin:'#2563eb',reviewer:'#0891b2',crew:'#059669'};
+      const bg = {superadmin:'#f5f3ff',admin:'#eff6ff',reviewer:'#ecfeff',crew:'#ecfdf5'};
+      return '<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;background:'+
+        (bg[role]||'#f3f4f6')+';color:'+(colors[role]||'#6b7280')+';">'+role+'</span>';
+    }
+
+    // ── Organizations ──
+    async function loadOrgs() {
+      const list = document.getElementById('orgsList');
+      list.innerHTML = '<div style="color:#9ca3af;padding:12px;font-size:13px;">Loading...</div>';
+      try {
+        const r = await fetch('/api/organizations');
+        const orgs = await r.json();
+        if (!orgs.length) {
+          list.innerHTML = '<div style="color:#9ca3af;padding:12px;font-size:13px;">No organizations yet.</div>';
+          return;
+        }
+        list.innerHTML = orgs.map(o => `
+          <div class="list-item" onclick="openOrg(${o.id})" style="border-left:3px solid ${
+            {active:'#10b981',demo:'#3b82f6',inactive:'#9ca3af',onboarding:'#f59e0b'}[o.status] || '#e5e7eb'
+          };">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span class="name">${esc(o.name)}</span>
+              ${statusBadgeHtml(o.status)}
+            </div>
+            <div class="detail">${o.user_count} user${o.user_count!==1?'s':''} · ${o.report_count} report${o.report_count!==1?'s':''}</div>
+          </div>
+        `).join('');
+      } catch (e) { list.innerHTML = '<div style="color:#ef4444;padding:12px;">Error loading organizations</div>'; }
+    }
+
+    function showCreateOrg() {
+      document.getElementById('newOrgName').value = '';
+      showStep('orgCreate');
+    }
+
+    async function createOrg() {
+      const name = document.getElementById('newOrgName').value.trim();
+      if (!name) { alert('Name is required'); return; }
+      const statusBtn = document.querySelector('[data-param="org-status"].selected');
+      const status = statusBtn ? statusBtn.dataset.value : 'onboarding';
+      try {
+        const r = await fetch('/api/organizations', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({name, status})
+        });
+        const org = await r.json();
+        if (org.error) { alert(org.error); return; }
+        openOrg(org.id);
+      } catch (e) { alert('Error: ' + e.message); }
+    }
+
+    async function openOrg(orgId) {
+      currentOrgId = orgId;
+      showStep('orgDetail');
+      const detail = document.getElementById('adminOrgDetail');
+      try {
+        const r = await fetch('/api/organizations/' + orgId);
+        const org = await r.json();
+        document.getElementById('orgDetailLabel').textContent = org.name;
+        document.getElementById('orgEditName').value = org.name || '';
+        document.getElementById('orgCcKey').value = org.companycam_api_key || '';
+        document.getElementById('orgAnthKey').value = org.anthropic_api_key || '';
+        // Set status toggle
+        document.querySelectorAll('[data-param="org-edit-status"]').forEach(b => {
+          b.classList.toggle('selected', b.dataset.value === org.status);
+        });
+        // Render users
+        renderOrgUsers(org.users || []);
+      } catch (e) { alert('Error loading org: ' + e.message); }
+    }
+
+    function renderOrgUsers(users) {
+      document.getElementById('orgUserCount').textContent = users.length + ' user' + (users.length !== 1 ? 's' : '');
+      const list = document.getElementById('orgUsersList');
+      if (!users.length) { list.innerHTML = '<div style="color:#9ca3af;font-size:12px;">No users yet.</div>'; return; }
+      list.innerHTML = users.map(u => `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f3f4f6;${u.is_active ? '' : 'opacity:0.5;'}">
+          <div style="flex:1;cursor:pointer;" onclick="openUser(${u.id})">
+            <div style="font-weight:500;font-size:13px;color:#3b82f6;">${esc(u.full_name || (u.first_name + ' ' + u.last_name))}${u.is_active ? '' : ' <span style="font-size:10px;color:#ef4444;font-weight:700;">INACTIVE</span>'}</div>
+            <div style="font-size:11px;color:#9ca3af;">${esc(u.email)}${u.phone ? ' · ' + esc(u.phone) : ''}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            ${roleBadgeHtml(u.role)}
+            <button onclick="toggleUser(${u.id})" style="background:none;border:1px solid ${u.is_active ? '#ef4444' : '#10b981'};color:${u.is_active ? '#ef4444' : '#10b981'};border-radius:6px;padding:4px 10px;font-size:10px;font-weight:600;cursor:pointer;min-height:28px;">
+              ${u.is_active ? 'Deactivate' : 'Activate'}
+            </button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function saveOrg() {
+      const statusBtn = document.querySelector('[data-param="org-edit-status"].selected');
+      const data = {
+        name: document.getElementById('orgEditName').value.trim(),
+        status: statusBtn ? statusBtn.dataset.value : 'onboarding',
+        companycam_api_key: document.getElementById('orgCcKey').value.trim() || null,
+        anthropic_api_key: document.getElementById('orgAnthKey').value.trim() || null,
+      };
+      try {
+        const r = await fetch('/api/organizations/' + currentOrgId, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(data)
+        });
+        const org = await r.json();
+        if (org.error) { alert(org.error); return; }
+        document.getElementById('orgDetailLabel').textContent = org.name;
+        alert('Saved!');
+      } catch (e) { alert('Error: ' + e.message); }
+    }
+
+    async function addUser() {
+      const first_name = document.getElementById('addUserFirst').value.trim();
+      const last_name = document.getElementById('addUserLast').value.trim();
+      const email = document.getElementById('addUserEmail').value.trim();
+      const phone = document.getElementById('addUserPhone').value.trim() || null;
+      const role = document.getElementById('addUserRole').value;
+      if (!email || !first_name || !last_name) { alert('First name, last name, and email required'); return; }
+      try {
+        const r = await fetch('/api/organizations/' + currentOrgId + '/users', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({email, first_name, last_name, phone, role})
+        });
+        const result = await r.json();
+        if (result.error) { alert(result.error); return; }
+        document.getElementById('addUserFirst').value = '';
+        document.getElementById('addUserLast').value = '';
+        document.getElementById('addUserEmail').value = '';
+        document.getElementById('addUserPhone').value = '';
+        openOrg(currentOrgId);  // refresh
+      } catch (e) { alert('Error: ' + e.message); }
+    }
+
+    async function openUser(userId) {
+      currentUserId = userId;
+      // Set back button to return to the current org
+      document.getElementById('userDetailBack').onclick = () => openOrg(currentOrgId);
+      showStep('userDetail');
+      try {
+        const r = await fetch('/api/users/' + userId);
+        const u = await r.json();
+        document.getElementById('userDetailLabel').textContent = u.full_name || (u.first_name + ' ' + u.last_name);
+        document.getElementById('editUserFirst').value = u.first_name || '';
+        document.getElementById('editUserLast').value = u.last_name || '';
+        document.getElementById('editUserEmail').value = u.email || '';
+        document.getElementById('editUserPhone').value = u.phone || '';
+        document.querySelectorAll('[data-param="edit-user-role"]').forEach(b => {
+          b.classList.toggle('selected', b.dataset.value === u.role);
+        });
+        // Status info
+        const info = document.getElementById('userStatusInfo');
+        let statusHtml = '<strong>Status:</strong> ' + (u.is_active ? '<span style="color:#10b981;">Active</span>' : '<span style="color:#ef4444;">Inactive</span>');
+        if (u.deactivated_at) statusHtml += ' · Deactivated: ' + new Date(u.deactivated_at).toLocaleDateString();
+        if (u.created_at) statusHtml += ' · Created: ' + new Date(u.created_at).toLocaleDateString();
+        info.innerHTML = statusHtml;
+      } catch (e) { alert('Error loading user: ' + e.message); }
+    }
+
+    async function saveUser() {
+      const roleBtn = document.querySelector('[data-param="edit-user-role"].selected');
+      const data = {
+        first_name: document.getElementById('editUserFirst').value.trim(),
+        last_name: document.getElementById('editUserLast').value.trim(),
+        email: document.getElementById('editUserEmail').value.trim(),
+        phone: document.getElementById('editUserPhone').value.trim() || null,
+        role: roleBtn ? roleBtn.dataset.value : 'crew',
+      };
+      if (!data.first_name || !data.last_name || !data.email) { alert('First name, last name, and email are required'); return; }
+      try {
+        const r = await fetch('/api/users/' + currentUserId, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(data)
+        });
+        const result = await r.json();
+        if (result.error) { alert(result.error); return; }
+        document.getElementById('userDetailLabel').textContent = result.full_name || (result.first_name + ' ' + result.last_name);
+        alert('User updated!');
+      } catch (e) { alert('Error: ' + e.message); }
+    }
+
+    async function toggleUser(userId) {
+      try {
+        const r = await fetch('/api/users/' + userId + '/toggle', {method: 'POST'});
+        const result = await r.json();
+        if (result.error) { alert(result.error); return; }
+        openOrg(currentOrgId);  // refresh
+      } catch (e) { alert('Error: ' + e.message); }
+    }
+
+    async function uploadCsv() {
+      const file = document.getElementById('csvUpload').files[0];
+      if (!file) return;
+      const text = await file.text();
+      try {
+        const r = await fetch('/api/organizations/' + currentOrgId + '/users/csv', {
+          method: 'POST',
+          headers: {'Content-Type': 'text/csv'},
+          body: text
+        });
+        const result = await r.json();
+        const div = document.getElementById('csvResult');
+        let html = '<span style="color:#10b981;font-weight:600;">' + result.total + ' users created</span>';
+        if (result.errors && result.errors.length) {
+          html += '<br><span style="color:#ef4444;">' + result.errors.join('<br>') + '</span>';
+        }
+        div.innerHTML = html;
+        document.getElementById('csvUpload').value = '';
+        openOrg(currentOrgId);  // refresh
+      } catch (e) { alert('Error: ' + e.message); }
     }
 
     // ── Recent reports ──

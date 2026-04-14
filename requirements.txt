@@ -1,3 +1,4 @@
 python-dotenv
 requests
 anthropic
+psycopg2-binary
