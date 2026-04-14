@@ -7,10 +7,19 @@
 CREATE TABLE organizations (
     id              SERIAL PRIMARY KEY,
     name            TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'onboarding',  -- 'active', 'demo', 'inactive', 'onboarding'
     companycam_api_key TEXT,          -- encrypted in production
+    anthropic_api_key TEXT,           -- per-org API key (encrypted in production)
+    settings        JSONB DEFAULT '{}',  -- org-level toggles and config
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Status definitions:
+--   onboarding — new org, being set up (default)
+--   demo       — trial period, limited features or usage caps
+--   active     — paying client, full access
+--   inactive   — churned or paused, data retained but access disabled
 
 -- ── Users ────────────────────────────────────────────────────────────────────
 
