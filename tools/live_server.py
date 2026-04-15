@@ -36,6 +36,11 @@ import requests as http_requests
 from tools.compliance_check import run_compliance_check, REQUIREMENTS
 from tools.companycam_get_project_photos import get_all_photos
 from tools.db import fetch_all, fetch_one, execute, execute_returning
+from tools.auth import (
+    hash_password, check_password, create_session_token,
+    get_session_from_request, set_session_cookie_header,
+    clear_session_cookie_header,
+)
 
 TMP_DIR = Path(__file__).parent.parent / ".tmp"
 API_BASE = "https://api.companycam.com/v2"
@@ -207,6 +212,7 @@ def run_check_thread(project_id, params, rerun_ids=None):
 # ── HTTP Handler ─────────────────────────────────────────────────────────────
 
 class LiveHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
         pass  # silence request logs
@@ -220,10 +226,53 @@ class LiveHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _get_session(self):
+        """Get current session or None."""
+        return get_session_from_request(self.headers)
+
+    def _require_auth(self):
+        """Check session. Returns session dict or sends redirect/401 and returns None."""
+        session = self._get_session()
+        if session:
+            return session
+        # For API requests, return 401
+        if self.path.startswith("/api/"):
+            self._send_json({"error": "Not authenticated"}, 401)
+        else:
+            # Redirect to login page
+            self.send_response(302)
+            self.send_header("Location", "/login")
+            self.end_headers()
+        return None
+
+    def _serve_login_page(self):
+        body = LOGIN_HTML.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
         qs = parse_qs(parsed.query)
+
+        # Public routes (no auth required)
+        if path == "/login":
+            self._serve_login_page()
+            return
+        if path == "/logout":
+            self.send_response(302)
+            self.send_header("Location", "/login")
+            self.send_header("Set-Cookie", clear_session_cookie_header())
+            self.end_headers()
+            return
+
+        # All other routes require auth
+        session = self._require_auth()
+        if not session:
+            return
 
         if path == "/":
             self._serve_html()
@@ -270,6 +319,16 @@ class LiveHandler(BaseHTTPRequestHandler):
         path = parsed.path
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length) if content_length else b""
+
+        # Login is public
+        if path == "/api/login":
+            self._api_login(body)
+            return
+
+        # All other POSTs require auth
+        session = self._require_auth()
+        if not session:
+            return
 
         if path == "/api/organizations":
             self._api_org_create(body)
@@ -430,6 +489,50 @@ class LiveHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    # ── Auth handlers ─────────────────────────────────────────────────────────
+
+    def _api_login(self, body):
+        """Authenticate with email + password. Returns session cookie."""
+        try:
+            data = json.loads(body)
+            email = (data.get("email") or "").strip().lower()
+            password = data.get("password") or ""
+            if not email or not password:
+                self._send_json({"error": "Email and password required"}, 400)
+                return
+            user = fetch_one(
+                "SELECT id, email, first_name, last_name, full_name, role, organization_id, password_hash, is_active FROM users WHERE LOWER(email) = %s",
+                (email,)
+            )
+            if not user or not user.get("password_hash"):
+                self._send_json({"error": "Invalid email or password"}, 401)
+                return
+            if not user.get("is_active"):
+                self._send_json({"error": "Account is deactivated"}, 403)
+                return
+            if not check_password(password, user["password_hash"]):
+                self._send_json({"error": "Invalid email or password"}, 401)
+                return
+            token = create_session_token(user["id"], user["role"], user.get("organization_id"))
+            # Send response with session cookie
+            resp_body = json.dumps({
+                "ok": True,
+                "user": {
+                    "id": user["id"],
+                    "email": user["email"],
+                    "name": user.get("full_name") or f"{user['first_name']} {user['last_name']}",
+                    "role": user["role"],
+                }
+            }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp_body)))
+            self.send_header("Set-Cookie", set_session_cookie_header(token))
+            self.end_headers()
+            self.wfile.write(resp_body)
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
     # ── Organization API handlers ──────────────────────────────────────────────
 
     def _api_orgs_list(self):
@@ -550,12 +653,14 @@ class LiveHandler(BaseHTTPRequestHandler):
             last_name = data.get("last_name", "").strip()
             phone = (data.get("phone") or "").strip() or None
             role = data.get("role", "crew")
+            password = (data.get("password") or "").strip()
             if not email or not first_name or not last_name:
                 self._send_json({"error": "Email, first name, and last name are required"}, 400)
                 return
+            pw_hash = hash_password(password) if password else None
             user = execute_returning(
-                "INSERT INTO users (organization_id, email, first_name, last_name, phone, role) VALUES (%s, %s, %s, %s, %s, %s) RETURNING *",
-                (org_id, email, first_name, last_name, phone, role)
+                "INSERT INTO users (organization_id, email, first_name, last_name, phone, role, password_hash) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *",
+                (org_id, email, first_name, last_name, phone, role, pw_hash)
             )
             user["created_at"] = user["created_at"].isoformat() if user.get("created_at") else None
             user["updated_at"] = user["updated_at"].isoformat() if user.get("updated_at") else None
@@ -780,18 +885,33 @@ class LiveHandler(BaseHTTPRequestHandler):
         """Run the requirements monitor check and return results."""
         try:
             from tools.monitor_requirements import fetch_page, load_snapshot, save_snapshot, compare
+            import re as re_mod
             import hashlib
             current = fetch_page()
             current_hash = hashlib.sha256(current.encode()).hexdigest()
+
+            # Coverage check: find requirement IDs on Palmetto page vs what we have
+            page_ids = set(re_mod.findall(r'\b(PS\d+|R\d+|E\d+|S\d+|SC\d+|SI\d+|AMS\d+)\b', current))
+            our_ids = set(r["id"] for r in REQUIREMENTS)
+            missing_from_us = sorted(page_ids - our_ids)
+            extra_in_us = sorted(our_ids - page_ids)
+
             previous = load_snapshot()
             if not previous:
                 # First run — save current as baseline
                 save_snapshot(current)
-                self._send_json({"status": "baseline_created", "message": "Baseline created. Next check will compare against this version.", "hash": current_hash[:16]})
+                result = {"status": "baseline_created", "message": "Baseline created. Next check will compare against this version.", "hash": current_hash[:16]}
+                if missing_from_us:
+                    result["missing_ids"] = missing_from_us
+                    result["message"] += f" Found {len(missing_from_us)} requirement(s) on Palmetto's page not in our system."
+                self._send_json(result)
                 return
             prev_hash = hashlib.sha256(previous.encode()).hexdigest()
             if current_hash == prev_hash:
-                self._send_json({"status": "no_changes", "hash": current_hash[:16]})
+                result = {"status": "no_changes", "hash": current_hash[:16]}
+                if missing_from_us:
+                    result["missing_ids"] = missing_from_us
+                self._send_json(result)
             else:
                 diff = compare(previous, current)
                 diff_text = '\n'.join(diff[:100])
@@ -846,6 +966,7 @@ class LiveHandler(BaseHTTPRequestHandler):
                     "new_ids": analysis.get("new_ids", []),
                     "changed_ids": analysis.get("changed_ids", []),
                     "removed_ids": analysis.get("removed_ids", []),
+                    "missing_ids": missing_from_us,
                     "diff_preview": diff_text,
                     "hash": current_hash[:16],
                 })
@@ -1018,6 +1139,107 @@ function rerunFailed() {{
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
+
+# ── Login HTML ────────────────────────────────────────────────────────────────
+
+LOGIN_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Solclear — Sign In</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a; color: #e2e8f0; font-size: 14px; line-height: 1.5;
+      min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 20px;
+    }
+    .login-card {
+      width: 100%; max-width: 380px; background: #1e293b; border-radius: 16px;
+      padding: 32px 28px; text-align: center;
+    }
+    .login-logo { margin-bottom: 24px; }
+    .login-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+    .login-sub { font-size: 12px; color: #64748b; margin-bottom: 24px; }
+    .login-input {
+      width: 100%; padding: 14px 16px; border: 2px solid #334155; border-radius: 10px;
+      background: #0f172a; color: #e2e8f0; font-size: 15px; outline: none;
+      margin-bottom: 12px; -webkit-appearance: none;
+    }
+    .login-input:focus { border-color: #3b82f6; }
+    .login-input::placeholder { color: #475569; }
+    .login-btn {
+      width: 100%; padding: 14px; border: none; border-radius: 10px;
+      background: #3b82f6; color: #fff; font-size: 15px; font-weight: 600;
+      cursor: pointer; min-height: 50px; margin-top: 8px;
+    }
+    .login-btn:disabled { background: #475569; cursor: not-allowed; }
+    .login-error {
+      background: #7f1d1d; color: #fca5a5; border-radius: 8px; padding: 10px 14px;
+      font-size: 13px; margin-bottom: 12px; display: none;
+    }
+    .login-footer { margin-top: 24px; font-size: 11px; color: #334155; }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <div class="login-logo">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" height="44">
+        <g transform="translate(24,36)"><circle cx="44" cy="40" r="12" fill="#F59E0B"/><path d="M16 76 A 28 28 0 0 1 72 76" fill="none" stroke="#e2e8f0" stroke-width="7" stroke-linecap="round"/></g>
+        <text x="116" y="104" font-family="Inter,Helvetica,Arial,sans-serif" font-weight="600" font-size="80" fill="#e2e8f0" letter-spacing="-2.5">solclear</text>
+      </svg>
+    </div>
+    <div class="login-title">Welcome back</div>
+    <div class="login-sub">Sign in to your account</div>
+
+    <div class="login-error" id="loginError"></div>
+
+    <form onsubmit="doLogin(event)">
+      <input class="login-input" id="loginEmail" type="email" placeholder="Email" autocomplete="email" required>
+      <input class="login-input" id="loginPassword" type="password" placeholder="Password" autocomplete="current-password" required>
+      <button class="login-btn" type="submit" id="loginBtn">Sign In</button>
+    </form>
+  </div>
+  <div class="login-footer">&copy; 2026 Solclear. All rights reserved.</div>
+
+  <script>
+    async function doLogin(e) {
+      e.preventDefault();
+      const btn = document.getElementById('loginBtn');
+      const err = document.getElementById('loginError');
+      btn.disabled = true;
+      btn.textContent = 'Signing in...';
+      err.style.display = 'none';
+
+      try {
+        const r = await fetch('/api/login', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            email: document.getElementById('loginEmail').value.trim(),
+            password: document.getElementById('loginPassword').value,
+          })
+        });
+        const data = await r.json();
+        if (data.ok) {
+          window.location.href = '/';
+        } else {
+          err.textContent = data.error || 'Login failed';
+          err.style.display = 'block';
+        }
+      } catch (ex) {
+        err.textContent = 'Connection error';
+        err.style.display = 'block';
+      }
+      btn.disabled = false;
+      btn.textContent = 'Sign In';
+    }
+  </script>
+</body>
+</html>"""
 
 # ── Embedded HTML ─────────────────────────────────────────────────────────────
 
@@ -1284,6 +1506,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:#4b5563;padding:0 12px 8px;font-weight:600;">Admin</div>
     <button class="nav-item" onclick="closeNav();showStep('orgs')">Organizations</button>
     <button class="nav-item" onclick="closeNav();showStep('reqs')">Requirements</button>
+    <div style="border-top:1px solid #1f2937;margin:16px 0 8px;"></div>
+    <a class="nav-item" href="/logout" style="color:#ef4444;text-decoration:none;">Sign Out</a>
   </div>
 
   <div class="top-bar">
@@ -1504,6 +1728,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           <input class="search-input" id="addUserLast" type="text" placeholder="Last Name" style="flex:1;min-width:100px;font-size:13px;">
           <input class="search-input" id="addUserEmail" type="email" placeholder="Email" style="flex:1;min-width:160px;font-size:13px;">
           <input class="search-input" id="addUserPhone" type="tel" placeholder="Phone (optional)" style="flex:1;min-width:120px;font-size:13px;">
+          <input class="search-input" id="addUserPassword" type="text" placeholder="Initial password" style="flex:1;min-width:120px;font-size:13px;">
           <select id="addUserRole" style="padding:8px;border:2px solid var(--border);border-radius:8px;font-size:13px;min-height:44px;">
             <option value="crew">Crew</option>
             <option value="reviewer">Reviewer</option>
@@ -1859,13 +2084,14 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       const last_name = document.getElementById('addUserLast').value.trim();
       const email = document.getElementById('addUserEmail').value.trim();
       const phone = document.getElementById('addUserPhone').value.trim() || null;
+      const password = document.getElementById('addUserPassword').value.trim();
       const role = document.getElementById('addUserRole').value;
       if (!email || !first_name || !last_name) { alert('First name, last name, and email required'); return; }
       try {
         const r = await fetch('/api/organizations/' + currentOrgId + '/users', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({email, first_name, last_name, phone, role})
+          body: JSON.stringify({email, first_name, last_name, phone, password, role})
         });
         const result = await r.json();
         if (result.error) { alert(result.error); return; }
@@ -1873,6 +2099,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         document.getElementById('addUserLast').value = '';
         document.getElementById('addUserEmail').value = '';
         document.getElementById('addUserPhone').value = '';
+        document.getElementById('addUserPassword').value = '';
         openOrg(currentOrgId);  // refresh
       } catch (e) { alert('Error: ' + e.message); }
     }
@@ -2036,14 +2263,32 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       try {
         const r = await fetch('/api/requirements/check', {method: 'POST'});
         const data = await r.json();
+        // Coverage gap alert (applies to all statuses)
+        if (data.missing_ids && data.missing_ids.length) {
+          const alert = document.getElementById('changeAlert');
+          alert.style.display = 'block';
+          alert.style.background = '#fffbeb';
+          alert.style.borderColor = '#f59e0b';
+          document.getElementById('changeSummary').innerHTML =
+            '<div style="color:#92400e;"><strong>Coverage gap:</strong> ' + data.missing_ids.length + ' requirement(s) found on Palmetto\\'s page that are not configured in our system:</div>' +
+            '<div style="margin-top:6px;">' + data.missing_ids.map(id =>
+              '<span style="display:inline-block;font-size:11px;font-weight:700;padding:3px 8px;border-radius:4px;background:#fef2f2;color:#991b1b;margin:2px 4px 2px 0;">' + esc(id) + '</span>'
+            ).join('') + '</div>' +
+            '<div style="margin-top:8px;font-size:12px;color:#92400e;">Click "Check Now" again after the page has changed to auto-create stubs, or add these manually in the requirements editor.</div>';
+          document.getElementById('changeDiff').style.display = 'none';
+        }
+
         if (data.status === 'baseline_created') {
-          el.innerHTML = `<span style="color:#3b82f6;font-weight:600;">Baseline created.</span> Next check will compare against this version. Hash: ${data.hash}...`;
+          el.innerHTML = `<span style="color:#3b82f6;font-weight:600;">Baseline created.</span> ${data.message} Hash: ${data.hash}...`;
           badge.style.display = 'inline-block';
           badge.innerHTML = '<span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:3px;background:#eff6ff;color:#3b82f6;">BASELINE SET</span>';
         } else if (data.status === 'no_changes') {
-          el.innerHTML = `<span style="color:#10b981;font-weight:600;">No changes detected.</span> Hash: ${data.hash}...`;
+          const hasMissing = data.missing_ids && data.missing_ids.length;
+          el.innerHTML = `<span style="color:${hasMissing ? '#f59e0b' : '#10b981'};font-weight:600;">${hasMissing ? 'Page unchanged, but coverage gaps found.' : 'No changes detected.'}</span> Hash: ${data.hash}...`;
           badge.style.display = 'inline-block';
-          badge.innerHTML = '<span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:3px;background:var(--badge-pass-bg);color:var(--badge-pass-text);">UP TO DATE</span>';
+          badge.innerHTML = hasMissing
+            ? '<span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:3px;background:#fffbeb;color:#92400e;">GAPS FOUND</span>'
+            : '<span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:3px;background:var(--badge-pass-bg);color:var(--badge-pass-text);">UP TO DATE</span>';
         } else if (data.status === 'changes_detected') {
           el.innerHTML = `<span style="color:#ef4444;font-weight:600;">Changes detected</span> · ${data.added} added, ${data.removed} removed`;
           badge.style.display = 'inline-block';
