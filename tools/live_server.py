@@ -39,7 +39,8 @@ from tools.db import fetch_all, fetch_one, execute, execute_returning
 from tools.auth import (
     hash_password, check_password, create_session_token,
     get_session_from_request, set_session_cookie_header,
-    clear_session_cookie_header,
+    clear_session_cookie_header, create_reset_token,
+    validate_reset_token, send_reset_email,
 )
 
 TMP_DIR = Path(__file__).parent.parent / ".tmp"
@@ -263,6 +264,12 @@ class LiveHandler(BaseHTTPRequestHandler):
         if path == "/login":
             self._serve_login_page()
             return
+        if path == "/forgot-password":
+            self._serve_forgot_password_page()
+            return
+        if path == "/reset-password":
+            self._serve_reset_password_page(qs)
+            return
         if path == "/logout":
             self.send_response(302)
             self.send_header("Location", "/login")
@@ -277,6 +284,8 @@ class LiveHandler(BaseHTTPRequestHandler):
 
         if path == "/":
             self._serve_html()
+        elif path == "/change-password":
+            self._serve_change_password_page()
         elif path == "/api/projects":
             self._api_projects(qs)
         elif path.startswith("/api/projects/") and path.endswith("/thumbnail"):
@@ -321,9 +330,15 @@ class LiveHandler(BaseHTTPRequestHandler):
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length) if content_length else b""
 
-        # Login is public
+        # Public POST routes
         if path == "/api/login":
             self._api_login(body)
+            return
+        if path == "/api/forgot-password":
+            self._api_forgot_password(body)
+            return
+        if path == "/api/reset-password":
+            self._api_reset_password(body)
             return
 
         # All other POSTs require auth
@@ -331,7 +346,9 @@ class LiveHandler(BaseHTTPRequestHandler):
         if not session:
             return
 
-        if path == "/api/organizations":
+        if path == "/api/change-password":
+            self._api_change_password(body, session)
+        elif path == "/api/organizations":
             self._api_org_create(body)
         elif path.startswith("/api/organizations/") and path.endswith("/users/csv"):
             oid = path.split("/")[3]
@@ -534,6 +551,100 @@ class LiveHandler(BaseHTTPRequestHandler):
             self.wfile.write(resp_body)
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
+
+    def _api_forgot_password(self, body):
+        """Send a password reset email."""
+        try:
+            data = json.loads(body)
+            email = (data.get("email") or "").strip().lower()
+            if not email:
+                self._send_json({"error": "Email is required"}, 400)
+                return
+            # Always return success to prevent email enumeration
+            user = fetch_one("SELECT id, email, is_active FROM users WHERE LOWER(email) = %s", (email,))
+            if user and user.get("is_active"):
+                token = create_reset_token(user["id"], user["email"])
+                # Build reset URL — use Host header to get the right domain
+                host = self.headers.get("Host", "localhost:8080")
+                scheme = "https" if "railway" in host or "." in host else "http"
+                reset_url = f"{scheme}://{host}/reset-password?token={token}"
+                send_reset_email(user["email"], reset_url)
+            self._send_json({"ok": True, "message": "If an account exists with that email, a reset link has been sent."})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_reset_password(self, body):
+        """Reset password using a valid reset token."""
+        try:
+            data = json.loads(body)
+            token = (data.get("token") or "").strip()
+            new_password = (data.get("password") or "").strip()
+            if not token or not new_password:
+                self._send_json({"error": "Token and new password are required"}, 400)
+                return
+            if len(new_password) < 8:
+                self._send_json({"error": "Password must be at least 8 characters"}, 400)
+                return
+            payload = validate_reset_token(token)
+            if not payload:
+                self._send_json({"error": "Invalid or expired reset link. Please request a new one."}, 400)
+                return
+            pw_hash = hash_password(new_password)
+            execute("UPDATE users SET password_hash = %s, updated_at = NOW() WHERE id = %s", (pw_hash, payload["user_id"]))
+            self._send_json({"ok": True, "message": "Password updated. You can now sign in."})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_change_password(self, body, session):
+        """Change password for the logged-in user (requires current password)."""
+        try:
+            data = json.loads(body)
+            current_password = (data.get("current_password") or "").strip()
+            new_password = (data.get("new_password") or "").strip()
+            if not current_password or not new_password:
+                self._send_json({"error": "Current and new password are required"}, 400)
+                return
+            if len(new_password) < 8:
+                self._send_json({"error": "New password must be at least 8 characters"}, 400)
+                return
+            user = fetch_one("SELECT id, password_hash FROM users WHERE id = %s", (session["user_id"],))
+            if not user or not check_password(current_password, user["password_hash"]):
+                self._send_json({"error": "Current password is incorrect"}, 401)
+                return
+            pw_hash = hash_password(new_password)
+            execute("UPDATE users SET password_hash = %s, updated_at = NOW() WHERE id = %s", (pw_hash, session["user_id"]))
+            self._send_json({"ok": True, "message": "Password changed successfully."})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_forgot_password_page(self):
+        body = FORGOT_PASSWORD_HTML.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_reset_password_page(self, qs):
+        token = qs.get("token", [""])[0]
+        html = RESET_PASSWORD_HTML.replace("{{TOKEN}}", token)
+        body = html.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_change_password_page(self):
+        body = CHANGE_PASSWORD_HTML.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
 
     # ── Organization API handlers ──────────────────────────────────────────────
 
@@ -1163,7 +1274,7 @@ LOGIN_HTML = """<!DOCTYPE html>
       width: 100%; max-width: 380px; background: #1e293b; border-radius: 16px;
       padding: 32px 28px; text-align: center;
     }
-    .login-logo { margin-bottom: 24px; }
+    .login-logo { margin-bottom: 6px; text-align: center; }
     .login-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
     .login-sub { font-size: 12px; color: #64748b; margin-bottom: 24px; }
     .login-input {
@@ -1189,10 +1300,13 @@ LOGIN_HTML = """<!DOCTYPE html>
 <body>
   <div class="login-card">
     <div class="login-logo">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" height="44">
-        <g transform="translate(24,36)"><circle cx="44" cy="40" r="12" fill="#F59E0B"/><path d="M16 76 A 28 28 0 0 1 72 76" fill="none" stroke="#e2e8f0" stroke-width="7" stroke-linecap="round"/></g>
-        <text x="116" y="104" font-family="Inter,Helvetica,Arial,sans-serif" font-weight="600" font-size="80" fill="#e2e8f0" letter-spacing="-2.5">solclear</text>
-      </svg>
+      <div style="position:relative;display:inline-block;">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="36" height="36" style="position:absolute;left:-44px;top:50%;transform:translateY(-50%);">
+          <circle cx="60" cy="54" r="14" fill="#F59E0B"/>
+          <path d="M24 92 A 36 36 0 0 1 96 92" fill="none" stroke="#e2e8f0" stroke-width="8" stroke-linecap="round"/>
+        </svg>
+        <span style="font-size:36px;font-weight:600;letter-spacing:-1.5px;color:#e2e8f0;">solclear</span>
+      </div>
     </div>
     <div class="login-title">Welcome back</div>
     <div class="login-sub">Sign in to your account</div>
@@ -1204,6 +1318,7 @@ LOGIN_HTML = """<!DOCTYPE html>
       <input class="login-input" id="loginPassword" type="password" placeholder="Password" autocomplete="current-password" required>
       <button class="login-btn" type="submit" id="loginBtn">Sign In</button>
     </form>
+    <div style="margin-top:16px;"><a href="/forgot-password" style="color:#3b82f6;text-decoration:none;font-size:13px;">Forgot password?</a></div>
   </div>
   <div class="login-footer">&copy; 2026 Solclear. All rights reserved.</div>
 
@@ -1240,6 +1355,222 @@ LOGIN_HTML = """<!DOCTYPE html>
       btn.disabled = false;
       btn.textContent = 'Sign In';
     }
+  </script>
+</body>
+</html>"""
+
+# ── Auth page shared styles ───────────────────────────────────────────────────
+
+_AUTH_PAGE_STYLE = """
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a; color: #e2e8f0; font-size: 14px; line-height: 1.5;
+      min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 20px;
+    }
+    .card { width: 100%; max-width: 380px; background: #1e293b; border-radius: 16px; padding: 32px 28px; text-align: center; }
+    .logo { margin-bottom: 24px; text-align: center; }
+    .title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+    .sub { font-size: 12px; color: #64748b; margin-bottom: 24px; }
+    .input {
+      width: 100%; padding: 14px 16px; border: 2px solid #334155; border-radius: 10px;
+      background: #0f172a; color: #e2e8f0; font-size: 15px; outline: none;
+      margin-bottom: 12px; -webkit-appearance: none;
+    }
+    .input:focus { border-color: #3b82f6; }
+    .input::placeholder { color: #475569; }
+    .btn {
+      width: 100%; padding: 14px; border: none; border-radius: 10px;
+      background: #3b82f6; color: #fff; font-size: 15px; font-weight: 600;
+      cursor: pointer; min-height: 50px; margin-top: 8px;
+    }
+    .btn:disabled { background: #475569; cursor: not-allowed; }
+    .error { background: #7f1d1d; color: #fca5a5; border-radius: 8px; padding: 10px 14px; font-size: 13px; margin-bottom: 12px; display: none; }
+    .success { background: #064e3b; color: #6ee7b7; border-radius: 8px; padding: 10px 14px; font-size: 13px; margin-bottom: 12px; display: none; }
+    .link { color: #3b82f6; text-decoration: none; font-size: 13px; }
+    .link:hover { text-decoration: underline; }
+    .footer { margin-top: 24px; font-size: 11px; color: #334155; }
+"""
+
+_AUTH_PAGE_LOGO = """
+      <div style="display:inline-flex;align-items:center;gap:10px;">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="36" height="36" style="flex-shrink:0;">
+          <circle cx="60" cy="54" r="14" fill="#F59E0B"/>
+          <path d="M24 92 A 36 36 0 0 1 96 92" fill="none" stroke="#e2e8f0" stroke-width="8" stroke-linecap="round"/>
+        </svg>
+        <span style="font-size:28px;font-weight:600;letter-spacing:-1px;color:#e2e8f0;">solclear</span>
+      </div>
+"""
+
+# ── Forgot Password HTML ─────────────────────────────────────────────────────
+
+FORGOT_PASSWORD_HTML = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Solclear — Forgot Password</title>
+  <style>{_AUTH_PAGE_STYLE}</style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">{_AUTH_PAGE_LOGO}</div>
+    <div class="title">Forgot your password?</div>
+    <div class="sub">Enter your email and we'll send you a reset link.</div>
+    <div class="error" id="errMsg"></div>
+    <div class="success" id="okMsg"></div>
+    <form onsubmit="doForgot(event)" id="forgotForm">
+      <input class="input" id="forgotEmail" type="email" placeholder="Email" autocomplete="email" required>
+      <button class="btn" type="submit" id="forgotBtn">Send Reset Link</button>
+    </form>
+    <div style="margin-top:16px;"><a class="link" href="/login">&larr; Back to sign in</a></div>
+  </div>
+  <div class="footer">&copy; 2026 Solclear. All rights reserved.</div>
+  <script>
+    async function doForgot(e) {{
+      e.preventDefault();
+      const btn = document.getElementById('forgotBtn');
+      const err = document.getElementById('errMsg');
+      const ok = document.getElementById('okMsg');
+      btn.disabled = true; btn.textContent = 'Sending...';
+      err.style.display = 'none'; ok.style.display = 'none';
+      try {{
+        const r = await fetch('/api/forgot-password', {{
+          method: 'POST', credentials: 'same-origin',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{ email: document.getElementById('forgotEmail').value.trim() }})
+        }});
+        const data = await r.json();
+        if (data.ok) {{
+          ok.textContent = data.message;
+          ok.style.display = 'block';
+          document.getElementById('forgotForm').style.display = 'none';
+        }} else {{
+          err.textContent = data.error || 'Something went wrong';
+          err.style.display = 'block';
+        }}
+      }} catch (ex) {{ err.textContent = 'Connection error'; err.style.display = 'block'; }}
+      btn.disabled = false; btn.textContent = 'Send Reset Link';
+    }}
+  </script>
+</body>
+</html>"""
+
+# ── Reset Password HTML ──────────────────────────────────────────────────────
+
+RESET_PASSWORD_HTML = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Solclear — Reset Password</title>
+  <style>{_AUTH_PAGE_STYLE}</style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">{_AUTH_PAGE_LOGO}</div>
+    <div class="title">Set a new password</div>
+    <div class="sub">Must be at least 8 characters.</div>
+    <div class="error" id="errMsg"></div>
+    <div class="success" id="okMsg"></div>
+    <form onsubmit="doReset(event)" id="resetForm">
+      <input class="input" id="newPass" type="password" placeholder="New password" autocomplete="new-password" required minlength="8">
+      <input class="input" id="confirmPass" type="password" placeholder="Confirm password" autocomplete="new-password" required minlength="8">
+      <button class="btn" type="submit" id="resetBtn">Reset Password</button>
+    </form>
+    <div id="successLinks" style="display:none;margin-top:16px;"><a class="link" href="/login">Sign in with your new password &rarr;</a></div>
+  </div>
+  <div class="footer">&copy; 2026 Solclear. All rights reserved.</div>
+  <script>
+    async function doReset(e) {{
+      e.preventDefault();
+      const btn = document.getElementById('resetBtn');
+      const err = document.getElementById('errMsg');
+      const ok = document.getElementById('okMsg');
+      const pw = document.getElementById('newPass').value;
+      const confirm = document.getElementById('confirmPass').value;
+      if (pw !== confirm) {{ err.textContent = 'Passwords do not match'; err.style.display = 'block'; return; }}
+      btn.disabled = true; btn.textContent = 'Resetting...';
+      err.style.display = 'none'; ok.style.display = 'none';
+      try {{
+        const r = await fetch('/api/reset-password', {{
+          method: 'POST', credentials: 'same-origin',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{ token: '{{{{TOKEN}}}}', password: pw }})
+        }});
+        const data = await r.json();
+        if (data.ok) {{
+          ok.textContent = data.message;
+          ok.style.display = 'block';
+          document.getElementById('resetForm').style.display = 'none';
+          document.getElementById('successLinks').style.display = 'block';
+        }} else {{
+          err.textContent = data.error || 'Something went wrong';
+          err.style.display = 'block';
+        }}
+      }} catch (ex) {{ err.textContent = 'Connection error'; err.style.display = 'block'; }}
+      btn.disabled = false; btn.textContent = 'Reset Password';
+    }}
+  </script>
+</body>
+</html>"""
+
+# ── Change Password HTML ─────────────────────────────────────────────────────
+
+CHANGE_PASSWORD_HTML = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Solclear — Change Password</title>
+  <style>{_AUTH_PAGE_STYLE}</style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">{_AUTH_PAGE_LOGO}</div>
+    <div class="title">Change your password</div>
+    <div class="sub">Enter your current password and choose a new one.</div>
+    <div class="error" id="errMsg"></div>
+    <div class="success" id="okMsg"></div>
+    <form onsubmit="doChange(event)" id="changeForm">
+      <input class="input" id="currentPass" type="password" placeholder="Current password" autocomplete="current-password" required>
+      <input class="input" id="newPass" type="password" placeholder="New password" autocomplete="new-password" required minlength="8">
+      <input class="input" id="confirmPass" type="password" placeholder="Confirm new password" autocomplete="new-password" required minlength="8">
+      <button class="btn" type="submit" id="changeBtn">Change Password</button>
+    </form>
+    <div style="margin-top:16px;"><a class="link" href="/">&larr; Back to home</a></div>
+  </div>
+  <div class="footer">&copy; 2026 Solclear. All rights reserved.</div>
+  <script>
+    async function doChange(e) {{
+      e.preventDefault();
+      const btn = document.getElementById('changeBtn');
+      const err = document.getElementById('errMsg');
+      const ok = document.getElementById('okMsg');
+      const newPw = document.getElementById('newPass').value;
+      const confirm = document.getElementById('confirmPass').value;
+      if (newPw !== confirm) {{ err.textContent = 'Passwords do not match'; err.style.display = 'block'; return; }}
+      btn.disabled = true; btn.textContent = 'Updating...';
+      err.style.display = 'none'; ok.style.display = 'none';
+      try {{
+        const r = await fetch('/api/change-password', {{
+          method: 'POST', credentials: 'same-origin',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{ current_password: document.getElementById('currentPass').value, new_password: newPw }})
+        }});
+        const data = await r.json();
+        if (data.ok) {{
+          ok.textContent = data.message;
+          ok.style.display = 'block';
+          document.getElementById('changeForm').reset();
+        }} else {{
+          err.textContent = data.error || 'Something went wrong';
+          err.style.display = 'block';
+        }}
+      }} catch (ex) {{ err.textContent = 'Connection error'; err.style.display = 'block'; }}
+      btn.disabled = false; btn.textContent = 'Change Password';
+    }}
   </script>
 </body>
 </html>"""
@@ -1510,6 +1841,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <button class="nav-item" onclick="closeNav();showStep('orgs')">Organizations</button>
     <button class="nav-item" onclick="closeNav();showStep('reqs')">Requirements</button>
     <div style="border-top:1px solid #1f2937;margin:16px 0 8px;"></div>
+    <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:#4b5563;padding:0 12px 8px;font-weight:600;">Account</div>
+    <a class="nav-item" href="/change-password" style="text-decoration:none;">Change Password</a>
     <a class="nav-item" href="/logout" style="color:#ef4444;text-decoration:none;">Sign Out</a>
   </div>
 
