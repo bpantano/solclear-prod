@@ -26,7 +26,7 @@ CREATE TABLE organizations (
 CREATE TABLE users (
     id              SERIAL PRIMARY KEY,
     organization_id INTEGER REFERENCES organizations(id),  -- null for superadmins
-    email           TEXT NOT NULL UNIQUE,
+    email           TEXT NOT NULL,
     first_name      TEXT NOT NULL,
     last_name       TEXT NOT NULL,
     full_name       TEXT GENERATED ALWAYS AS (first_name || ' ' || last_name) STORED,
@@ -45,6 +45,7 @@ CREATE TABLE users (
 --   reviewer    — can review and approve/reject compliance reports.
 --   crew        — field crew. Can run checks on assigned projects.
 
+CREATE UNIQUE INDEX idx_users_email_lower ON users(LOWER(email));
 CREATE INDEX idx_users_org ON users(organization_id);
 
 -- ── Impersonation Log ────────────────────────────────────────────────────────
@@ -146,6 +147,7 @@ CREATE TABLE reports (
 );
 
 CREATE INDEX idx_reports_project ON reports(project_id);
+CREATE INDEX idx_reports_run_by ON reports(run_by);
 CREATE INDEX idx_reports_status ON reports(status);
 
 -- ── Requirement Results ──────────────────────────────────────────────────────
@@ -163,6 +165,7 @@ CREATE TABLE requirement_results (
 );
 
 CREATE INDEX idx_results_report ON requirement_results(report_id);
+CREATE INDEX idx_results_requirement ON requirement_results(requirement_id);
 CREATE INDEX idx_results_status ON requirement_results(status);
 
 -- ── Run Pricing ──────────────────────────────────────────────────────────────

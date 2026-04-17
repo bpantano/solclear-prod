@@ -613,21 +613,36 @@ def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
 
     pool = candidates[:MAX_CANDIDATE_PHOTOS]
 
-    # Download and encode all candidate images, track URLs by index
-    image_blocks = []
-    photo_urls = {}  # {1: "https://...", 2: "https://...", ...}
-    for i, photo in enumerate(pool):
+    # Download all candidate images in parallel, track URLs by index
+    import concurrent.futures
+    urls_to_download = []
+    for photo in pool:
         url = get_photo_web_url(photo)
-        if not url:
-            continue
-        result = _download_image(url)
-        if not result:
-            continue
-        data, media_type = result
-        idx = len(photo_urls) + 1
-        photo_urls[idx] = url
-        image_blocks.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
-        image_blocks.append({"type": "text", "text": f"[Photo {idx}]"})
+        if url:
+            urls_to_download.append(url)
+
+    downloaded = {}  # {url: (data, media_type)}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(urls_to_download))) as executor:
+        future_to_url = {executor.submit(_download_image, url): url for url in urls_to_download}
+        for future in concurrent.futures.as_completed(future_to_url):
+            url = future_to_url[future]
+            try:
+                result = future.result()
+                if result:
+                    downloaded[url] = result
+            except Exception:
+                pass
+
+    # Build image blocks in original order
+    image_blocks = []
+    photo_urls = {}
+    for url in urls_to_download:
+        if url in downloaded:
+            data, media_type = downloaded[url]
+            idx = len(photo_urls) + 1
+            photo_urls[idx] = url
+            image_blocks.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
+            image_blocks.append({"type": "text", "text": f"[Photo {idx}]"})
 
     if not image_blocks:
         return {"result": "ERROR", "reason": "Could not download any candidate photos", "photo_urls": {}}

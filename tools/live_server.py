@@ -53,6 +53,28 @@ _check_lock = threading.Lock()
 _check_running = False
 _result_queue = queue.Queue()
 
+# Rate limiting for password reset (in-memory)
+_reset_attempts = {}  # {email: (count, window_start_timestamp)}
+RESET_RATE_LIMIT = 3  # max attempts per window
+RESET_RATE_WINDOW = 900  # 15 minutes
+
+
+def _check_rate_limit(email: str) -> bool:
+    """Returns True if allowed, False if rate limited."""
+    now = time.time()
+    key = email.lower()
+    if key in _reset_attempts:
+        count, window_start = _reset_attempts[key]
+        if now - window_start > RESET_RATE_WINDOW:
+            _reset_attempts[key] = (1, now)
+            return True
+        if count >= RESET_RATE_LIMIT:
+            return False
+        _reset_attempts[key] = (count + 1, window_start)
+        return True
+    _reset_attempts[key] = (1, now)
+    return True
+
 # Track recently detected requirement changes (persists until server restart)
 _recently_new = {}       # {"PS7": {"section": "...", "title": "..."}, ...}
 _recently_changed = set() # {"PS1", "R3"}
@@ -617,6 +639,10 @@ class LiveHandler(BaseHTTPRequestHandler):
             if not email:
                 self._send_json({"error": "Email is required"}, 400)
                 return
+            # Rate limit: max 3 attempts per 15 minutes per email
+            if not _check_rate_limit(email):
+                self._send_json({"ok": True, "message": "If an account exists with that email, a reset link has been sent."})
+                return  # Silently reject — don't reveal rate limiting to prevent enumeration
             # Always return success to prevent email enumeration
             user = fetch_one("SELECT id, email, is_active FROM users WHERE LOWER(email) = %s", (email,))
             if user and user.get("is_active"):
@@ -733,13 +759,10 @@ class LiveHandler(BaseHTTPRequestHandler):
                 return
             org["created_at"] = org["created_at"].isoformat() if org.get("created_at") else None
             org["updated_at"] = org["updated_at"].isoformat() if org.get("updated_at") else None
-            # Mask API keys — show last 4 chars only
+            # Never return API key values — only indicate if they're set
             for key_field in ("companycam_api_key", "anthropic_api_key"):
-                val = org.get(key_field)
-                if val:
-                    org[key_field + "_masked"] = "••••" + val[-4:]
-                else:
-                    org[key_field + "_masked"] = None
+                org[key_field + "_set"] = bool(org.get(key_field))
+                org.pop(key_field, None)
             users = fetch_all("""
                 SELECT id, email, first_name, last_name, full_name, phone, role, is_active, created_at
                 FROM users WHERE organization_id = %s ORDER BY is_active DESC, created_at
@@ -920,7 +943,7 @@ class LiveHandler(BaseHTTPRequestHandler):
         try:
             text = body.decode("utf-8")
             reader = csv.reader(io.StringIO(text))
-            created = []
+            valid_rows = []
             errors = []
             for i, row in enumerate(reader):
                 if len(row) < 3:
@@ -933,7 +956,6 @@ class LiveHandler(BaseHTTPRequestHandler):
                 last_name = row[2].strip()
                 role = row[3].strip() if len(row) > 3 else "crew"
                 phone = row[4].strip() if len(row) > 4 else None
-                # Skip header row
                 if email.lower() == "email":
                     continue
                 if not email or not first_name or not last_name:
@@ -941,17 +963,34 @@ class LiveHandler(BaseHTTPRequestHandler):
                     continue
                 if role not in ("admin", "reviewer", "crew"):
                     role = "crew"
+                valid_rows.append((org_id, email, first_name, last_name, phone, role))
+
+            # Batch insert all valid rows in one query
+            created = []
+            if valid_rows:
+                conn = get_conn()
                 try:
-                    user = execute_returning(
-                        "INSERT INTO users (organization_id, email, first_name, last_name, phone, role) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id, email, first_name, last_name, role",
-                        (org_id, email, first_name, last_name, phone, role)
+                    import psycopg2.extras as pg_extras
+                    cur = conn.cursor(cursor_factory=pg_extras.RealDictCursor)
+                    pg_extras.execute_values(
+                        cur,
+                        "INSERT INTO users (organization_id, email, first_name, last_name, phone, role) VALUES %s RETURNING id, email, first_name, last_name, role",
+                        valid_rows,
+                        template="(%s, %s, %s, %s, %s, %s)"
                     )
-                    created.append(user)
+                    created = [dict(row) for row in cur.fetchall()]
+                    conn.commit()
                 except Exception as e:
-                    if "unique" in str(e).lower():
-                        errors.append(f"Row {i+1}: {email} already exists")
+                    conn.rollback()
+                    err_str = str(e).lower()
+                    if "unique" in err_str:
+                        errors.append("One or more emails already exist. No users were created from this batch.")
                     else:
-                        errors.append(f"Row {i+1}: {str(e)}")
+                        errors.append(f"Batch insert failed: {e}")
+                finally:
+                    from tools.db import _return_conn
+                    _return_conn(conn)
+
             self._send_json({"created": created, "errors": errors, "total": len(created)})
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
@@ -2432,8 +2471,10 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         const org = await r.json();
         document.getElementById('orgDetailLabel').textContent = org.name;
         document.getElementById('orgEditName').value = org.name || '';
-        document.getElementById('orgCcKey').value = org.companycam_api_key || '';
-        document.getElementById('orgAnthKey').value = org.anthropic_api_key || '';
+        document.getElementById('orgCcKey').value = '';
+        document.getElementById('orgCcKey').placeholder = org.companycam_api_key_set ? 'Key is set (enter new value to change)' : 'Not set';
+        document.getElementById('orgAnthKey').value = '';
+        document.getElementById('orgAnthKey').placeholder = org.anthropic_api_key_set ? 'Key is set (enter new value to change)' : 'Not set';
         // Set status toggle
         document.querySelectorAll('[data-param="org-edit-status"]').forEach(b => {
           b.classList.toggle('selected', b.dataset.value === org.status);
@@ -2468,9 +2509,12 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       const data = {
         name: document.getElementById('orgEditName').value.trim(),
         status: statusBtn ? statusBtn.dataset.value : 'onboarding',
-        companycam_api_key: document.getElementById('orgCcKey').value.trim() || null,
-        anthropic_api_key: document.getElementById('orgAnthKey').value.trim() || null,
       };
+      // Only send API keys if user entered a new value (don't clear existing keys)
+      const ccKey = document.getElementById('orgCcKey').value.trim();
+      const anthKey = document.getElementById('orgAnthKey').value.trim();
+      if (ccKey) data.companycam_api_key = ccKey;
+      if (anthKey) data.anthropic_api_key = anthKey;
       try {
         const r = await fetch('/api/organizations/' + currentOrgId, {
           method: 'POST',
