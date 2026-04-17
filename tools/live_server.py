@@ -1089,8 +1089,10 @@ class LiveHandler(BaseHTTPRequestHandler):
                 for rid in analysis.get("removed_ids", []):
                     _recently_removed.add(rid)
 
+                is_material = analysis.get("material", True)
                 self._send_json({
                     "status": "changes_detected",
+                    "material": is_material,
                     "added": added,
                     "removed": removed,
                     "summary": analysis.get("summary", ""),
@@ -2644,12 +2646,19 @@ EMBEDDED_HTML = """<!DOCTYPE html>
             ? '<span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:3px;background:#fffbeb;color:#92400e;">GAPS FOUND</span>'
             : '<span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:3px;background:var(--badge-pass-bg);color:var(--badge-pass-text);">UP TO DATE</span>';
         } else if (data.status === 'changes_detected') {
-          el.innerHTML = `<span style="color:#ef4444;font-weight:600;">Changes detected</span> · ${data.added} added, ${data.removed} removed`;
-          badge.style.display = 'inline-block';
-          badge.innerHTML = '<span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:3px;background:var(--badge-fail-bg);color:var(--badge-fail-text);">CHANGED</span>';
-          // Show alert banner
+          const isMaterial = data.material !== false;
+          if (isMaterial) {
+            el.innerHTML = `<span style="color:#ef4444;font-weight:600;">Material changes detected</span> · ${data.added} added, ${data.removed} removed`;
+            badge.style.display = 'inline-block';
+            badge.innerHTML = '<span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:3px;background:var(--badge-fail-bg);color:var(--badge-fail-text);">CHANGED</span>';
+          } else {
+            el.innerHTML = `<span style="color:#10b981;font-weight:600;">No material changes.</span> Minor metadata updates only.`;
+            badge.style.display = 'inline-block';
+            badge.innerHTML = '<span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:3px;background:var(--badge-pass-bg);color:var(--badge-pass-text);">UP TO DATE</span>';
+          }
+          // Only show alert banner for material changes
           const alert = document.getElementById('changeAlert');
-          alert.style.display = 'block';
+          if (!isMaterial) { alert.style.display = 'none'; } else { alert.style.display = 'block'; }
           let rawSummary = data.summary || '';
           // Clean up any JSON/markdown artifacts from AI response
           rawSummary = rawSummary.replace(/^```(?:json)?/gm, '').replace(/```$/gm, '').trim();

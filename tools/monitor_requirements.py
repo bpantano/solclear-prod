@@ -183,10 +183,14 @@ def analyze_changes_structured(diff_text: str) -> dict:
                     "This is a diff of the Palmetto Finance solar installation M1 photo documentation requirements page. "
                     "Analyze the changes and respond with ONLY valid JSON (no markdown, no backticks) in this format:\n"
                     '{"summary": "Plain English summary of changes", '
+                    '"material": true, '
                     '"new_ids": [{"id": "PS7", "section": "Project Site", "title": "Short description of new requirement"}], '
                     '"changed_ids": ["PS1", "R3"], '
                     '"removed_ids": ["E8"]}\n\n'
                     "Rules:\n"
+                    "- material: true if any actual photo documentation requirements changed (new/modified/removed photo IDs, "
+                    "changed validation criteria, new sections). false if only metadata changed (timestamps like 'Updated yesterday' to "
+                    "'Updated today', backend feature flags, session tokens, page layout, navigation elements).\n"
                     "- new_ids: requirements that were added (didn't exist before). Include the photo ID, section, and title.\n"
                     "- changed_ids: existing requirements whose wording, conditions, or details changed.\n"
                     "- removed_ids: requirements that were deleted.\n"
