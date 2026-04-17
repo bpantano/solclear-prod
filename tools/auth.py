@@ -153,28 +153,19 @@ def send_reset_email(to_email: str, reset_url: str) -> bool:
                 "from": RESEND_FROM_EMAIL,
                 "to": [to_email],
                 "subject": "Solclear — Reset Your Password",
-                "html": f"""
-                    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
-                        <div style="text-align:center;margin-bottom:32px;">
-                            <!--[if !mso]><!-->
-                            <img src="{reset_url.rsplit('/reset-password', 1)[0]}/logo.svg" alt="solclear" height="40" style="display:inline-block;">
-                            <!--<![endif]-->
-                            <!--[if mso]>
-                            <span style="font-size:24px;font-weight:bold;color:#0F172A;">&#9728; solclear</span>
-                            <![endif]-->
-                        </div>
-                        <h2 style="font-size:18px;margin-bottom:8px;color:#1a1a2e;">Reset your password</h2>
-                        <p style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:24px;">
-                            We received a request to reset your password. Click the button below to choose a new one. This link expires in 1 hour.
-                        </p>
-                        <a href="{reset_url}" style="display:inline-block;background:#3b82f6;color:#fff;padding:14px 28px;border-radius:8px;text-decoration:none;font-size:14px;font-weight:600;">
-                            Reset Password
-                        </a>
-                        <p style="font-size:12px;color:#9ca3af;margin-top:24px;line-height:1.5;">
-                            If you didn't request this, you can safely ignore this email. Your password won't change until you click the link above.
-                        </p>
-                    </div>
-                """,
+                "html": (
+                    '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">'
+                    '<div style="text-align:center;margin-bottom:32px;">'
+                    f'<img src="{reset_url.rsplit("/reset-password", 1)[0]}/logo.svg" alt="solclear" height="40">'
+                    '</div>'
+                    '<h2 style="font-size:18px;margin-bottom:8px;color:#1a1a2e;">Reset your password</h2>'
+                    '<p style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:24px;">'
+                    'We received a request to reset your password. Click the button below to choose a new one. This link expires in 1 hour.</p>'
+                    f'<a href="{reset_url}" style="display:inline-block;background:#3b82f6;color:#fff;padding:14px 28px;border-radius:8px;text-decoration:none;font-size:14px;font-weight:600;">Reset Password</a>'
+                    '<p style="font-size:12px;color:#9ca3af;margin-top:24px;line-height:1.5;">'
+                    'If you didn\'t request this, you can safely ignore this email. Your password won\'t change until you click the link above.</p>'
+                    '</div>'
+                ),
             },
             timeout=10,
         )
