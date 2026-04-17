@@ -156,10 +156,12 @@ def send_reset_email(to_email: str, reset_url: str) -> bool:
                 "html": f"""
                     <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
                         <div style="text-align:center;margin-bottom:32px;">
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" height="36" style="display:inline-block;">
-                                <g transform="translate(24,36)"><circle cx="44" cy="40" r="12" fill="#F59E0B"/><path d="M16 76 A 28 28 0 0 1 72 76" fill="none" stroke="#0F172A" stroke-width="7" stroke-linecap="round"/></g>
-                                <text x="116" y="104" font-family="Inter,Helvetica,Arial,sans-serif" font-weight="600" font-size="80" fill="#0F172A" letter-spacing="-2.5">solclear</text>
-                            </svg>
+                            <!--[if !mso]><!-->
+                            <img src="{reset_url.rsplit('/reset-password', 1)[0]}/logo.svg" alt="solclear" height="40" style="display:inline-block;">
+                            <!--<![endif]-->
+                            <!--[if mso]>
+                            <span style="font-size:24px;font-weight:bold;color:#0F172A;">&#9728; solclear</span>
+                            <![endif]-->
                         </div>
                         <h2 style="font-size:18px;margin-bottom:8px;color:#1a1a2e;">Reset your password</h2>
                         <p style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:24px;">

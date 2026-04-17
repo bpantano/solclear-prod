@@ -246,6 +246,21 @@ class LiveHandler(BaseHTTPRequestHandler):
             self.end_headers()
         return None
 
+    def _serve_logo_svg(self):
+        """Serve the Solclear wordmark SVG as an image (public, used in emails)."""
+        svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" width="640" height="160">
+  <g transform="translate(24,36)"><circle cx="44" cy="40" r="12" fill="#F59E0B"/><path d="M16 76 A 28 28 0 0 1 72 76" fill="none" stroke="#0F172A" stroke-width="7" stroke-linecap="round"/></g>
+  <text x="116" y="104" font-family="Inter,Helvetica,Arial,sans-serif" font-weight="600" font-size="80" fill="#0F172A" letter-spacing="-2.5">solclear</text>
+</svg>"""
+        body = svg.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "image/svg+xml")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
     def _serve_login_page(self):
         body = LOGIN_HTML.encode()
         self.send_response(200)
@@ -261,6 +276,9 @@ class LiveHandler(BaseHTTPRequestHandler):
         qs = parse_qs(parsed.query)
 
         # Public routes (no auth required)
+        if path == "/logo.svg":
+            self._serve_logo_svg()
+            return
         if path == "/login":
             self._serve_login_page()
             return
