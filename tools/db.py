@@ -13,18 +13,38 @@ Usage:
 import os
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
 from dotenv import load_dotenv
 
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
+# Connection pool: min 2, max 10 connections
+_pool = None
+
+
+def _get_pool():
+    """Get or create the connection pool."""
+    global _pool
+    if _pool is None or _pool.closed:
+        if not DATABASE_URL:
+            raise RuntimeError("DATABASE_URL not set in environment")
+        _pool = psycopg2.pool.SimpleConnectionPool(2, 10, DATABASE_URL)
+    return _pool
+
 
 def get_conn():
-    """Get a database connection. Uses DATABASE_URL from env."""
-    if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL not set in environment")
-    return psycopg2.connect(DATABASE_URL)
+    """Get a connection from the pool."""
+    return _get_pool().getconn()
+
+
+def _return_conn(conn):
+    """Return a connection to the pool."""
+    try:
+        _get_pool().putconn(conn)
+    except Exception:
+        pass
 
 
 def fetch_all(query, params=None):
@@ -35,7 +55,7 @@ def fetch_all(query, params=None):
         cur.execute(query, params)
         return [dict(row) for row in cur.fetchall()]
     finally:
-        conn.close()
+        _return_conn(conn)
 
 
 def fetch_one(query, params=None):
@@ -47,7 +67,7 @@ def fetch_one(query, params=None):
         row = cur.fetchone()
         return dict(row) if row else None
     finally:
-        conn.close()
+        _return_conn(conn)
 
 
 def execute(query, params=None):
@@ -59,7 +79,7 @@ def execute(query, params=None):
         conn.commit()
         return cur
     finally:
-        conn.close()
+        _return_conn(conn)
 
 
 def execute_returning(query, params=None):
@@ -72,4 +92,4 @@ def execute_returning(query, params=None):
         row = cur.fetchone()
         return dict(row) if row else None
     finally:
-        conn.close()
+        _return_conn(conn)

@@ -246,6 +246,13 @@ class LiveHandler(BaseHTTPRequestHandler):
             self.end_headers()
         return None
 
+    def _require_role(self, session, allowed_roles):
+        """Check if session user has one of the allowed roles. Returns True if authorized, sends 403 and returns False if not."""
+        if session.get("role") in allowed_roles:
+            return True
+        self._send_json({"error": "Insufficient permissions"}, 403)
+        return False
+
     def _serve_logo_svg(self):
         """Serve the Solclear wordmark SVG as an image (public, used in emails)."""
         svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" width="640" height="160">
@@ -314,22 +321,37 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._api_checklists(pid)
         elif path == "/api/reports":
             self._api_reports()
+        # ── Admin routes (superadmin/admin only) ──
         elif path == "/api/requirements":
+            if not self._require_role(session, ("superadmin", "admin")):
+                return
             self._api_requirements_list()
         elif path == "/api/requirements/monitor/status":
+            if not self._require_role(session, ("superadmin", "admin")):
+                return
             self._api_requirements_monitor()
         elif path.startswith("/api/requirements/") and len(path.split("/")) == 4:
+            if not self._require_role(session, ("superadmin", "admin")):
+                return
             req_id = path.split("/")[3]
             self._api_requirement_detail(req_id)
         elif path == "/api/organizations":
+            if not self._require_role(session, ("superadmin", "admin")):
+                return
             self._api_orgs_list()
         elif path.startswith("/api/users/"):
+            if not self._require_role(session, ("superadmin", "admin")):
+                return
             uid = path.split("/")[3]
             self._api_user_detail(uid)
         elif path.startswith("/api/organizations/") and path.endswith("/users"):
+            if not self._require_role(session, ("superadmin", "admin")):
+                return
             oid = path.split("/")[3]
             self._api_org_users(oid)
         elif path.startswith("/api/organizations/"):
+            if not self._require_role(session, ("superadmin", "admin")):
+                return
             oid = path.split("/")[3]
             self._api_org_detail(oid)
         elif path.startswith("/report/"):
@@ -366,26 +388,43 @@ class LiveHandler(BaseHTTPRequestHandler):
 
         if path == "/api/change-password":
             self._api_change_password(body, session)
+        # ── Admin POST routes (superadmin/admin only) ──
         elif path == "/api/organizations":
+            if not self._require_role(session, ("superadmin", "admin")):
+                return
             self._api_org_create(body)
         elif path.startswith("/api/organizations/") and path.endswith("/users/csv"):
+            if not self._require_role(session, ("superadmin", "admin")):
+                return
             oid = path.split("/")[3]
             self._api_org_users_csv(oid, body)
         elif path.startswith("/api/organizations/") and path.endswith("/users"):
+            if not self._require_role(session, ("superadmin", "admin")):
+                return
             oid = path.split("/")[3]
             self._api_org_user_create(oid, body)
         elif path.startswith("/api/users/") and path.endswith("/toggle"):
+            if not self._require_role(session, ("superadmin", "admin")):
+                return
             uid = path.split("/")[3]
             self._api_user_toggle(uid)
         elif path.startswith("/api/users/"):
+            if not self._require_role(session, ("superadmin", "admin")):
+                return
             uid = path.split("/")[3]
             self._api_user_update(uid, body)
         elif path == "/api/requirements/check":
+            if not self._require_role(session, ("superadmin", "admin")):
+                return
             self._api_requirements_check_now()
         elif path.startswith("/api/requirements/"):
+            if not self._require_role(session, ("superadmin", "admin")):
+                return
             req_id = path.split("/")[3]
             self._api_requirement_update(req_id, body)
         elif path.startswith("/api/organizations/"):
+            if not self._require_role(session, ("superadmin", "admin")):
+                return
             oid = path.split("/")[3]
             self._api_org_update(oid, body)
         else:
@@ -784,6 +823,10 @@ class LiveHandler(BaseHTTPRequestHandler):
             last_name = data.get("last_name", "").strip()
             phone = (data.get("phone") or "").strip() or None
             role = data.get("role", "crew")
+            VALID_ROLES = ("crew", "reviewer", "admin")
+            if role not in VALID_ROLES:
+                self._send_json({"error": f"Invalid role. Must be one of: {', '.join(VALID_ROLES)}"}, 400)
+                return
             password = (data.get("password") or "").strip()
             if not email or not first_name or not last_name:
                 self._send_json({"error": "Email, first name, and last name are required"}, 400)
@@ -841,6 +884,12 @@ class LiveHandler(BaseHTTPRequestHandler):
         """Update a user's first_name, last_name, email, phone, or role."""
         try:
             data = json.loads(body)
+            # Validate role if being changed
+            if "role" in data:
+                VALID_ROLES = ("crew", "reviewer", "admin")
+                if data["role"] not in VALID_ROLES:
+                    self._send_json({"error": f"Invalid role. Must be one of: {', '.join(VALID_ROLES)}"}, 400)
+                    return
             fields = []
             values = []
             for field in ("first_name", "last_name", "email", "phone", "role"):

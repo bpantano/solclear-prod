@@ -19,8 +19,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Secret key for signing session cookies — generate a random one if not set
-SESSION_SECRET = os.getenv("SESSION_SECRET", "solclear-dev-secret-change-in-prod")
+# Secret key for signing session cookies
+SESSION_SECRET = os.getenv("SESSION_SECRET")
+if not SESSION_SECRET:
+    import warnings
+    warnings.warn("SESSION_SECRET not set — using insecure default. Set this in production!", stacklevel=2)
+    SESSION_SECRET = "solclear-local-dev-only-not-for-production"
 SESSION_COOKIE_NAME = "solclear_session"
 SESSION_MAX_AGE = 30 * 24 * 60 * 60  # 30 days in seconds
 
@@ -81,14 +85,21 @@ def get_session_from_request(headers) -> dict:
     return validate_session_token(cookies[SESSION_COOKIE_NAME].value)
 
 
+def _is_production() -> bool:
+    """Check if running in production (Railway sets RAILWAY_ENVIRONMENT)."""
+    return bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_ID"))
+
+
 def set_session_cookie_header(token: str) -> str:
     """Return the Set-Cookie header value for the session."""
-    return f"{SESSION_COOKIE_NAME}={token}; Path=/; Max-Age={SESSION_MAX_AGE}; HttpOnly; SameSite=Lax"
+    secure = "; Secure" if _is_production() else ""
+    return f"{SESSION_COOKIE_NAME}={token}; Path=/; Max-Age={SESSION_MAX_AGE}; HttpOnly; SameSite=Strict{secure}"
 
 
 def clear_session_cookie_header() -> str:
     """Return the Set-Cookie header value to clear the session."""
-    return f"{SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
+    secure = "; Secure" if _is_production() else ""
+    return f"{SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict{secure}"
 
 
 # ── Password Reset Tokens ────────────────────────────────────────────────────
