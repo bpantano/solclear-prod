@@ -2,6 +2,16 @@
 -- PostgreSQL on Railway
 -- Run this to initialize the database
 
+-- ── Auto-update timestamp trigger ────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION update_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
 -- ── Organizations ────────────────────────────────────────────────────────────
 
 CREATE TABLE organizations (
@@ -14,6 +24,9 @@ CREATE TABLE organizations (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TRIGGER organizations_update_timestamp BEFORE UPDATE ON organizations
+  FOR EACH ROW EXECUTE FUNCTION update_timestamp();
 
 -- Status definitions:
 --   onboarding — new org, being set up (default)
@@ -47,6 +60,9 @@ CREATE TABLE users (
 
 CREATE UNIQUE INDEX idx_users_email_lower ON users(LOWER(email));
 CREATE INDEX idx_users_org ON users(organization_id);
+
+CREATE TRIGGER users_update_timestamp BEFORE UPDATE ON users
+  FOR EACH ROW EXECUTE FUNCTION update_timestamp();
 
 -- ── Impersonation Log ────────────────────────────────────────────────────────
 -- Tracks when a superadmin impersonates another user. Every action taken

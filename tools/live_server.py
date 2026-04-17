@@ -75,10 +75,22 @@ def _check_rate_limit(email: str) -> bool:
     _reset_attempts[key] = (1, now)
     return True
 
-# Track recently detected requirement changes (persists until server restart)
-_recently_new = {}       # {"PS7": {"section": "...", "title": "..."}, ...}
-_recently_changed = set() # {"PS1", "R3"}
-_recently_removed = set() # {"E8"}
+# Track recently detected requirement changes (auto-expire after 7 days)
+_recently_new = {}       # {"PS7": {"section": "...", "title": "...", "ts": timestamp}, ...}
+_recently_changed = {}   # {"PS1": timestamp, ...}
+_recently_removed = {}   # {"E8": timestamp, ...}
+_TRACKING_EXPIRY = 7 * 24 * 60 * 60  # 7 days
+
+
+def _cleanup_stale_tracking():
+    """Remove tracking entries older than 7 days."""
+    cutoff = time.time() - _TRACKING_EXPIRY
+    for d in (_recently_new, _recently_changed, _recently_removed):
+        for key in list(d.keys()):
+            val = d[key]
+            ts = val.get("ts", 0) if isinstance(val, dict) else val
+            if ts < cutoff:
+                del d[key]
 
 # Template IDs that indicate battery installs
 BATTERY_TEMPLATE_IDS = {"95194", "184407"}  # Install - Battery, LightReach : PV + Battery
@@ -501,7 +513,8 @@ class LiveHandler(BaseHTTPRequestHandler):
                         self._send_json({"url": uri["url"]})
                         return
             self._send_json({"url": None})
-        except Exception:
+        except Exception as e:
+            print(f"WARNING: Failed to fetch thumbnail for project {project_id}: {e}", file=sys.stderr)
             self._send_json({"url": None})
 
     def _api_checklists(self, project_id):
@@ -1169,13 +1182,15 @@ class LiveHandler(BaseHTTPRequestHandler):
                             "optional": True,
                             "_stub": True,
                         })
-                    _recently_new[req_id] = {"section": new_req.get("section", ""), "title": new_req.get("title", "")}
+                    _recently_new[req_id] = {"section": new_req.get("section", ""), "title": new_req.get("title", ""), "ts": time.time()}
 
                 for cid in analysis.get("changed_ids", []):
-                    _recently_changed.add(cid)
+                    _recently_changed[cid] = time.time()
 
                 for rid in analysis.get("removed_ids", []):
-                    _recently_removed.add(rid)
+                    _recently_removed[rid] = time.time()
+
+                _cleanup_stale_tracking()
 
                 is_material = analysis.get("material", True)
                 self._send_json({

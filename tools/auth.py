@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import json
 import os
+import sys
 import time
 from http.cookies import SimpleCookie
 from urllib.parse import quote, unquote
@@ -69,7 +70,10 @@ def validate_session_token(token: str) -> dict:
         if payload.get("exp", 0) < time.time():
             return None
         return payload
-    except Exception:
+    except (ValueError, json.JSONDecodeError):
+        return None  # Invalid token format — expected
+    except Exception as e:
+        print(f"WARNING: Unexpected error validating session token: {e}", file=sys.stderr)
         return None
 
 
@@ -136,7 +140,10 @@ def validate_reset_token(token: str) -> dict:
         if payload.get("exp", 0) < time.time():
             return None
         return payload
-    except Exception:
+    except (ValueError, json.JSONDecodeError):
+        return None
+    except Exception as e:
+        print(f"WARNING: Unexpected error validating reset token: {e}", file=sys.stderr)
         return None
 
 
