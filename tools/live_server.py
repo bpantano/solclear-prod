@@ -895,6 +895,8 @@ class LiveHandler(BaseHTTPRequestHandler):
             if not user:
                 self._send_json({"error": "User not found"}, 404)
                 return
+            if user.get("deactivated_at"):
+                user["deactivated_at"] = user["deactivated_at"].isoformat()
             self._send_json(user)
         except Exception as e:
             self._send_json({"error": str(e)}, 500)

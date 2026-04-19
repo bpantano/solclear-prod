@@ -64,7 +64,10 @@ LOGIN_HTML = """<!DOCTYPE html>
 
     <form onsubmit="doLogin(event)">
       <input class="login-input" id="loginEmail" type="email" placeholder="Email" autocomplete="email" required>
-      <input class="login-input" id="loginPassword" type="password" placeholder="Password" autocomplete="current-password" required>
+      <div style="position:relative;">
+        <input class="login-input" id="loginPassword" type="password" placeholder="Password" autocomplete="current-password" required style="padding-right:44px;">
+        <button type="button" onclick="togglePw(this)" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;color:#64748b;cursor:pointer;padding:4px;"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+      </div>
       <button class="login-btn" type="submit" id="loginBtn">Sign In</button>
     </form>
     <div style="margin-top:16px;"><a href="/forgot-password" style="color:#3b82f6;text-decoration:none;font-size:13px;">Forgot password?</a></div>
@@ -72,6 +75,11 @@ LOGIN_HTML = """<!DOCTYPE html>
   <div class="login-footer">&copy; 2026 Solclear. All rights reserved.</div>
 
   <script>
+    function togglePw(btn) {
+      const inp = btn.parentElement.querySelector('input');
+      if (inp.type === 'password') { inp.type = 'text'; btn.style.color = '#3b82f6'; }
+      else { inp.type = 'password'; btn.style.color = '#64748b'; }
+    }
     async function doLogin(e) {
       e.preventDefault();
       const btn = document.getElementById('loginBtn');
@@ -122,6 +130,14 @@ _AUTH_PAGE_STYLE = """
     .logo { margin-bottom: 24px; text-align: center; }
     .title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
     .sub { font-size: 12px; color: #64748b; margin-bottom: 24px; }
+    .pw-wrap { position: relative; }
+    .pw-toggle {
+      position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+      background: none; border: none; color: #64748b; cursor: pointer; padding: 4px;
+      display: flex; align-items: center;
+    }
+    .pw-toggle:hover { color: #94a3b8; }
+    .pw-toggle svg { width: 20px; height: 20px; }
     .input {
       width: 100%; padding: 14px 16px; border: 2px solid #334155; border-radius: 10px;
       background: #0f172a; color: #e2e8f0; font-size: 15px; outline: none;
@@ -224,14 +240,19 @@ RESET_PASSWORD_HTML = f"""<!DOCTYPE html>
     <div class="error" id="errMsg"></div>
     <div class="success" id="okMsg"></div>
     <form onsubmit="doReset(event)" id="resetForm">
-      <input class="input" id="newPass" type="password" placeholder="New password" autocomplete="new-password" required minlength="8">
-      <input class="input" id="confirmPass" type="password" placeholder="Confirm password" autocomplete="new-password" required minlength="8">
+      <div class="pw-wrap"><input class="input" id="newPass" type="password" placeholder="New password" autocomplete="new-password" required minlength="8" style="padding-right:44px;"><button type="button" class="pw-toggle" onclick="togglePw(this)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
+      <div class="pw-wrap"><input class="input" id="confirmPass" type="password" placeholder="Confirm password" autocomplete="new-password" required minlength="8" style="padding-right:44px;"><button type="button" class="pw-toggle" onclick="togglePw(this)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
       <button class="btn" type="submit" id="resetBtn">Reset Password</button>
     </form>
     <div id="successLinks" style="display:none;margin-top:16px;"><a class="link" href="/login">Sign in with your new password &rarr;</a></div>
   </div>
   <div class="footer">&copy; 2026 Solclear. All rights reserved.</div>
   <script>
+    function togglePw(btn) {{
+      const inp = btn.parentElement.querySelector('input');
+      if (inp.type === 'password') {{ inp.type = 'text'; btn.style.color = '#3b82f6'; }}
+      else {{ inp.type = 'password'; btn.style.color = '#64748b'; }}
+    }}
     async function doReset(e) {{
       e.preventDefault();
       const btn = document.getElementById('resetBtn');
@@ -283,15 +304,20 @@ CHANGE_PASSWORD_HTML = f"""<!DOCTYPE html>
     <div class="error" id="errMsg"></div>
     <div class="success" id="okMsg"></div>
     <form onsubmit="doChange(event)" id="changeForm">
-      <input class="input" id="currentPass" type="password" placeholder="Current password" autocomplete="current-password" required>
-      <input class="input" id="newPass" type="password" placeholder="New password" autocomplete="new-password" required minlength="8">
-      <input class="input" id="confirmPass" type="password" placeholder="Confirm new password" autocomplete="new-password" required minlength="8">
+      <div class="pw-wrap"><input class="input" id="currentPass" type="password" placeholder="Current password" autocomplete="current-password" required style="padding-right:44px;"><button type="button" class="pw-toggle" onclick="togglePw(this)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
+      <div class="pw-wrap"><input class="input" id="newPass" type="password" placeholder="New password" autocomplete="new-password" required minlength="8" style="padding-right:44px;"><button type="button" class="pw-toggle" onclick="togglePw(this)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
+      <div class="pw-wrap"><input class="input" id="confirmPass" type="password" placeholder="Confirm new password" autocomplete="new-password" required minlength="8" style="padding-right:44px;"><button type="button" class="pw-toggle" onclick="togglePw(this)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
       <button class="btn" type="submit" id="changeBtn">Change Password</button>
     </form>
     <div style="margin-top:16px;"><a class="link" href="/">&larr; Back to home</a></div>
   </div>
   <div class="footer">&copy; 2026 Solclear. All rights reserved.</div>
   <script>
+    function togglePw(btn) {{
+      const inp = btn.parentElement.querySelector('input');
+      if (inp.type === 'password') {{ inp.type = 'text'; btn.style.color = '#3b82f6'; }}
+      else {{ inp.type = 'password'; btn.style.color = '#64748b'; }}
+    }}
     async function doChange(e) {{
       e.preventDefault();
       const btn = document.getElementById('changeBtn');
