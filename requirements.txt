@@ -3,3 +3,4 @@ requests
 anthropic
 psycopg2-binary
 bcrypt
+cryptography

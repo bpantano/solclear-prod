@@ -36,6 +36,7 @@ import requests as http_requests
 from tools.compliance_check import run_compliance_check, REQUIREMENTS
 from tools.companycam_get_project_photos import get_all_photos
 from tools.db import fetch_all, fetch_one, execute, execute_returning
+from tools.crypto import encrypt, decrypt, is_encrypted
 from tools.auth import (
     hash_password, check_password, create_session_token,
     get_session_from_request, set_session_cookie_header,
@@ -825,10 +826,15 @@ class LiveHandler(BaseHTTPRequestHandler):
             data = json.loads(body)
             fields = []
             values = []
-            for field in ("name", "status", "companycam_api_key", "anthropic_api_key"):
+            for field in ("name", "status"):
                 if field in data:
                     fields.append(f"{field} = %s")
                     values.append(data[field])
+            # Encrypt API keys before storing
+            for key_field in ("companycam_api_key", "anthropic_api_key"):
+                if key_field in data and data[key_field]:
+                    fields.append(f"{key_field} = %s")
+                    values.append(encrypt(data[key_field]))
             if "settings" in data:
                 fields.append("settings = %s")
                 values.append(json.dumps(data["settings"]))
