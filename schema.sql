@@ -84,7 +84,7 @@ CREATE INDEX idx_impersonation_user ON impersonation_log(impersonated_user_id);
 
 CREATE TABLE projects (
     id                  SERIAL PRIMARY KEY,
-    organization_id     INTEGER NOT NULL REFERENCES organizations(id),
+    organization_id     INTEGER REFERENCES organizations(id),  -- null for superadmin test runs
     companycam_id       TEXT NOT NULL,             -- CompanyCam project ID
     name                TEXT NOT NULL,
     address             TEXT,
