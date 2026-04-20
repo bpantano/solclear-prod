@@ -561,6 +561,13 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     }
     .loader-anim.hidden { display: none; }
 
+    /* ── Universal spinner ── */
+    .spinner {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 32px 0; gap: 12px;
+    }
+    .spinner-text { font-size: 12px; color: var(--text-muted); }
+
     /* ── Project cards ── */
     .project-card {
       background: var(--bg-card); border-radius: 10px; margin-top: 8px;
@@ -702,7 +709,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <button class="back-btn" onclick="showStep('home')">&larr; Back to home</button>
     <div class="step-label">Step 1 — Select Project</div>
     <input class="search-input" id="projectSearch" type="text" placeholder="Search by name or address..." autocomplete="off">
-    <div id="projectListLoading" style="color:var(--text-muted);padding:12px;font-size:13px;">Loading recent projects...</div>
+    <div id="projectListLoading"></div>
     <div id="projectList"></div>
   </div>
 
@@ -925,7 +932,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         </div>
         <button onclick="checkRequirementsNow()" id="checkNowBtn" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:11px;font-weight:600;cursor:pointer;min-height:32px;">Check Now</button>
       </div>
-      <div id="monitorStatus" style="font-size:12px;color:var(--text-muted);">Loading...</div>
+      <div id="monitorStatus" style="font-size:12px;color:var(--text-muted);"></div>
     </div>
 
     <!-- Requirements by section -->
@@ -1085,7 +1092,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     // ── Organizations ──
     async function loadOrgs() {
       const list = document.getElementById('orgsList');
-      list.innerHTML = '<div style="color:#9ca3af;padding:12px;font-size:13px;">Loading...</div>';
+      list.innerHTML = spinnerHtml('Loading organizations...');
       try {
         const r = await fetch('/api/organizations');
         const orgs = await r.json();
@@ -1305,7 +1312,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 
     async function loadRequirements() {
       const list = document.getElementById('reqsList');
-      list.innerHTML = '<div style="color:var(--text-muted);font-size:13px;">Loading...</div>';
+      list.innerHTML = spinnerHtml('Loading requirements...');
       try {
         const r = await fetch('/api/requirements');
         reqsData = await r.json();
@@ -1528,7 +1535,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 
     async function loadHomeReports() {
       const list = document.getElementById('homeRecentList');
-      list.innerHTML = '<div style="color:#9ca3af;font-size:12px;">Loading...</div>';
+      list.innerHTML = spinnerHtml();
       try {
         const r = await fetch('/api/reports');
         const reports = await r.json();
@@ -1544,7 +1551,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 
     async function loadAllReports() {
       const list = document.getElementById('recentList');
-      list.innerHTML = '<div style="color:#9ca3af;padding:12px;font-size:13px;">Loading reports...</div>';
+      list.innerHTML = spinnerHtml('Loading reports...');
       try {
         const r = await fetch('/api/reports');
         const reports = await r.json();
@@ -1635,6 +1642,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       // Load recent projects and async-check for checklists
       const list = document.getElementById('projectList');
       const loading = document.getElementById('projectListLoading');
+      loading.innerHTML = spinnerHtml('Loading projects...');
       loading.style.display = 'block';
       list.innerHTML = '';
       try {
@@ -1671,14 +1679,14 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       const list = document.getElementById('projectList');
       const loading = document.getElementById('projectListLoading');
       if (!query && projectsLoaded) return;  // don't re-fetch if clearing search
+      loading.innerHTML = spinnerHtml('Searching...');
       loading.style.display = 'block';
-      loading.textContent = 'Searching...';
       list.innerHTML = '';
       try {
         const r = await fetch('/api/projects?query=' + encodeURIComponent(query));
         const projects = await r.json();
         loading.style.display = 'none';
-        if (!projects.length) { loading.style.display = 'block'; loading.textContent = 'No projects found'; return; }
+        if (!projects.length) { loading.style.display = 'block'; loading.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);font-size:13px;">No projects found</div>'; return; }
         list.innerHTML = projects.map(p => renderProjectCard(p)).join('');
         loadThumbnails(projects);
       } catch (e) { loading.textContent = 'Error loading projects'; }
@@ -1696,7 +1704,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     // ── Step 2: Checklists ──
     async function loadChecklists(projectId) {
       const list = document.getElementById('checklistList');
-      list.innerHTML = '<div style="color:#9ca3af;padding:12px;font-size:13px;">Loading checklists...</div>';
+      list.innerHTML = spinnerHtml('Loading checklists...');
       try {
         const r = await fetch('/api/projects/' + projectId + '/checklists');
         const cls = await r.json();
@@ -1899,6 +1907,19 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         short.style.display = 'block';
         btn.innerHTML = 'Show more <span class="arrow">&#9662;</span>';
       }
+    }
+
+    let _spinId = 0;
+    function spinnerHtml(msg) {
+      const id = 'sp' + (++_spinId);
+      return '<div class="spinner">' +
+        '<svg viewBox="0 0 120 120" width="40" height="40">' +
+        '<path d="M24 92 A 36 36 0 0 1 96 92" fill="none" stroke="var(--border)" stroke-width="8" stroke-linecap="round"/>' +
+        '<circle cx="0" cy="0" r="7" fill="#F59E0B"><animateMotion dur="1.4s" repeatCount="indefinite" keyPoints="0;1" keyTimes="0;1" calcMode="spline" keySplines="0.45 0 0.55 1"><mpath href="#' + id + '"/></animateMotion></circle>' +
+        '<path id="' + id + '" d="M24 92 A 36 36 0 0 1 96 92" fill="none" stroke="none"/>' +
+        '</svg>' +
+        (msg ? '<div class="spinner-text">' + esc(msg) + '</div>' : '') +
+        '</div>';
     }
 
     function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
