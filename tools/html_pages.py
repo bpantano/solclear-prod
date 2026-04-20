@@ -514,6 +514,10 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     .result-row.error { border-left-color: #8b5cf6; }
 
     .result-header { display: flex; align-items: center; gap: 8px; }
+    .result-detail { transition: max-height 0.2s ease; }
+    .result-row.collapsed .result-detail { display: none; }
+    .result-row.collapsed .collapse-arrow { transform: rotate(-90deg); }
+    .collapse-arrow { transition: transform 0.2s ease; display: inline-block; }
     .badge {
       font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 3px;
       letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap;
@@ -798,6 +802,9 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       <div class="status-msg" id="statusMsg"></div>
       <div class="progress-bar-bg"><div class="progress-bar-fill" id="progressFill"></div></div>
       <div class="progress-text" id="progressText">Preparing...</div>
+      <div id="resultsToggle" style="display:none;text-align:right;margin-bottom:8px;">
+        <button onclick="toggleAllResults()" id="toggleAllBtn" style="background:none;border:1px solid var(--border);border-radius:6px;padding:6px 12px;font-size:11px;color:var(--text-secondary);cursor:pointer;font-weight:500;">Collapse All</button>
+      </div>
       <div id="resultsList"></div>
     </div>
   </div>
@@ -1920,6 +1927,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           document.getElementById('progressFill').style.width = pct + '%';
           document.getElementById('progressText').textContent = `Checking ${count} / ${data.total}...`;
           document.getElementById('statusMsg').style.display = 'none';
+          document.getElementById('resultsToggle').style.display = 'block';
           appendResult(data.requirement);
           return;
         }
@@ -2007,18 +2015,21 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       // Show the photo that was evaluated (key 1 in photo_urls is the selected winner)
       const evalUrl = (req.photo_urls || {})[1] || (req.photo_urls || {})['1'];
       const photoThumb = evalUrl
-        ? `<a href="${evalUrl}" target="_blank" style="display:block;margin-top:8px;"><img src="${evalUrl}" style="width:100%;max-width:280px;border-radius:6px;border:2px solid var(--border);" loading="lazy"></a>`
+        ? `<a href="${evalUrl}" target="_blank" onclick="event.stopPropagation()" style="display:block;margin-top:8px;"><img src="${evalUrl}" style="width:100%;max-width:280px;border-radius:6px;border:2px solid var(--border);" loading="lazy"></a>`
         : '';
 
       list.insertAdjacentHTML('beforeend', `
-        <div class="result-row ${status}">
+        <div class="result-row ${status}" style="cursor:pointer;" onclick="this.classList.toggle('collapsed')">
           <div class="result-header">
             <span class="badge ${badgeCls}">${req.status}</span>
             <span class="result-id">${req.id}</span>
             <span class="result-title">${esc(req.title)}</span>
+            <span class="collapse-arrow" style="margin-left:auto;color:var(--text-muted);font-size:10px;">&#9662;</span>
           </div>
-          ${photoThumb}
-          ${reason}
+          <div class="result-detail">
+            ${photoThumb}
+            ${reason}
+          </div>
         </div>
       `);
 
@@ -2026,7 +2037,18 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       list.lastElementChild.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
 
+    let _allCollapsed = false;
+    function toggleAllResults() {
+      _allCollapsed = !_allCollapsed;
+      document.querySelectorAll('#resultsList .result-row').forEach(row => {
+        if (_allCollapsed) row.classList.add('collapsed');
+        else row.classList.remove('collapsed');
+      });
+      document.getElementById('toggleAllBtn').textContent = _allCollapsed ? 'Expand All' : 'Collapse All';
+    }
+
     function toggleResultReason(btn) {
+      event.stopPropagation();
       const full = btn.previousElementSibling;
       const short = full.previousElementSibling;
       if (full.style.display === 'none') {
