@@ -701,6 +701,26 @@ EMBEDDED_HTML = """<!DOCTYPE html>
   <div id="reportsPage" class="step">
     <button class="back-btn" onclick="showStep('home')">&larr; Back to home</button>
     <div class="step-label">All Reports</div>
+
+    <!-- Filters -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <input class="search-input" id="reportSearch" type="text" placeholder="Search by project name..." style="flex:1;min-width:160px;font-size:13px;" oninput="filterReports()">
+      <select id="reportStatusFilter" onchange="filterReports()" style="padding:10px 12px;border:2px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg-input);color:var(--text);min-height:44px;">
+        <option value="all">All Status</option>
+        <option value="passed">Passed Only</option>
+        <option value="failed">Has Failures</option>
+      </select>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;align-items:center;">
+      <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:200px;">
+        <input type="date" id="reportDateFrom" onchange="filterReports()" style="padding:10px 12px;border:2px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg-input);color:var(--text);min-height:44px;flex:1;">
+        <span style="color:var(--text-muted);font-size:12px;">to</span>
+        <input type="date" id="reportDateTo" onchange="filterReports()" style="padding:10px 12px;border:2px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg-input);color:var(--text);min-height:44px;flex:1;">
+      </div>
+      <button onclick="clearDateFilter()" style="background:var(--border-light);border:none;border-radius:8px;padding:10px 14px;font-size:12px;color:var(--text-muted);cursor:pointer;min-height:44px;font-weight:500;">Clear dates</button>
+    </div>
+    <div id="reportCount" style="font-size:11px;color:var(--text-muted);margin-bottom:8px;"></div>
+
     <div id="recentList"></div>
   </div>
 
@@ -709,6 +729,22 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <button class="back-btn" onclick="showStep('home')">&larr; Back to home</button>
     <div class="step-label">Step 1 — Select Project</div>
     <input class="search-input" id="projectSearch" type="text" placeholder="Search by name or address..." autocomplete="off">
+
+    <!-- Date filter -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center;">
+      <select id="projectDateField" onchange="filterProjects()" style="padding:10px 12px;border:2px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg-input);color:var(--text);min-height:44px;">
+        <option value="updated_at">Last Updated</option>
+        <option value="created_at">Date Created</option>
+      </select>
+      <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:180px;">
+        <input type="date" id="projectDateFrom" onchange="filterProjects()" style="padding:10px 12px;border:2px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg-input);color:var(--text);min-height:44px;flex:1;">
+        <span style="color:var(--text-muted);font-size:12px;">to</span>
+        <input type="date" id="projectDateTo" onchange="filterProjects()" style="padding:10px 12px;border:2px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg-input);color:var(--text);min-height:44px;flex:1;">
+      </div>
+      <button onclick="clearProjectDateFilter()" style="background:var(--border-light);border:none;border-radius:8px;padding:10px 14px;font-size:12px;color:var(--text-muted);cursor:pointer;min-height:44px;font-weight:500;">Clear</button>
+    </div>
+    <div id="projectCount" style="font-size:11px;color:var(--text-muted);margin:8px 0;"></div>
+
     <div id="projectListLoading"></div>
     <div id="projectList"></div>
   </div>
@@ -1549,20 +1585,69 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       }
     }
 
+    let _allReports = [];
+
     async function loadAllReports() {
       const list = document.getElementById('recentList');
       list.innerHTML = spinnerHtml('Loading reports...');
       try {
         const r = await fetch('/api/reports');
-        const reports = await r.json();
-        if (!reports.length) {
-          list.innerHTML = '<div style="color:#9ca3af;font-size:13px;">No reports yet.</div>';
-          return;
-        }
-        list.innerHTML = renderReportList(reports);
+        _allReports = await r.json();
+        // Reset filters
+        document.getElementById('reportSearch').value = '';
+        document.getElementById('reportStatusFilter').value = 'all';
+        document.getElementById('reportDateFrom').value = '';
+        document.getElementById('reportDateTo').value = '';
+        filterReports();
       } catch (e) {
         list.innerHTML = '<div style="color:#ef4444;padding:12px;">Error loading reports</div>';
       }
+    }
+
+    function clearDateFilter() {
+      document.getElementById('reportDateFrom').value = '';
+      document.getElementById('reportDateTo').value = '';
+      filterReports();
+    }
+
+    function filterReports() {
+      const search = (document.getElementById('reportSearch').value || '').trim().toLowerCase();
+      const status = document.getElementById('reportStatusFilter').value;
+      const fromVal = document.getElementById('reportDateFrom').value;
+      const toVal = document.getElementById('reportDateTo').value;
+      const fromTs = fromVal ? new Date(fromVal + 'T00:00:00').getTime() / 1000 : 0;
+      const toTs = toVal ? new Date(toVal + 'T23:59:59').getTime() / 1000 : Infinity;
+
+      const filtered = _allReports.filter(rpt => {
+        // Search filter
+        if (search && !(rpt.name || '').toLowerCase().includes(search)) return false;
+        // Status filter
+        if (status === 'passed' && rpt.failed > 0) return false;
+        if (status === 'failed' && rpt.failed === 0) return false;
+        // Date range filter
+        if (rpt.timestamp < fromTs || rpt.timestamp > toTs) return false;
+        return true;
+      });
+
+      const list = document.getElementById('recentList');
+      const countEl = document.getElementById('reportCount');
+
+      if (!_allReports.length) {
+        list.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);font-size:13px;">No reports yet.</div>';
+        countEl.textContent = '';
+        return;
+      }
+
+      if (!filtered.length) {
+        list.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);font-size:13px;">No reports match your filters.</div>';
+        countEl.textContent = '0 of ' + _allReports.length + ' reports';
+        return;
+      }
+
+      countEl.textContent = filtered.length === _allReports.length
+        ? filtered.length + ' report' + (filtered.length !== 1 ? 's' : '')
+        : filtered.length + ' of ' + _allReports.length + ' reports';
+      list.innerHTML = renderReportList(filtered);
     }
 
     // Check for rerun parameter, otherwise load home page
@@ -1638,6 +1723,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       });
     }
 
+    let _allProjects = [];
+
     async function loadRecentProjects() {
       // Load recent projects and async-check for checklists
       const list = document.getElementById('projectList');
@@ -1645,10 +1732,14 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       loading.innerHTML = spinnerHtml('Loading projects...');
       loading.style.display = 'block';
       list.innerHTML = '';
+      // Reset filters
+      document.getElementById('projectDateFrom').value = '';
+      document.getElementById('projectDateTo').value = '';
+      document.getElementById('projectDateField').value = 'updated_at';
       try {
         const r = await fetch('/api/projects');
         const projects = await r.json();
-        if (!projects.length) { loading.textContent = 'No projects found'; return; }
+        if (!projects.length) { loading.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);font-size:13px;">No projects found</div>'; return; }
         loading.style.display = 'none';
 
         // Show all projects immediately, then async-enrich with checklist counts
@@ -1666,13 +1757,46 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         }));
 
         // Re-render sorted: projects with checklists first
-        const sorted = enriched.sort((a, b) => b.checklist_count - a.checklist_count);
-        list.innerHTML = sorted.map(p => renderProjectCard(p)).join('');
-        loadThumbnails(sorted);
+        _allProjects = enriched.sort((a, b) => b.checklist_count - a.checklist_count);
+        filterProjects();
         projectsLoaded = true;
       } catch (e) {
-        loading.textContent = 'Error loading projects';
+        loading.innerHTML = '<div style="color:#ef4444;padding:12px;">Error loading projects</div>';
       }
+    }
+
+    function clearProjectDateFilter() {
+      document.getElementById('projectDateFrom').value = '';
+      document.getElementById('projectDateTo').value = '';
+      filterProjects();
+    }
+
+    function filterProjects() {
+      const field = document.getElementById('projectDateField').value;
+      const fromVal = document.getElementById('projectDateFrom').value;
+      const toVal = document.getElementById('projectDateTo').value;
+      const fromTs = fromVal ? new Date(fromVal + 'T00:00:00').getTime() / 1000 : 0;
+      const toTs = toVal ? new Date(toVal + 'T23:59:59').getTime() / 1000 : Infinity;
+
+      const filtered = _allProjects.filter(p => {
+        const ts = p[field] || 0;
+        return ts >= fromTs && ts <= toTs;
+      });
+
+      const list = document.getElementById('projectList');
+      const countEl = document.getElementById('projectCount');
+
+      if (!filtered.length && _allProjects.length) {
+        list.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);font-size:13px;">No projects match your date filter.</div>';
+        countEl.textContent = '0 of ' + _allProjects.length + ' projects';
+        return;
+      }
+
+      countEl.textContent = (fromVal || toVal)
+        ? filtered.length + ' of ' + _allProjects.length + ' projects'
+        : '';
+      list.innerHTML = filtered.map(p => renderProjectCard(p)).join('');
+      loadThumbnails(filtered);
     }
 
     async function searchProjects(query) {

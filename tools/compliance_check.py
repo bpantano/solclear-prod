@@ -538,8 +538,12 @@ def estimate_run_cost(num_vision_checks: int, model: str = "claude-haiku-4-5-202
 def print_cost_estimate(params: dict):
     """Print expected cost before running vision checks. Call this before a run."""
     applicable = sum(1 for r in REQUIREMENTS if r["condition"](params) and not r.get("optional"))
-    # Single pass: up to MAX_CANDIDATE_PHOTOS images + prompt per requirement, ~150 output tokens
-    input_tokens = applicable * (MAX_CANDIDATE_PHOTOS * AVG_IMAGE_TOKENS + AVG_PROMPT_TOKENS)
+    # Two-tier: thumbnails for selection (~400 tok each, avg 8 per task) + 1 full image for validation
+    AVG_THUMBS_PER_TASK = 8
+    AVG_THUMB_TOKENS = 400
+    tier1_tokens = applicable * (AVG_THUMBS_PER_TASK * AVG_THUMB_TOKENS + 100)
+    tier2_tokens = applicable * (AVG_IMAGE_TOKENS + AVG_PROMPT_TOKENS)
+    input_tokens = tier1_tokens + tier2_tokens
     output_tokens = applicable * 150
     cost = (input_tokens / 1_000_000) * 0.80 + (output_tokens / 1_000_000) * 4.00
     print(f"\n── COST ESTIMATE ──────────────────────────────────")
@@ -553,7 +557,7 @@ def print_cost_estimate(params: dict):
 # ── Vision check ─────────────────────────────────────────────────────────────
 
 # Max candidate photos to send per requirement — caps token cost
-MAX_CANDIDATE_PHOTOS = 5
+# No cap on candidate photos — two-tier approach evaluates all candidates via thumbnails
 
 # Anthropic API headers (reused across calls)
 ANTHROPIC_HEADERS = {
@@ -601,60 +605,106 @@ def _download_image(url: str) -> Optional[tuple]:
 
 def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
     """
-    Single-pass vision check: send up to MAX_CANDIDATE_PHOTOS images in one API call.
-    Haiku selects the best photo AND validates it simultaneously.
+    Two-tier vision check for maximum accuracy:
 
-    Cost: 1 Haiku call per requirement regardless of candidate count.
-    Model: claude-haiku-4-5 (~$0.80/MTok in, $4/MTok out)
-    Upgrade to Sonnet/Opus in production if accuracy needs improve.
+    Tier 1 (selection): Send ALL candidate thumbnails to Haiku. Ask which photo
+    best represents the requirement. Thumbnails are small (~400 tokens each),
+    so even 15 photos is cheap.
+
+    Tier 2 (validation): Download the full-res winner and validate it against
+    the requirement's validation prompt.
+
+    Cost: ~2 Haiku calls per requirement. Tier 1 is cheap (thumbnails),
+    Tier 2 is one full image. Total similar to old single-pass with 5 photos,
+    but evaluates ALL candidates.
     """
     if not ANTHROPIC_API_KEY:
         return {"result": "SKIP", "reason": "ANTHROPIC_API_KEY not set"}
 
-    pool = candidates[:MAX_CANDIDATE_PHOTOS]
-
-    # Download all candidate images in parallel, track URLs by index
     import concurrent.futures
-    urls_to_download = []
-    for photo in pool:
+
+    # ── Tier 1: Selection — download ALL thumbnails and pick the best ─────
+
+    thumb_urls = []
+    for photo in candidates:
+        url = get_photo_thumbnail_url(photo)
+        if url:
+            thumb_urls.append(url)
+
+    if not thumb_urls:
+        return {"result": "ERROR", "reason": "No photo URLs found", "photo_urls": {}}
+
+    # If only 1 candidate, skip selection tier
+    if len(thumb_urls) == 1:
+        best_idx = 0
+    else:
+        # Download all thumbnails in parallel
+        thumb_downloaded = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(thumb_urls))) as executor:
+            future_to_url = {executor.submit(_download_image, url): url for url in thumb_urls}
+            for future in concurrent.futures.as_completed(future_to_url):
+                url = future_to_url[future]
+                try:
+                    result = future.result()
+                    if result:
+                        thumb_downloaded[url] = result
+                except Exception:
+                    pass
+
+        # Build thumbnail image blocks
+        thumb_blocks = []
+        valid_indices = []
+        for i, url in enumerate(thumb_urls):
+            if url in thumb_downloaded:
+                data, media_type = thumb_downloaded[url]
+                thumb_blocks.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
+                thumb_blocks.append({"type": "text", "text": f"[Photo {i + 1}]"})
+                valid_indices.append(i)
+
+        if not thumb_blocks:
+            return {"result": "ERROR", "reason": "Could not download any candidate photos", "photo_urls": {}}
+
+        # Ask Haiku to pick the best photo
+        selection_payload = {
+            "model": "claude-haiku-4-5-20251001",
+            "max_tokens": 5,
+            "messages": [{"role": "user", "content": thumb_blocks + [{"type": "text", "text": (
+                f"These are {len(valid_indices)} photos from a solar installation checklist task.\n"
+                f"Requirement: {requirement['title']}\n"
+                f"Which photo number (1-{len(thumb_urls)}) best shows this requirement? Reply with only the number."
+            )}]}],
+        }
+
+        selection_text = _call_anthropic(selection_payload, requirement["id"] + "-select")
+        try:
+            best_idx = int("".join(c for c in (selection_text or "1") if c.isdigit())) - 1
+            if best_idx < 0 or best_idx >= len(candidates):
+                best_idx = 0
+        except (ValueError, TypeError):
+            best_idx = 0
+
+    # ── Tier 2: Validation — download full-res winner and validate ────────
+
+    best_photo = candidates[best_idx]
+    full_url = get_photo_web_url(best_photo)
+    if not full_url:
+        return {"result": "ERROR", "reason": "Could not get URL for selected photo", "photo_urls": {}}
+
+    full_result = _download_image(full_url)
+    if not full_result:
+        return {"result": "ERROR", "reason": "Could not download selected photo", "photo_urls": {}}
+
+    data, media_type = full_result
+    photo_urls = {1: full_url}
+
+    # Also include URLs of all candidates for reference in the report
+    all_photo_urls = {}
+    for i, photo in enumerate(candidates):
         url = get_photo_web_url(photo)
         if url:
-            urls_to_download.append(url)
-
-    downloaded = {}  # {url: (data, media_type)}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(urls_to_download))) as executor:
-        future_to_url = {executor.submit(_download_image, url): url for url in urls_to_download}
-        for future in concurrent.futures.as_completed(future_to_url):
-            url = future_to_url[future]
-            try:
-                result = future.result()
-                if result:
-                    downloaded[url] = result
-            except Exception:
-                pass
-
-    # Build image blocks in original order
-    image_blocks = []
-    photo_urls = {}
-    for url in urls_to_download:
-        if url in downloaded:
-            data, media_type = downloaded[url]
-            idx = len(photo_urls) + 1
-            photo_urls[idx] = url
-            image_blocks.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
-            image_blocks.append({"type": "text", "text": f"[Photo {idx}]"})
-
-    if not image_blocks:
-        return {"result": "ERROR", "reason": "Could not download any candidate photos", "photo_urls": {}}
-
-    multi_photo_note = (
-        f"You are shown {len(photo_urls)} photos from the same checklist task. "
-        "Find the one that best satisfies the requirement below and assess that photo.\n\n"
-        if len(photo_urls) > 1 else ""
-    )
+            all_photo_urls[i + 1] = url
 
     prompt = (
-        f"{multi_photo_note}"
         f"Requirement {requirement['id']}: {requirement['title']}\n\n"
         f"{requirement['validation_prompt']}\n\n"
         "IMPORTANT: Your response MUST start with exactly 'PASS' or 'FAIL' on the first line "
@@ -664,16 +714,19 @@ def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
     payload = {
         "model": "claude-haiku-4-5-20251001",
         "max_tokens": 150,
-        "messages": [{"role": "user", "content": image_blocks + [{"type": "text", "text": prompt}]}],
+        "messages": [{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}},
+            {"type": "text", "text": prompt},
+        ]}],
     }
 
     text = _call_anthropic(payload, requirement["id"])
     if text and text.startswith("ERROR"):
-        return {"result": "ERROR", "reason": text, "photo_urls": photo_urls}
+        return {"result": "ERROR", "reason": text, "photo_urls": all_photo_urls}
 
     first_word = (text or "").strip().split()[0].upper().rstrip(".:,")
     passed = first_word == "PASS"
-    return {"result": "PASS" if passed else "FAIL", "reason": text, "photo_urls": photo_urls}
+    return {"result": "PASS" if passed else "FAIL", "reason": text, "photo_urls": all_photo_urls}
 
 
 # ── Photo matching ────────────────────────────────────────────────────────────
@@ -724,6 +777,18 @@ def get_photo_web_url(photo: dict) -> Optional[str]:
     # Project-level photo format
     uris = photo.get("uris", [])
     for uri_type in ["web", "original", "thumbnail"]:
+        for uri in uris:
+            if uri.get("type") == uri_type:
+                return uri.get("url")
+    return None
+
+
+def get_photo_thumbnail_url(photo: dict) -> Optional[str]:
+    """Extract thumbnail URL — smaller image for selection tier. Falls back to web URL."""
+    if "url" in photo and "uris" not in photo:
+        return photo["url"]  # Checklist photos only have one URL
+    uris = photo.get("uris", [])
+    for uri_type in ["thumbnail", "web"]:
         for uri in uris:
             if uri.get("type") == uri_type:
                 return uri.get("url")

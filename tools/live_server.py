@@ -493,6 +493,7 @@ class LiveHandler(BaseHTTPRequestHandler):
                     "city": p.get("address", {}).get("city", ""),
                     "state": p.get("address", {}).get("state", ""),
                     "featured_image": thumb_url,
+                    "created_at": p.get("created_at"),
                     "updated_at": p.get("updated_at"),
                 })
             self._send_json(slim)
