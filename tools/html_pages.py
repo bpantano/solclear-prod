@@ -2033,8 +2033,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         </div>
       `);
 
-      // scroll to bottom
-      list.lastElementChild.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      // No auto-scroll — let the user control their own scroll position
     }
 
     let _allCollapsed = false;
