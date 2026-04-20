@@ -104,6 +104,12 @@ def render_requirement(req: dict) -> str:
     collapsed_class = " collapsed" if status == "PASS" else ""
     click_handler = ' onclick="this.classList.toggle(\'collapsed\')"' if status == "PASS" else ""
 
+    # Show the evaluated photo thumbnail (key 1 is the selected winner)
+    eval_url = photo_urls.get(1) or photo_urls.get("1")
+    photo_html = ""
+    if eval_url and status not in ("N/A", "FOUND_NO_VISION"):
+        photo_html = f'<a href="{eval_url}" target="_blank" style="display:block;margin-top:8px;"><img src="{eval_url}" style="width:100%;max-width:280px;border-radius:6px;border:2px solid #e5e7eb;" loading="lazy"></a>'
+
     return f"""
     <div class="requirement req-{status.lower()}{collapsed_class}"{click_handler}>
       <div class="req-header">
@@ -113,6 +119,7 @@ def render_requirement(req: dict) -> str:
         {optional_tag}
         {candidates_note}
       </div>
+      {photo_html}
       {reason_html}
     </div>"""
 

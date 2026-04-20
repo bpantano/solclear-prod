@@ -2004,6 +2004,12 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         }
       }
 
+      // Show the photo that was evaluated (key 1 in photo_urls is the selected winner)
+      const evalUrl = (req.photo_urls || {})[1] || (req.photo_urls || {})['1'];
+      const photoThumb = evalUrl
+        ? `<a href="${evalUrl}" target="_blank" style="display:block;margin-top:8px;"><img src="${evalUrl}" style="width:100%;max-width:280px;border-radius:6px;border:2px solid var(--border);" loading="lazy"></a>`
+        : '';
+
       list.insertAdjacentHTML('beforeend', `
         <div class="result-row ${status}">
           <div class="result-header">
@@ -2011,6 +2017,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
             <span class="result-id">${req.id}</span>
             <span class="result-title">${esc(req.title)}</span>
           </div>
+          ${photoThumb}
           ${reason}
         </div>
       `);
