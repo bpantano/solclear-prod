@@ -156,6 +156,7 @@ CREATE TABLE reports (
     total_failed    INTEGER NOT NULL DEFAULT 0,
     total_missing   INTEGER NOT NULL DEFAULT 0,
     status          TEXT NOT NULL DEFAULT 'running',  -- 'running', 'complete', 'error'
+    is_test         BOOLEAN NOT NULL DEFAULT FALSE,  -- true for superadmin runs
     -- Timestamps
     started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at    TIMESTAMPTZ,

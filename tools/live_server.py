@@ -160,86 +160,136 @@ def derive_params_from_checklist(project_id, checklist_id, manufacturer, project
 
 # ── Background check thread ──────────────────────────────────────────────────
 
-def run_check_thread(project_id, params, rerun_ids=None):
+def _upsert_project(cc_project_id, session):
+    """Ensure a project exists in our DB for this CompanyCam project. Returns our internal project ID."""
+    org_id = session.get("org_id")
+    # Check if exists
+    existing = fetch_one("SELECT id FROM projects WHERE companycam_id = %s", (str(cc_project_id),))
+    if existing:
+        return existing["id"]
+    # Fetch project details from CompanyCam
+    try:
+        r = http_requests.get(f"{API_BASE}/projects/{cc_project_id}", headers=cc_headers(), timeout=10)
+        r.raise_for_status()
+        p = r.json()
+        proj = execute_returning(
+            "INSERT INTO projects (organization_id, companycam_id, name, address, city, state) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (org_id, str(cc_project_id), p.get("name", ""), p.get("address", {}).get("street_address_1", ""),
+             p.get("address", {}).get("city", ""), p.get("address", {}).get("state", ""))
+        )
+        return proj["id"]
+    except Exception:
+        # Fallback — create with minimal info
+        proj = execute_returning(
+            "INSERT INTO projects (organization_id, companycam_id, name) VALUES (%s, %s, %s) RETURNING id",
+            (org_id, str(cc_project_id), f"Project {cc_project_id}")
+        )
+        return proj["id"]
+
+
+def run_check_thread(cc_project_id, params, rerun_ids=None, session=None):
     global _check_running
+    session = session or {}
     try:
         # Ensure photos are cached
-        photos_path = TMP_DIR / f"photos_{project_id}.json"
+        photos_path = TMP_DIR / f"photos_{cc_project_id}.json"
         if not photos_path.exists():
             _result_queue.put(json.dumps({"type": "status", "message": "Fetching photos from CompanyCam..."}))
-            photos = get_all_photos(project_id)
+            photos = get_all_photos(cc_project_id)
             TMP_DIR.mkdir(exist_ok=True)
             with open(photos_path, "w") as f:
                 json.dump(photos, f, indent=2)
             _result_queue.put(json.dumps({"type": "status", "message": f"Fetched {len(photos)} photos. Starting check..."}))
 
+        # Upsert project and create report in DB
+        is_test = session.get("role") == "superadmin"
+        db_project_id = None
+        db_report_id = None
+        try:
+            db_project_id = _upsert_project(cc_project_id, session)
+            report_row = execute_returning(
+                """INSERT INTO reports (project_id, run_by, manufacturer, has_battery, is_backup_battery,
+                   is_incentive_state, portal_access_granted, is_test, status)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'running') RETURNING id""",
+                (db_project_id, session.get("user_id"), params.get("manufacturer"),
+                 params.get("has_battery", False), params.get("is_backup_battery", False),
+                 params.get("is_incentive_state", False), params.get("portal_access_granted", False),
+                 is_test)
+            )
+            db_report_id = report_row["id"] if report_row else None
+        except Exception as e:
+            print(f"WARNING: Could not save report to DB: {e}", file=sys.stderr)
+
+        def on_progress(result, index, total):
+            _result_queue.put(json.dumps({
+                "type": "progress",
+                "index": index,
+                "total": total,
+                "requirement": result,
+            }))
+            # Save individual result to DB
+            if db_report_id:
+                try:
+                    execute(
+                        """INSERT INTO requirement_results (report_id, requirement_id, status, reason, photo_urls, candidates)
+                           VALUES (%s, (SELECT id FROM requirements WHERE code = %s AND is_active = TRUE ORDER BY version DESC LIMIT 1),
+                                   %s, %s, %s, %s)""",
+                        (db_report_id, result.get("id"), result.get("status"), result.get("reason"),
+                         json.dumps(result.get("photo_urls", {})), result.get("candidates", 0))
+                    )
+                except Exception:
+                    pass  # Requirements table may not have matching rows yet
+
         if rerun_ids:
-            # Rerun failed only — load previous report, re-check only failed IDs
             _result_queue.put(json.dumps({"type": "status", "message": f"Re-checking {len(rerun_ids)} failed requirements..."}))
-            prev_path = TMP_DIR / f"compliance_{project_id}.json"
-            prev_report = {}
-            if prev_path.exists():
-                with open(prev_path) as f:
-                    prev_report = json.load(f)
-            prev_results = {r["id"]: r for r in prev_report.get("requirements", [])}
-
-            def on_progress(result, index, total):
-                _result_queue.put(json.dumps({
-                    "type": "progress",
-                    "index": index,
-                    "total": total,
-                    "requirement": result,
-                }))
-
-            report = run_compliance_check(project_id, params, run_vision=True,
+            report = run_compliance_check(cc_project_id, params, run_vision=True,
                                           progress_callback=on_progress, only_ids=rerun_ids)
-
-            # Merge: use new results for rerun IDs, keep old results for the rest
-            new_results = {r["id"]: r for r in report.get("requirements", [])}
-            merged = []
-            for r in prev_report.get("requirements", []):
-                if r["id"] in new_results:
-                    merged.append(new_results[r["id"]])
-                else:
-                    merged.append(r)
-            # Add any new IDs not in previous (unlikely but safe)
-            for r in report.get("requirements", []):
-                if r["id"] not in {m["id"] for m in merged}:
-                    merged.append(r)
-
-            report["requirements"] = merged
         else:
-            def on_progress(result, index, total):
-                _result_queue.put(json.dumps({
-                    "type": "progress",
-                    "index": index,
-                    "total": total,
-                    "requirement": result,
-                }))
+            report = run_compliance_check(cc_project_id, params, run_vision=True, progress_callback=on_progress)
 
-            report = run_compliance_check(project_id, params, run_vision=True, progress_callback=on_progress)
-
-        # Save report JSON
+        # Also save to .tmp/ for backward compatibility
         TMP_DIR.mkdir(exist_ok=True)
-        with open(TMP_DIR / f"compliance_{project_id}.json", "w") as f:
+        report["db_report_id"] = db_report_id
+        with open(TMP_DIR / f"compliance_{cc_project_id}.json", "w") as f:
             json.dump(report, f, indent=2)
 
-        # Summary
+        # Update report summary in DB
         reqs = report["requirements"]
         required = [r for r in reqs if r["status"] != "N/A" and not r.get("optional")]
+        n_pass = sum(1 for r in required if r["status"] == "PASS")
+        n_fail = sum(1 for r in required if r["status"] == "FAIL")
+        n_missing = sum(1 for r in required if r["status"] == "MISSING")
+
+        if db_report_id:
+            try:
+                execute(
+                    """UPDATE reports SET status = 'complete', completed_at = NOW(),
+                       total_required = %s, total_passed = %s, total_failed = %s, total_missing = %s
+                       WHERE id = %s""",
+                    (len(required), n_pass, n_fail, n_missing, db_report_id)
+                )
+            except Exception as e:
+                print(f"WARNING: Could not update report in DB: {e}", file=sys.stderr)
+
         _result_queue.put(json.dumps({
             "type": "done",
             "summary": {
-                "passed": sum(1 for r in required if r["status"] == "PASS"),
-                "failed": sum(1 for r in required if r["status"] == "FAIL"),
-                "missing": sum(1 for r in required if r["status"] == "MISSING"),
+                "passed": n_pass,
+                "failed": n_fail,
+                "missing": n_missing,
                 "total": len(required),
-                "project_id": project_id,
+                "project_id": cc_project_id,
+                "db_report_id": db_report_id,
                 "checklist_ids": report.get("checklist_ids", []),
             }
         }))
     except Exception as e:
         _result_queue.put(json.dumps({"type": "error", "message": str(e)}))
+        if db_report_id:
+            try:
+                execute("UPDATE reports SET status = 'error' WHERE id = %s", (db_report_id,))
+            except Exception:
+                pass
     finally:
         with _check_lock:
             _check_running = False
@@ -355,7 +405,7 @@ class LiveHandler(BaseHTTPRequestHandler):
             pid = path.split("/")[3]
             self._api_checklists(pid)
         elif path == "/api/reports":
-            self._api_reports()
+            self._api_reports(session)
         # ── Admin routes (superadmin/admin only) ──
         elif path == "/api/requirements":
             if not self._require_role(session, ("superadmin", "admin")):
@@ -393,7 +443,7 @@ class LiveHandler(BaseHTTPRequestHandler):
             pid = path.split("/")[2]
             self._serve_report(pid)
         elif path == "/start":
-            self._start_check(qs)
+            self._start_check(qs, session)
         elif path == "/stream":
             self._stream_sse()
         else:
@@ -534,7 +584,7 @@ class LiveHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 
-    def _start_check(self, qs):
+    def _start_check(self, qs, session=None):
         global _check_running
 
         with _check_lock:
@@ -572,7 +622,7 @@ class LiveHandler(BaseHTTPRequestHandler):
         else:
             total = sum(1 for r in REQUIREMENTS if r["condition"](params))
 
-        t = threading.Thread(target=run_check_thread, args=(project_id, params, rerun_ids), daemon=True)
+        t = threading.Thread(target=run_check_thread, args=(project_id, params, rerun_ids, session), daemon=True)
         t.start()
 
         self._send_json({"ok": True, "total": total, "project_id": project_id, "derived_params": params})
@@ -1259,63 +1309,125 @@ class LiveHandler(BaseHTTPRequestHandler):
 
     # ── Report handlers ──────────────────────────────────────────────────────
 
-    def _api_reports(self):
-        """Return a list of previously generated compliance reports."""
-        import glob
-        reports = []
-        for f in sorted(glob.glob(str(TMP_DIR / "compliance_*.json")), reverse=True):
-            try:
-                with open(f) as fh:
-                    data = json.load(fh)
-                pid = data.get("project_id", "")
-                reqs = data.get("requirements", [])
-                required = [r for r in reqs if r.get("status") != "N/A" and not r.get("optional")]
-                passed = sum(1 for r in required if r["status"] == "PASS")
-                failed = sum(1 for r in required if r["status"] in ("FAIL", "MISSING", "ERROR"))
-                # Get project name and image from CompanyCam
-                name = pid
+    def _api_reports(self, session=None):
+        """Return a list of compliance reports from Postgres, scoped by org."""
+        try:
+            session = session or {}
+            role = session.get("role", "")
+            org_id = session.get("org_id")
+
+            # Superadmins see all non-test reports + their own test reports
+            # Org users see only their org's non-test reports
+            if role == "superadmin":
+                rows = fetch_all("""
+                    SELECT r.id, r.project_id, p.companycam_id, p.name, r.total_passed, r.total_failed,
+                           r.total_missing, r.total_required, r.is_test, r.created_at
+                    FROM reports r
+                    JOIN projects p ON p.id = r.project_id
+                    WHERE r.status = 'complete'
+                    ORDER BY r.created_at DESC
+                    LIMIT 100
+                """)
+            else:
+                rows = fetch_all("""
+                    SELECT r.id, r.project_id, p.companycam_id, p.name, r.total_passed, r.total_failed,
+                           r.total_missing, r.total_required, r.is_test, r.created_at
+                    FROM reports r
+                    JOIN projects p ON p.id = r.project_id
+                    WHERE r.status = 'complete' AND r.is_test = FALSE
+                      AND p.organization_id = %s
+                    ORDER BY r.created_at DESC
+                    LIMIT 100
+                """, (org_id,))
+
+            reports = []
+            for row in rows:
+                # Fetch thumbnail from CompanyCam
                 thumb_url = None
                 try:
-                    r = http_requests.get(f"{API_BASE}/projects/{pid}",
-                                          headers=cc_headers(), timeout=5)
-                    if r.status_code == 200:
-                        proj = r.json()
-                        name = proj.get("name", pid)
+                    resp = http_requests.get(f"{API_BASE}/projects/{row['companycam_id']}",
+                                             headers=cc_headers(), timeout=5)
+                    if resp.status_code == 200:
+                        proj = resp.json()
                         for fi in (proj.get("feature_image") or []):
-                            if fi.get("type") == "thumbnail":
-                                thumb_url = fi.get("uri")
-                                break
-                        if not thumb_url:
-                            for fi in (proj.get("feature_image") or []):
-                                thumb_url = fi.get("uri")
-                                break
+                            thumb_url = fi.get("uri")
+                            break
                 except Exception:
                     pass
-                mtime = os.path.getmtime(f)
+
                 reports.append({
-                    "project_id": pid,
-                    "name": name,
-                    "passed": passed,
-                    "failed": failed,
-                    "total": len(required),
-                    "timestamp": int(mtime),
+                    "db_report_id": row["id"],
+                    "project_id": row["companycam_id"],
+                    "name": row["name"],
+                    "passed": row["total_passed"],
+                    "failed": row["total_failed"],
+                    "total": row["total_required"],
+                    "is_test": row["is_test"],
+                    "timestamp": int(row["created_at"].timestamp()) if row.get("created_at") else 0,
                     "featured_image": thumb_url,
                 })
-            except Exception:
-                continue
-        self._send_json(reports)
+            self._send_json(reports)
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
 
-    def _serve_report(self, project_id):
-        """Generate and serve a static HTML report from saved compliance JSON."""
-        report_path = TMP_DIR / f"compliance_{project_id}.json"
-        if not report_path.exists():
-            self.send_error(404, f"No report found for project {project_id}")
-            return
+    def _serve_report(self, report_id):
+        """Generate and serve a static HTML report from Postgres or .tmp/ fallback."""
+        report = None
+        project = {}
+        project_id = report_id  # May be DB report ID or CC project ID
+
+        # Try loading from Postgres first (report_id could be a DB ID)
         try:
-            with open(report_path) as f:
-                report = json.load(f)
-            # Fetch project details for the report header
-            project = {}
+            db_report = fetch_one("""
+                SELECT r.*, p.companycam_id, p.name as project_name, p.address, p.city, p.state
+                FROM reports r JOIN projects p ON p.id = r.project_id
+                WHERE r.id = %s""", (report_id,))
+            if db_report:
+                # Load requirement results
+                results = fetch_all("""
+                    SELECT rr.status, rr.reason, rr.photo_urls, rr.candidates,
+                           req.code as id, req.title, req.section, req.is_optional as optional
+                    FROM requirement_results rr
+                    JOIN requirements req ON req.id = rr.requirement_id
+                    WHERE rr.report_id = %s
+                    ORDER BY req.id""", (report_id,))
+                report = {
+                    "project_id": db_report["companycam_id"],
+                    "params": {
+                        "manufacturer": db_report.get("manufacturer"),
+                        "lender": "LightReach",
+                        "has_battery": db_report.get("has_battery"),
+                        "is_backup_battery": db_report.get("is_backup_battery"),
+                        "is_incentive_state": db_report.get("is_incentive_state"),
+                        "portal_access_granted": db_report.get("portal_access_granted"),
+                    },
+                    "requirements": [dict(r) for r in results],
+                    "checklist_ids": [],
+                    "db_report_id": int(report_id),
+                }
+                project_id = db_report["companycam_id"]
+                project = {"name": db_report.get("project_name", ""),
+                           "address": {"street_address_1": db_report.get("address", ""),
+                                       "city": db_report.get("city", ""),
+                                       "state": db_report.get("state", "")}}
+        except Exception:
+            pass
+
+        # Fallback to .tmp/ file (legacy or if DB load failed)
+        if not report:
+            report_path = TMP_DIR / f"compliance_{report_id}.json"
+            if not report_path.exists():
+                self.send_error(404, f"No report found for ID {report_id}")
+                return
+            try:
+                with open(report_path) as f:
+                    report = json.load(f)
+            except Exception:
+                self.send_error(500, "Failed to load report")
+                return
+
+        # Fetch project details from CompanyCam if not already loaded
+        if not project.get("name"):
             try:
                 r = http_requests.get(f"{API_BASE}/projects/{project_id}",
                                       headers=cc_headers(), timeout=5)
@@ -1323,6 +1435,8 @@ class LiveHandler(BaseHTTPRequestHandler):
                     project = r.json()
             except Exception:
                 pass
+
+        try:
             from tools.generate_report_html import generate_html
             html = generate_html(report, project)
 

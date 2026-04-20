@@ -1566,10 +1566,10 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           ? `<img class="project-card-img" src="${rpt.featured_image}" alt="" loading="lazy">`
           : `<div class="project-card-img"></div>`;
         return `
-          <a href="/report/${rpt.project_id}" class="project-card" style="text-decoration:none;color:inherit;border-left:3px solid ${isPass ? '#10b981' : '#ef4444'};">
+          <a href="/report/${rpt.db_report_id || rpt.project_id}" class="project-card" style="text-decoration:none;color:inherit;border-left:3px solid ${isPass ? '#10b981' : '#ef4444'};">
             ${img}
             <div class="project-card-info">
-              <div class="project-card-name">${esc(rpt.name)}</div>
+              <div class="project-card-name">${esc(rpt.name)}${rpt.is_test ? ' <span style="font-size:9px;background:#eff6ff;color:#3b82f6;padding:1px 5px;border-radius:3px;font-weight:600;">TEST</span>' : ''}</div>
               <div class="project-card-addr">${rpt.passed}/${rpt.total} passed · ${date}</div>
             </div>
           </a>`;
@@ -1947,7 +1947,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           if (s.checklist_ids && s.checklist_ids.length) {
             ccLink = `<a class="cc-link" href="https://app.companycam.com/projects/${s.project_id}/todos/${s.checklist_ids[0]}" target="_blank">Open in CompanyCam</a>`;
           }
-          const reportLink = `<a class="cc-link" href="/report/${s.project_id}" style="background:#111827;">View Full Report</a>`;
+          const reportLink = `<a class="cc-link" href="/report/${s.db_report_id || s.project_id}" style="background:#111827;">View Full Report</a>`;
           banner.innerHTML = `
             <div>
               <div class="done-label">${isPass ? 'READY FOR SUBMISSION' : 'ACTION REQUIRED'}</div>
