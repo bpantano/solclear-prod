@@ -105,9 +105,9 @@ REQUIREMENTS = [
         "task_titles": ["Inverter label"],
         "keywords": ["inverter label", "micro-inverter", "microinverter", "optimizer", "model label"],
         "validation_prompt": (
-            "This photo should show a clearly legible manufacturer label for an inverter, "
-            "micro-inverter, or AC optimizer. Verify: (1) Is a manufacturer label visible? "
-            "(2) Can the model name/number be read clearly? "
+            "This photo should show a manufacturer label for an inverter, micro-inverter, or AC optimizer. "
+            "Verify: (1) Is a manufacturer label present in the photo? (2) Can the model information be identified? "
+            "PASS if the label is present and the model can be determined, even if the photo requires zooming. "
             "Respond: PASS or FAIL, then one sentence explaining why."
         ),
     },
@@ -119,9 +119,9 @@ REQUIREMENTS = [
         "task_titles": ["Inverter label"],
         "keywords": ["serial", "combiner", "IQ combiner", "envoy", "Q.Home", "serial number"],
         "validation_prompt": (
-            "This photo should show clearly legible serial numbers for an inverter, "
-            "DC safety switch (SolarEdge), or Enphase IQ combiner box. "
-            "Verify: (1) Is a serial number visible? (2) Is it fully readable (not cut off or blurry)? "
+            "This photo should show serial numbers for an inverter, DC safety switch, or combiner box. "
+            "Verify: (1) Is a serial number present in the photo? (2) Can the serial number be identified? "
+            "PASS if a serial number is visible and can be read, even if zooming would help. "
             "Respond: PASS or FAIL, then one sentence explaining why."
         ),
     },
@@ -135,7 +135,7 @@ REQUIREMENTS = [
         "validation_prompt": (
             "This photo should show either (a) a string map with the MCI location marked, "
             "or (b) the MCI device installed on site. "
-            "Verify: (1) Is the MCI visible or labeled on a map? "
+            "Verify: Is the MCI visible or labeled on a map? "
             "Respond: PASS or FAIL, then one sentence explaining why."
         ),
     },
@@ -148,7 +148,8 @@ REQUIREMENTS = [
         "keywords": ["manufacturer labels", "module label", "panel label", "panel spec"],
         "validation_prompt": (
             "This photo should show the manufacturer label from a solar module/panel. "
-            "Verify: (1) Is a panel label visible? (2) Can make/model/specs be read? "
+            "Verify: (1) Is a panel label present? (2) Can make/model information be identified? "
+            "PASS if the label is visible, even if zooming would be needed to read fine print. "
             "Respond: PASS or FAIL, then one sentence explaining why."
         ),
     },
@@ -161,7 +162,9 @@ REQUIREMENTS = [
         "keywords": ["manufacturer labels", "module serial", "panel serial", "serial number"],
         "validation_prompt": (
             "This photo should show a serial number from a solar module installed on site. "
-            "Verify: (1) Is a serial number visible? (2) Is the full number readable? "
+            "Verify: (1) Is a serial number present in the photo? (2) Can the serial number be identified? "
+            "PASS if a serial number is visible, even if the photo angle or distance requires zooming to read it fully. "
+            "Only FAIL if no serial number can be found in the photo at all. "
             "Respond: PASS or FAIL, then one sentence explaining why."
         ),
     },
@@ -174,8 +177,9 @@ REQUIREMENTS = [
         "keywords": ["railing type", "roof penetration", "flashing", "sealant", "attachment"],
         "validation_prompt": (
             "This photo should show a close-up of a roof attachment point with flashing and/or sealant. "
-            "Verify: (1) Is sealant visible and properly applied? (2) Is flashing visible if applicable? "
-            "(3) Does the installation appear to follow manufacturer specs (no gaps, no excess)? "
+            "Verify: (1) Is a roof attachment point visible? (2) Is flashing or sealant present? "
+            "PASS if the photo documents the attachment point with flashing or sealant visible. "
+            "Do not judge installation quality — only verify the photo shows what is required. "
             "Respond: PASS or FAIL, then one sentence explaining why."
         ),
     },
@@ -187,10 +191,10 @@ REQUIREMENTS = [
         "task_titles": ["Racking Assembly + Grounding"],
         "keywords": ["racking assembly", "grounding", "rail", "EGC", "wire management", "clips"],
         "validation_prompt": (
-            "This photo should show a pullback view of a mounting plane with rail, attachments, "
-            "solar equipment, wire management clips, and the Equipment Grounding Conductor (EGC). "
-            "Verify: (1) Are wires secured with clips (not loose)? (2) Is a grounding conductor visible? "
-            "(3) Is all equipment visible in the frame? "
+            "This photo should show the racking assembly area including rail, attachments, and wire management. "
+            "Verify: (1) Is racking/rail visible? (2) Is wire management visible (clips, secured wires)? "
+            "PASS if the photo shows the racking area with wire management present. "
+            "A grounding conductor may not be clearly distinguishable at photo resolution — do not fail solely for that. "
             "Respond: PASS or FAIL, then one sentence explaining why."
         ),
     },
@@ -270,8 +274,9 @@ REQUIREMENTS = [
         "task_titles": ["Main Breaker"],
         "keywords": ["main breaker", "breaker rating", "ampere", "main disconnect"],
         "validation_prompt": (
-            "This photo should show the main breaker with its amperage rating clearly visible. "
-            "Verify: (1) Is the main breaker visible? (2) Is the amperage rating (e.g., 200A) clearly readable? "
+            "This photo should show the main breaker with its amperage rating. "
+            "Verify: (1) Is the main breaker visible? (2) Can the amperage rating be identified? "
+            "PASS if the main breaker is shown and the rating can be determined, even if zooming would help. "
             "Respond: PASS or FAIL, then one sentence explaining why."
         ),
     },
@@ -284,7 +289,8 @@ REQUIREMENTS = [
         "keywords": ["MSP label", "full bus bar", "all breakers", "busbar", "bus rating", "panel label"],
         "validation_prompt": (
             "This photo should show the main panel's busbar rating label/sticker. "
-            "Verify: (1) Is a panel label or sticker visible? (2) Is the busbar rating clearly readable? "
+            "Verify: (1) Is a panel label or sticker present? (2) Can the busbar rating be identified? "
+            "PASS if the label is visible, even if zooming would be needed. "
             "Respond: PASS or FAIL, then one sentence explaining why."
         ),
     },
@@ -296,10 +302,11 @@ REQUIREMENTS = [
         "task_titles": ["Backfeed Breaker", "Meter Enclosure"],
         "keywords": ["backfeed breaker", "meter enclosure", "POI", "IPC", "lug", "interconnection"],
         "validation_prompt": (
-            "This photo should show the point of interconnection — either a contextual/pullback view "
-            "or a close-up of IPCs, parallel lugs, distribution blocks, breakers, and wire terminations. "
-            "Verify: (1) Are the interconnection components visible? (2) Are terminations visible? "
-            "Both a pullback AND close-up are required — note if only one is present. "
+            "This photo should show the point of interconnection — a view of IPCs, parallel lugs, "
+            "distribution blocks, breakers, or wire terminations. "
+            "Verify: (1) Are interconnection components visible? (2) Can termination points be seen? "
+            "PASS if the photo documents the point of interconnection. A single well-framed photo showing "
+            "the components is sufficient — do not require both a pullback and close-up in one photo. "
             "Respond: PASS or FAIL, then one sentence explaining why."
         ),
     },
@@ -311,8 +318,10 @@ REQUIREMENTS = [
         "task_titles": ["Inverter Location & Wiring"],
         "keywords": ["inverter location & wiring", "BOS", "balance of system", "pullback"],
         "validation_prompt": (
-            "This photo should show a pullback view of all balance-of-system (BOS) equipment installed. "
-            "Verify: (1) Is the full BOS area visible? (2) Can all major equipment be identified in the frame? "
+            "This photo should show a pullback view of the balance-of-system (BOS) equipment area. "
+            "Verify: (1) Does the photo show the general BOS area? (2) Is equipment visible in the frame? "
+            "PASS if the photo provides context of where the BOS equipment is installed. "
+            "Do not require every individual component to be identifiable. "
             "Respond: PASS or FAIL, then one sentence explaining why."
         ),
     },
@@ -352,9 +361,9 @@ REQUIREMENTS = [
         "keywords": ["disconnect(s)", "fused disconnect", "AC disconnect", "fuse rating"],
         "optional": True,
         "validation_prompt": (
-            "This photo should show a fused AC disconnect with completed wiring, terminations, bonding, "
-            "and clearly legible fuse ratings. "
-            "Verify: (1) Is the disconnect wiring complete? (2) Are fuse ratings readable? "
+            "This photo should show a fused AC disconnect with wiring and fuse ratings. "
+            "Verify: (1) Is the disconnect visible with wiring? (2) Are fuse ratings present in the photo? "
+            "PASS if the disconnect is documented with fuses visible, even if zooming is needed to read ratings. "
             "Respond: PASS or FAIL, then one sentence explaining why."
         ),
     },
@@ -367,8 +376,9 @@ REQUIREMENTS = [
         "keywords": ["subpanel (if applicable)", "sub panel", "combiner panel", "breaker rating"],
         "optional": True,
         "validation_prompt": (
-            "This photo should show a sub panel fully wired with legible breaker ratings and bus rating label. "
-            "Verify: (1) Is the panel fully wired? (2) Are breaker ratings readable? (3) Is the bus rating label readable? "
+            "This photo should show a sub panel with wiring, breakers, and bus rating label. "
+            "Verify: (1) Is the sub panel visible with wiring? (2) Are breakers present? "
+            "PASS if the sub panel is documented showing its wiring and breakers. "
             "Respond: PASS or FAIL, then one sentence explaining why."
         ),
     },
@@ -421,9 +431,10 @@ REQUIREMENTS = [
         "task_titles": ["Battery Location", "Mounting Bracket Installation"],
         "keywords": ["battery location", "mounting bracket installation", "battery BOS", "storage install"],
         "validation_prompt": (
-            "This photo should show a pullback of the battery installation with the cover off, "
-            "showing the battery in context of the full BOS equipment. "
-            "Verify: (1) Is the battery cover off? (2) Is the battery visible in context of surrounding equipment? "
+            "This photo should show a pullback of the battery installation area showing the battery "
+            "in context of the surrounding equipment. "
+            "Verify: (1) Is a battery/storage unit visible? (2) Is surrounding equipment context shown? "
+            "PASS if the photo shows the battery install location with context. "
             "Respond: PASS or FAIL, then one sentence explaining why."
         ),
     },
@@ -491,9 +502,10 @@ REQUIREMENTS = [
         "task_titles": ["Inverter label", "Domestic Content"],
         "keywords": ["domestic content", "inverter label", "serial number", "IQ combiner serial"],
         "validation_prompt": (
-            "This photo should show clearly legible serial numbers for the inverter (SolarEdge or other) "
-            "or Enphase IQ combiner box — required for incentive state projects. "
-            "Verify: (1) Is a serial number visible? (2) Is the full number readable? "
+            "This photo should show serial numbers for the inverter or combiner box — "
+            "required for incentive state projects. "
+            "Verify: (1) Is a serial number present in the photo? (2) Can the serial number be identified? "
+            "PASS if a serial number is visible, even if zooming would be needed. "
             "Respond: PASS or FAIL, then one sentence explaining why."
         ),
     },
@@ -766,7 +778,7 @@ def find_candidate_photos(requirement: dict, photos: list, checklist_tasks: list
 
 
 def get_photo_web_url(photo: dict) -> Optional[str]:
-    """Extract a usable image URL from either photo format.
+    """Extract the best quality image URL for validation (original > web > thumbnail).
 
     Checklist task photos: flat {"url": "...", "creator": "...", "uploaded_at": "..."}
     Project-level photos:  {"uris": [{"type": "web", "url": "..."}, ...], "id": "...", ...}
@@ -774,9 +786,9 @@ def get_photo_web_url(photo: dict) -> Optional[str]:
     # Checklist task photo format
     if "url" in photo and "uris" not in photo:
         return photo["url"]
-    # Project-level photo format
+    # Project-level photo format — prefer original for best accuracy
     uris = photo.get("uris", [])
-    for uri_type in ["web", "original", "thumbnail"]:
+    for uri_type in ["original", "web", "thumbnail"]:
         for uri in uris:
             if uri.get("type") == uri_type:
                 return uri.get("url")
