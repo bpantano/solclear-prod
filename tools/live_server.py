@@ -353,6 +353,21 @@ class LiveHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _serve_favicon(self):
+        """Serve the Solclear mark as a favicon."""
+        svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">
+<circle cx="60" cy="54" r="14" fill="#F59E0B"/>
+<path d="M24 92 A 36 36 0 0 1 96 92" fill="none" stroke="#0F172A" stroke-width="8" stroke-linecap="round"/>
+</svg>"""
+        body = svg.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "image/svg+xml")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=604800")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
     def _serve_login_page(self):
         body = LOGIN_HTML.encode()
         self.send_response(200)
@@ -370,6 +385,10 @@ class LiveHandler(BaseHTTPRequestHandler):
         # Public routes (no auth required)
         if path == "/logo.svg":
             self._serve_logo_svg()
+            return
+        if path == "/favicon.svg" or path == "/favicon.ico":
+            self._serve_favicon()
+            return
             return
         if path == "/login":
             self._serve_login_page()

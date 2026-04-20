@@ -10,6 +10,7 @@ LOGIN_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>Solclear — Sign In</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -175,6 +176,7 @@ FORGOT_PASSWORD_HTML = f"""<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>Solclear — Forgot Password</title>
   <style>{_AUTH_PAGE_STYLE}</style>
 </head>
@@ -229,6 +231,7 @@ RESET_PASSWORD_HTML = f"""<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>Solclear — Reset Password</title>
   <style>{_AUTH_PAGE_STYLE}</style>
 </head>
@@ -293,6 +296,7 @@ CHANGE_PASSWORD_HTML = f"""<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>Solclear — Change Password</title>
   <style>{_AUTH_PAGE_STYLE}</style>
 </head>
@@ -357,6 +361,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>Solclear Compliance</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
