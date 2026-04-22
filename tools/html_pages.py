@@ -78,6 +78,10 @@ LOGIN_HTML = """<!DOCTYPE html>
       <button class="login-btn" type="submit" id="loginBtn">Sign In</button>
     </form>
     <div style="margin-top:16px;"><a href="/forgot-password" style="color:#3b82f6;text-decoration:none;font-size:13px;">Forgot password?</a></div>
+    <div style="margin-top:24px;padding-top:16px;border-top:1px solid #334155;">
+      <div style="font-size:12px;color:#64748b;margin-bottom:6px;">Don't have an account?</div>
+      <a href="/request-demo" style="color:#F59E0B;text-decoration:none;font-size:14px;font-weight:600;">Request a Demo &rarr;</a>
+    </div>
   </div>
   <div class="login-footer">&copy; 2026 Solclear. All rights reserved.</div>
 
@@ -374,6 +378,82 @@ CHANGE_PASSWORD_HTML = f"""<!DOCTYPE html>
       }} catch (ex) {{ err.textContent = 'Connection error'; err.style.display = 'block'; }}
       btn.disabled = false; btn.textContent = 'Change Password';
     }}
+  </script>
+</body>
+</html>"""
+
+# ── Request Demo HTML ─────────────────────────────────────────────────────────
+
+REQUEST_DEMO_HTML = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta property="og:title" content="Solclear">
+  <meta property="og:description" content="Solar installation compliance, simplified.">
+  <meta property="og:image" content="https://app.solclear.co/og-image.svg">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://app.solclear.co">
+  <meta name="twitter:card" content="summary">
+  <title>Solclear — Request a Demo</title>
+  <style>{_AUTH_PAGE_STYLE}
+    .card {{{{ max-width: 440px; }}}}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">{_AUTH_PAGE_LOGO}</div>
+    <div class="title">Request a Demo</div>
+    <div class="sub">See how Solclear can streamline your solar compliance workflow.</div>
+    <div class="error" id="errMsg"></div>
+    <div class="success" id="okMsg"></div>
+    <form onsubmit="doRequest(event)" id="demoForm">
+      <input class="input" id="demoName" type="text" placeholder="Your name" required>
+      <input class="input" id="demoEmail" type="email" placeholder="Email address" required>
+      <input class="input" id="demoCompany" type="text" placeholder="Company name (optional)">
+      <textarea class="input" id="demoMessage" rows="3" placeholder="Tell us about your needs (optional)" style="resize:vertical;font-family:inherit;"></textarea>
+      <button class="btn" type="submit" id="demoBtn">Request Demo</button>
+    </form>
+    <div id="successMsg" style="display:none;margin-top:16px;">
+      <a class="link" href="/login">&larr; Back to sign in</a>
+    </div>
+    <div id="backLink" style="margin-top:16px;"><a class="link" href="/login">&larr; Back to sign in</a></div>
+  </div>
+  <div class="footer">&copy; 2026 Solclear. All rights reserved.</div>
+  <script>
+    async function doRequest(e) {{{{
+      e.preventDefault();
+      const btn = document.getElementById('demoBtn');
+      const err = document.getElementById('errMsg');
+      const ok = document.getElementById('okMsg');
+      btn.disabled = true; btn.textContent = 'Sending...';
+      err.style.display = 'none'; ok.style.display = 'none';
+      try {{{{
+        const r = await fetch('/api/request-demo', {{{{
+          method: 'POST', credentials: 'same-origin',
+          headers: {{{{'Content-Type': 'application/json'}}}},
+          body: JSON.stringify({{{{
+            name: document.getElementById('demoName').value.trim(),
+            email: document.getElementById('demoEmail').value.trim(),
+            company: document.getElementById('demoCompany').value.trim(),
+            message: document.getElementById('demoMessage').value.trim(),
+          }}}})
+        }}}});
+        const data = await r.json();
+        if (data.ok) {{{{
+          ok.textContent = data.message;
+          ok.style.display = 'block';
+          document.getElementById('demoForm').style.display = 'none';
+          document.getElementById('backLink').style.display = 'none';
+          document.getElementById('successMsg').style.display = 'block';
+        }}}} else {{{{
+          err.textContent = data.error || 'Something went wrong';
+          err.style.display = 'block';
+        }}}}
+      }}}} catch (ex) {{{{ err.textContent = 'Connection error'; err.style.display = 'block'; }}}}
+      btn.disabled = false; btn.textContent = 'Request Demo';
+    }}}}
   </script>
 </body>
 </html>"""

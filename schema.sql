@@ -211,3 +211,15 @@ CREATE TABLE requirement_snapshots (
     content_text    TEXT NOT NULL,
     checked_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- ── Leads ────────────────────────────────────────────────────────────────────
+-- Demo request form submissions.
+
+CREATE TABLE leads (
+    id              SERIAL PRIMARY KEY,
+    name            TEXT NOT NULL,
+    email           TEXT NOT NULL,
+    company         TEXT,
+    message         TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

@@ -419,6 +419,9 @@ class LiveHandler(BaseHTTPRequestHandler):
         if path == "/forgot-password":
             self._serve_forgot_password_page()
             return
+        if path == "/request-demo":
+            self._serve_request_demo_page()
+            return
         if path == "/reset-password":
             self._serve_reset_password_page(qs)
             return
@@ -506,6 +509,9 @@ class LiveHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/reset-password":
             self._api_reset_password(body)
+            return
+        if path == "/api/request-demo":
+            self._api_request_demo(body)
             return
 
         # All other POSTs require auth
@@ -829,6 +835,62 @@ class LiveHandler(BaseHTTPRequestHandler):
 
     def _serve_change_password_page(self):
         body = CHANGE_PASSWORD_HTML.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _api_request_demo(self, body):
+        """Handle demo request form submission — save to DB and send notification email."""
+        try:
+            data = json.loads(body)
+            name = (data.get("name") or "").strip()
+            email = (data.get("email") or "").strip()
+            company = (data.get("company") or "").strip()
+            message = (data.get("message") or "").strip()
+            if not name or not email:
+                self._send_json({"error": "Name and email are required"}, 400)
+                return
+            # Save to DB
+            execute(
+                "INSERT INTO leads (name, email, company, message) VALUES (%s, %s, %s, %s)",
+                (name, email, company or None, message or None)
+            )
+            # Send notification email via Resend
+            try:
+                resend_key = os.getenv("RESEND_API_KEY")
+                if resend_key:
+                    import requests as req_lib
+                    req_lib.post(
+                        "https://api.resend.com/emails",
+                        headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
+                        json={
+                            "from": "inquiries@solclear.co",
+                            "to": [os.getenv("DEMO_NOTIFY_EMAIL", "bap.builds@gmail.com")],
+                            "reply_to": email,
+                            "subject": f"Demo Request: {company or name}",
+                            "html": (
+                                '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px;">'
+                                f'<h2 style="font-size:18px;color:#1a1a2e;">New Demo Request</h2>'
+                                f'<p><strong>Name:</strong> {name}</p>'
+                                f'<p><strong>Email:</strong> <a href="mailto:{email}">{email}</a></p>'
+                                f'<p><strong>Company:</strong> {company or "Not provided"}</p>'
+                                f'<p><strong>Message:</strong> {message or "No message"}</p>'
+                                '</div>'
+                            ),
+                        },
+                        timeout=10,
+                    )
+            except Exception as e:
+                print(f"WARNING: Could not send demo request notification: {e}", file=sys.stderr)
+            self._send_json({"ok": True, "message": "Thank you! We'll be in touch shortly."})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_request_demo_page(self):
+        body = REQUEST_DEMO_HTML.encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -1545,7 +1607,7 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 # ── HTML templates (extracted to html_pages.py) ──────────────────────────────
 from tools.html_pages import (
     LOGIN_HTML, FORGOT_PASSWORD_HTML, RESET_PASSWORD_HTML,
-    CHANGE_PASSWORD_HTML, EMBEDDED_HTML,
+    CHANGE_PASSWORD_HTML, REQUEST_DEMO_HTML, EMBEDDED_HTML,
 )
 
 
