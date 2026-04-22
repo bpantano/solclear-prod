@@ -218,7 +218,8 @@ CREATE TABLE requirement_snapshots (
 CREATE TABLE leads (
     id              SERIAL PRIMARY KEY,
     name            TEXT NOT NULL,
-    email           TEXT NOT NULL,
+    email           TEXT,
+    phone           TEXT,
     company         TEXT,
     message         TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()

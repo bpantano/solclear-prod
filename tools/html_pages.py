@@ -409,9 +409,10 @@ REQUEST_DEMO_HTML = ("""<!DOCTYPE html>
     <div class="error" id="errMsg"></div>
     <div class="success" id="okMsg"></div>
     <form onsubmit="doRequest(event)" id="demoForm">
-      <input class="input" id="demoName" type="text" placeholder="Your name" required>
-      <input class="input" id="demoEmail" type="email" placeholder="Email address" required>
+      <input class="input" id="demoName" type="text" placeholder="Your name *" required>
+      <input class="input" id="demoEmail" type="email" placeholder="Email address">
       <input class="input" id="demoCompany" type="text" placeholder="Company name (optional)">
+      <input class="input" id="demoPhone" type="tel" placeholder="Phone number">
       <textarea class="input" id="demoMessage" rows="3" placeholder="Tell us about your needs (optional)" style="resize:vertical;font-family:inherit;"></textarea>
       <button class="btn" type="submit" id="demoBtn">Request Demo</button>
     </form>
@@ -427,6 +428,13 @@ REQUEST_DEMO_HTML = ("""<!DOCTYPE html>
       const btn = document.getElementById('demoBtn');
       const err = document.getElementById('errMsg');
       const ok = document.getElementById('okMsg');
+      const email = document.getElementById('demoEmail').value.trim();
+      const phone = document.getElementById('demoPhone').value.trim();
+      if (!email && !phone) {
+        err.textContent = 'Please provide either an email address or phone number.';
+        err.style.display = 'block';
+        return;
+      }
       btn.disabled = true; btn.textContent = 'Sending...';
       err.style.display = 'none'; ok.style.display = 'none';
       try {
@@ -435,7 +443,8 @@ REQUEST_DEMO_HTML = ("""<!DOCTYPE html>
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
             name: document.getElementById('demoName').value.trim(),
-            email: document.getElementById('demoEmail').value.trim(),
+            email: email,
+            phone: phone,
             company: document.getElementById('demoCompany').value.trim(),
             message: document.getElementById('demoMessage').value.trim(),
           })

@@ -848,15 +848,19 @@ class LiveHandler(BaseHTTPRequestHandler):
             data = json.loads(body)
             name = (data.get("name") or "").strip()
             email = (data.get("email") or "").strip()
+            phone = (data.get("phone") or "").strip()
             company = (data.get("company") or "").strip()
             message = (data.get("message") or "").strip()
-            if not name or not email:
-                self._send_json({"error": "Name and email are required"}, 400)
+            if not name:
+                self._send_json({"error": "Name is required"}, 400)
+                return
+            if not email and not phone:
+                self._send_json({"error": "Please provide either an email or phone number"}, 400)
                 return
             # Save to DB
             execute(
-                "INSERT INTO leads (name, email, company, message) VALUES (%s, %s, %s, %s)",
-                (name, email, company or None, message or None)
+                "INSERT INTO leads (name, email, phone, company, message) VALUES (%s, %s, %s, %s, %s)",
+                (name, email or None, phone or None, company or None, message or None)
             )
             # Send notification email via Resend
             try:
@@ -869,13 +873,14 @@ class LiveHandler(BaseHTTPRequestHandler):
                         json={
                             "from": "inquiries@solclear.co",
                             "to": [os.getenv("DEMO_NOTIFY_EMAIL", "bap.builds@gmail.com")],
-                            "reply_to": email,
+                            **({"reply_to": email} if email else {}),
                             "subject": f"Demo Request: {company or name}",
                             "html": (
                                 '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px;">'
                                 f'<h2 style="font-size:18px;color:#1a1a2e;">New Demo Request</h2>'
                                 f'<p><strong>Name:</strong> {name}</p>'
-                                f'<p><strong>Email:</strong> <a href="mailto:{email}">{email}</a></p>'
+                                f'<p><strong>Email:</strong> {("<a href=mailto:" + email + ">" + email + "</a>") if email else "Not provided"}</p>'
+                                f'<p><strong>Phone:</strong> {phone or "Not provided"}</p>'
                                 f'<p><strong>Company:</strong> {company or "Not provided"}</p>'
                                 f'<p><strong>Message:</strong> {message or "No message"}</p>'
                                 '</div>'
