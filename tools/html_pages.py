@@ -10,6 +10,12 @@ LOGIN_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta property="og:title" content="Solclear">
+  <meta property="og:description" content="Solar installation compliance, simplified.">
+  <meta property="og:image" content="https://app.solclear.co/og-image.svg">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://app.solclear.co">
+  <meta name="twitter:card" content="summary">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>Solclear — Sign In</title>
   <style>
@@ -176,6 +182,12 @@ FORGOT_PASSWORD_HTML = f"""<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta property="og:title" content="Solclear">
+  <meta property="og:description" content="Solar installation compliance, simplified.">
+  <meta property="og:image" content="https://app.solclear.co/og-image.svg">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://app.solclear.co">
+  <meta name="twitter:card" content="summary">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>Solclear — Forgot Password</title>
   <style>{_AUTH_PAGE_STYLE}</style>
@@ -231,6 +243,12 @@ RESET_PASSWORD_HTML = f"""<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta property="og:title" content="Solclear">
+  <meta property="og:description" content="Solar installation compliance, simplified.">
+  <meta property="og:image" content="https://app.solclear.co/og-image.svg">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://app.solclear.co">
+  <meta name="twitter:card" content="summary">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>Solclear — Reset Password</title>
   <style>{_AUTH_PAGE_STYLE}</style>
@@ -296,6 +314,12 @@ CHANGE_PASSWORD_HTML = f"""<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta property="og:title" content="Solclear">
+  <meta property="og:description" content="Solar installation compliance, simplified.">
+  <meta property="og:image" content="https://app.solclear.co/og-image.svg">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://app.solclear.co">
+  <meta name="twitter:card" content="summary">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>Solclear — Change Password</title>
   <style>{_AUTH_PAGE_STYLE}</style>
@@ -361,6 +385,12 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta property="og:title" content="Solclear">
+  <meta property="og:description" content="Solar installation compliance, simplified.">
+  <meta property="og:image" content="https://app.solclear.co/og-image.svg">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://app.solclear.co">
+  <meta name="twitter:card" content="summary">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>Solclear Compliance</title>
   <style>

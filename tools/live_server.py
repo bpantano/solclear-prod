@@ -353,6 +353,26 @@ class LiveHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _serve_og_image(self):
+        """Serve an OG preview image for link sharing (iMessage, Slack, etc.)."""
+        svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+<rect width="1200" height="630" fill="#0f172a"/>
+<g transform="translate(440,180)">
+  <circle cx="60" cy="54" r="22" fill="#F59E0B"/>
+  <path d="M14 100 A 46 46 0 0 1 106 100" fill="none" stroke="#e2e8f0" stroke-width="10" stroke-linecap="round"/>
+</g>
+<text x="600" y="340" text-anchor="middle" font-family="Inter,Helvetica,Arial,sans-serif" font-weight="600" font-size="72" fill="#e2e8f0" letter-spacing="-2">solclear</text>
+<text x="600" y="400" text-anchor="middle" font-family="Inter,Helvetica,Arial,sans-serif" font-size="28" fill="#64748b">Solar compliance, simplified.</text>
+</svg>"""
+        body = svg.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "image/svg+xml")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=604800")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
     def _serve_favicon(self):
         """Serve the Solclear mark as a favicon."""
         svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">
@@ -388,6 +408,9 @@ class LiveHandler(BaseHTTPRequestHandler):
             return
         if path == "/favicon.svg" or path == "/favicon.ico":
             self._serve_favicon()
+            return
+        if path == "/og-image.svg":
+            self._serve_og_image()
             return
             return
         if path == "/login":
