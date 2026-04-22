@@ -384,7 +384,7 @@ CHANGE_PASSWORD_HTML = f"""<!DOCTYPE html>
 
 # ── Request Demo HTML ─────────────────────────────────────────────────────────
 
-REQUEST_DEMO_HTML = f"""<!DOCTYPE html>
+REQUEST_DEMO_HTML = ("""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -397,13 +397,13 @@ REQUEST_DEMO_HTML = f"""<!DOCTYPE html>
   <meta property="og:url" content="https://app.solclear.co">
   <meta name="twitter:card" content="summary">
   <title>Solclear — Request a Demo</title>
-  <style>{_AUTH_PAGE_STYLE}
-    .card {{{{ max-width: 440px; }}}}
+  <style>%%STYLE%%
+    .card { max-width: 440px; }
   </style>
 </head>
 <body>
   <div class="card">
-    <div class="logo">{_AUTH_PAGE_LOGO}</div>
+    <div class="logo">%%LOGO%%</div>
     <div class="title">Request a Demo</div>
     <div class="sub">See how Solclear can streamline your solar compliance workflow.</div>
     <div class="error" id="errMsg"></div>
@@ -422,41 +422,41 @@ REQUEST_DEMO_HTML = f"""<!DOCTYPE html>
   </div>
   <div class="footer">&copy; 2026 Solclear. All rights reserved.</div>
   <script>
-    async function doRequest(e) {{{{
+    async function doRequest(e) {
       e.preventDefault();
       const btn = document.getElementById('demoBtn');
       const err = document.getElementById('errMsg');
       const ok = document.getElementById('okMsg');
       btn.disabled = true; btn.textContent = 'Sending...';
       err.style.display = 'none'; ok.style.display = 'none';
-      try {{{{
-        const r = await fetch('/api/request-demo', {{{{
+      try {
+        const r = await fetch('/api/request-demo', {
           method: 'POST', credentials: 'same-origin',
-          headers: {{{{'Content-Type': 'application/json'}}}},
-          body: JSON.stringify({{{{
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
             name: document.getElementById('demoName').value.trim(),
             email: document.getElementById('demoEmail').value.trim(),
             company: document.getElementById('demoCompany').value.trim(),
             message: document.getElementById('demoMessage').value.trim(),
-          }}}})
-        }}}});
+          })
+        });
         const data = await r.json();
-        if (data.ok) {{{{
+        if (data.ok) {
           ok.textContent = data.message;
           ok.style.display = 'block';
           document.getElementById('demoForm').style.display = 'none';
           document.getElementById('backLink').style.display = 'none';
           document.getElementById('successMsg').style.display = 'block';
-        }}}} else {{{{
+        } else {
           err.textContent = data.error || 'Something went wrong';
           err.style.display = 'block';
-        }}}}
-      }}}} catch (ex) {{{{ err.textContent = 'Connection error'; err.style.display = 'block'; }}}}
+        }
+      } catch (ex) { err.textContent = 'Connection error'; err.style.display = 'block'; }
       btn.disabled = false; btn.textContent = 'Request Demo';
-    }}}}
+    }
   </script>
 </body>
-</html>"""
+</html>""").replace("%%STYLE%%", _AUTH_PAGE_STYLE).replace("%%LOGO%%", _AUTH_PAGE_LOGO)
 
 # ── Embedded HTML ─────────────────────────────────────────────────────────────
 
