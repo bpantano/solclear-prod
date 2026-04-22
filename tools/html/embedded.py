@@ -680,6 +680,10 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2h11"/></svg>
       Requirements
     </button>
+    <button class="nav-item superadmin-only" data-nav="costs" onclick="navigate('costs')" style="display:none;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+      Costs
+    </button>
 
     <div class="sidebar-footer">
       <button class="nav-item" onclick="toggleTheme()" id="sidebarThemeBtn">
@@ -881,7 +885,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
   <div id="adminOrgs" class="step">
     <button class="back-btn" onclick="showStep('home')">&larr; Back to home</button>
     <div class="step-label">Organizations</div>
-    <button class="run-btn" onclick="showCreateOrg()" style="margin-bottom:16px;background:#3b82f6;">+ Create Organization</button>
+    <button class="run-btn superadmin-only" onclick="showCreateOrg()" style="margin-bottom:16px;background:var(--accent);display:none;">+ Create Organization</button>
     <div id="orgsList"></div>
   </div>
 
@@ -1085,6 +1089,33 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- Cost dashboard (superadmin only) -->
+  <div id="adminCosts" class="step">
+    <button class="back-btn" onclick="showStep('home')">&larr; Back to home</button>
+    <div class="step-label">API Cost Dashboard</div>
+
+    <!-- Filter bar -->
+    <div class="filter-bar" style="margin-bottom:12px;">
+      <select id="costOrgFilter" class="filter-select" onchange="loadCosts()">
+        <option value="">All organizations</option>
+      </select>
+      <select id="costUserFilter" class="filter-select" onchange="loadCosts()">
+        <option value="">All users</option>
+      </select>
+    </div>
+    <div class="filter-bar" style="margin-bottom:16px;">
+      <div class="filter-range">
+        <input type="date" id="costDateFrom" onchange="loadCosts()" placeholder="From">
+        <span class="sep">to</span>
+        <input type="date" id="costDateTo" onchange="loadCosts()" placeholder="To">
+      </div>
+      <button class="btn btn-subtle btn-sm" onclick="clearCostFilters()">Clear filters</button>
+    </div>
+
+    <div id="costSummary" style="margin-top:4px;"></div>
+    <div id="costBody" style="margin-top:16px;"></div>
+  </div>
+
   </main>
 
   <!-- Mobile bottom tab bar (<1024px) -->
@@ -1119,6 +1150,10 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <button class="nav-item" onclick="closeAccountSheet();navigate('reqs')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2h11"/></svg>
       Requirements
+    </button>
+    <button class="nav-item superadmin-only" onclick="closeAccountSheet();navigate('costs')" style="display:none;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+      Costs
     </button>
     <div class="sidebar-section-label">Account</div>
     <a class="nav-item" href="/change-password" style="text-decoration:none;">
@@ -1191,8 +1226,9 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       1: 'check', 2: 'check', 3: 'check', 4: 'check',
       'orgs': 'orgs', 'orgCreate': 'orgs', 'orgDetail': 'orgs', 'userDetail': 'orgs',
       'reqs': 'reqs', 'reqDetail': 'reqs',
+      'costs': 'costs',
     };
-    const NAV_TO_TAB = { home: 'home', check: 'check', reports: 'reports', orgs: 'account', reqs: 'account' };
+    const NAV_TO_TAB = { home: 'home', check: 'check', reports: 'reports', orgs: 'account', reqs: 'account', costs: 'account' };
 
     function setActiveTab(navKey) {
       document.querySelectorAll('.nav-item[data-nav]').forEach(el =>
@@ -1253,6 +1289,11 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         document.getElementById('adminUserDetail').classList.add('active');
         return;
       }
+      if (n === 'costs') {
+        document.getElementById('adminCosts').classList.add('active');
+        loadCosts();
+        return;
+      }
       document.getElementById('step' + n).classList.add('active');
       if (n === 1 && !projectsLoaded) loadRecentProjects();
     }
@@ -1289,12 +1330,15 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         const r = await fetch('/api/organizations');
         const orgs = await r.json();
         if (!orgs.length) {
-          list.innerHTML = emptyState(
-            'No organizations yet',
-            'Create your first organization to onboard a client.',
-            'Create Organization',
-            'showCreateOrg()'
-          );
+          // Only show the "Create" CTA to superadmins — org admins can't
+          // spawn new orgs anyway.
+          const isSuper = _me && _me.role === 'superadmin';
+          list.innerHTML = isSuper
+            ? emptyState('No organizations yet',
+                         'Create your first organization to onboard a client.',
+                         'Create Organization', 'showCreateOrg()')
+            : emptyState('No organization found',
+                         'Your account is not linked to an organization yet. Ask a superadmin to set it up.');
           return;
         }
         list.innerHTML = orgs.map(o => {
@@ -2341,6 +2385,209 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           '</div></div>';
       }
       return s;
+    }
+
+    // ── Current user (role-aware nav) ──
+    let _me = null;
+    async function loadMe() {
+      try {
+        const r = await fetch('/api/me');
+        if (!r.ok) return;
+        _me = await r.json();
+        // Reveal superadmin-only nav items
+        if (_me && _me.role === 'superadmin') {
+          document.querySelectorAll('.superadmin-only').forEach(el => {
+            el.style.display = '';
+          });
+        }
+      } catch (e) { /* silently ignore — non-critical */ }
+    }
+    loadMe();
+
+    // ── Cost dashboard ──
+    function _fmtUSD(n) {
+      if (n == null) return '—';
+      if (n >= 1) return '$' + n.toFixed(2);
+      if (n >= 0.01) return '$' + n.toFixed(3);
+      return '$' + n.toFixed(4);
+    }
+    function _fmtDate(iso) {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      return d.toLocaleDateString('en-US', {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
+    }
+    function _fmtDay(iso) {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      return d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+    }
+
+    let _costFilterOptionsLoaded = false;
+    async function loadCostFilterOptions() {
+      if (_costFilterOptionsLoaded) return;
+      try {
+        const r = await fetch('/api/admin/cost/filter-options');
+        if (!r.ok) return;
+        const data = await r.json();
+        const orgSel = document.getElementById('costOrgFilter');
+        const userSel = document.getElementById('costUserFilter');
+        // Preserve the "All" option and append DB rows
+        orgSel.innerHTML = '<option value="">All organizations</option>' +
+          (data.orgs || []).map(o => '<option value="' + o.id + '">' + esc(o.name) + '</option>').join('');
+        userSel.innerHTML = '<option value="">All users</option>' +
+          (data.users || []).map(u => {
+            const label = u.full_name || u.email || ('user ' + u.id);
+            return '<option value="' + u.id + '">' + esc(label) + '</option>';
+          }).join('');
+        _costFilterOptionsLoaded = true;
+      } catch (e) { /* non-fatal — dropdowns just stay empty */ }
+    }
+
+    function _costFilterQuery() {
+      const org = document.getElementById('costOrgFilter').value;
+      const user = document.getElementById('costUserFilter').value;
+      const from = document.getElementById('costDateFrom').value;
+      const to = document.getElementById('costDateTo').value;
+      const params = new URLSearchParams();
+      if (org) params.set('org_id', org);
+      if (user) params.set('user_id', user);
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+      const qs = params.toString();
+      return qs ? ('?' + qs) : '';
+    }
+
+    function clearCostFilters() {
+      document.getElementById('costOrgFilter').value = '';
+      document.getElementById('costUserFilter').value = '';
+      document.getElementById('costDateFrom').value = '';
+      document.getElementById('costDateTo').value = '';
+      loadCosts();
+    }
+
+    async function loadCosts() {
+      const summary = document.getElementById('costSummary');
+      const body = document.getElementById('costBody');
+      summary.innerHTML = spinnerHtml('Loading cost data...');
+      body.innerHTML = '';
+      await loadCostFilterOptions();
+      try {
+        const r = await fetch('/api/admin/cost/summary' + _costFilterQuery());
+        if (r.status === 403) {
+          summary.innerHTML = errorAlert('Superadmin access required.');
+          return;
+        }
+        if (!r.ok) throw new Error('Request failed');
+        const data = await r.json();
+        summary.innerHTML = renderCostSummary(data.totals);
+        body.innerHTML =
+          renderCostSection('Most expensive reports', renderTopReports(data.top_reports)) +
+          renderCostSection('Most expensive requirements', renderTopRequirements(data.top_requirements)) +
+          renderCostSection('Spend by day (last 30)', renderDailyTrend(data.daily_last_30)) +
+          renderCostSection('Recent API calls', renderRecentCalls(data.recent_calls));
+      } catch (e) {
+        summary.innerHTML = errorAlert('Could not load cost data: ' + e.message);
+      }
+    }
+
+    function renderCostSummary(t) {
+      const cards = [
+        {label: 'All time', value: _fmtUSD(t && t.all_time)},
+        {label: 'This month', value: _fmtUSD(t && t.this_month)},
+        {label: 'Today', value: _fmtUSD(t && t.today)},
+        {label: 'API calls (all time)', value: (t && t.call_count != null) ? t.call_count.toLocaleString() : '—'},
+      ];
+      return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;">' +
+        cards.map(c =>
+          '<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;box-shadow:var(--shadow-sm);">' +
+          '<div style="font-size:var(--text-xs);color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:600;">' + c.label + '</div>' +
+          '<div style="font-size:var(--text-xl);font-weight:700;color:var(--text);margin-top:4px;">' + c.value + '</div>' +
+          '</div>'
+        ).join('') + '</div>';
+    }
+
+    function renderCostSection(title, inner) {
+      return '<div style="margin-top:20px;">' +
+        '<div style="font-size:var(--text-xs);text-transform:uppercase;letter-spacing:0.1em;color:var(--text-muted);font-weight:600;padding:8px 0;border-bottom:2px solid var(--border);margin-bottom:10px;">' + esc(title) + '</div>' +
+        inner + '</div>';
+    }
+
+    function renderTopReports(rows) {
+      if (!rows || !rows.length) return '<div style="color:var(--text-muted);font-size:var(--text-sm);">No cost data recorded yet.</div>';
+      return '<div class="table-scroll"><table style="width:100%;border-collapse:collapse;font-size:var(--text-sm);">' +
+        '<thead><tr><th style="text-align:left;padding:8px 6px;color:var(--text-muted);font-weight:600;">Project</th>' +
+        '<th style="text-align:right;padding:8px 6px;color:var(--text-muted);font-weight:600;">Cost</th>' +
+        '<th style="text-align:right;padding:8px 6px;color:var(--text-muted);font-weight:600;">Calls</th>' +
+        '<th style="text-align:left;padding:8px 6px;color:var(--text-muted);font-weight:600;">Completed</th></tr></thead><tbody>' +
+        rows.map(r =>
+          '<tr style="border-top:1px solid var(--border-light);">' +
+          '<td style="padding:8px 6px;"><a href="/report/' + r.report_id + '" style="color:var(--accent);text-decoration:none;">' + esc(r.project_name) + '</a>' +
+          (r.is_test ? ' <span class="badge badge-info" style="margin-left:4px;">TEST</span>' : '') + '</td>' +
+          '<td style="padding:8px 6px;text-align:right;font-weight:600;">' + _fmtUSD(r.cost_usd) + '</td>' +
+          '<td style="padding:8px 6px;text-align:right;color:var(--text-muted);">' + r.call_count + '</td>' +
+          '<td style="padding:8px 6px;color:var(--text-muted);">' + _fmtDate(r.completed_at) + '</td>' +
+          '</tr>'
+        ).join('') + '</tbody></table></div>';
+    }
+
+    function renderTopRequirements(rows) {
+      if (!rows || !rows.length) return '<div style="color:var(--text-muted);font-size:var(--text-sm);">No cost data recorded yet.</div>';
+      return '<div class="table-scroll"><table style="width:100%;border-collapse:collapse;font-size:var(--text-sm);">' +
+        '<thead><tr><th style="text-align:left;padding:8px 6px;color:var(--text-muted);font-weight:600;">Requirement</th>' +
+        '<th style="text-align:right;padding:8px 6px;color:var(--text-muted);font-weight:600;">Total</th>' +
+        '<th style="text-align:right;padding:8px 6px;color:var(--text-muted);font-weight:600;">Avg</th>' +
+        '<th style="text-align:right;padding:8px 6px;color:var(--text-muted);font-weight:600;">Max</th>' +
+        '<th style="text-align:right;padding:8px 6px;color:var(--text-muted);font-weight:600;">Calls</th></tr></thead><tbody>' +
+        rows.map(r =>
+          '<tr style="border-top:1px solid var(--border-light);">' +
+          '<td style="padding:8px 6px;font-weight:600;">' + esc(r.requirement_code) + '</td>' +
+          '<td style="padding:8px 6px;text-align:right;font-weight:600;">' + _fmtUSD(r.total_cost) + '</td>' +
+          '<td style="padding:8px 6px;text-align:right;color:var(--text-muted);">' + _fmtUSD(r.avg_cost) + '</td>' +
+          '<td style="padding:8px 6px;text-align:right;color:var(--text-muted);">' + _fmtUSD(r.max_cost) + '</td>' +
+          '<td style="padding:8px 6px;text-align:right;color:var(--text-muted);">' + r.call_count + '</td>' +
+          '</tr>'
+        ).join('') + '</tbody></table></div>';
+    }
+
+    function renderDailyTrend(rows) {
+      if (!rows || !rows.length) return '<div style="color:var(--text-muted);font-size:var(--text-sm);">No calls in the last 30 days.</div>';
+      // Compute a max for bar scaling
+      const max = rows.reduce((m, r) => Math.max(m, r.cost_usd || 0), 0.0001);
+      return '<div style="display:flex;flex-direction:column;gap:4px;">' +
+        rows.map(r => {
+          const pct = (r.cost_usd / max) * 100;
+          return '<div style="display:flex;align-items:center;gap:10px;font-size:var(--text-xs);">' +
+            '<div style="width:60px;color:var(--text-muted);flex-shrink:0;">' + _fmtDay(r.day) + '</div>' +
+            '<div style="flex:1;height:8px;background:var(--bg-subtle);border-radius:4px;overflow:hidden;">' +
+              '<div style="height:100%;background:var(--accent);width:' + pct.toFixed(1) + '%;transition:width 0.3s;"></div>' +
+            '</div>' +
+            '<div style="width:60px;text-align:right;font-weight:600;flex-shrink:0;">' + _fmtUSD(r.cost_usd) + '</div>' +
+            '<div style="width:40px;text-align:right;color:var(--text-muted);flex-shrink:0;">' + r.call_count + '</div>' +
+            '</div>';
+        }).join('') + '</div>';
+    }
+
+    function renderRecentCalls(rows) {
+      if (!rows || !rows.length) return '<div style="color:var(--text-muted);font-size:var(--text-sm);">No calls yet.</div>';
+      return '<div class="table-scroll"><table style="width:100%;border-collapse:collapse;font-size:var(--text-sm);">' +
+        '<thead><tr><th style="text-align:left;padding:6px;color:var(--text-muted);font-weight:600;">When</th>' +
+        '<th style="text-align:left;padding:6px;color:var(--text-muted);font-weight:600;">Project</th>' +
+        '<th style="text-align:left;padding:6px;color:var(--text-muted);font-weight:600;">Req</th>' +
+        '<th style="text-align:left;padding:6px;color:var(--text-muted);font-weight:600;">Purpose</th>' +
+        '<th style="text-align:right;padding:6px;color:var(--text-muted);font-weight:600;">Tokens</th>' +
+        '<th style="text-align:right;padding:6px;color:var(--text-muted);font-weight:600;">Cost</th>' +
+        '<th style="text-align:right;padding:6px;color:var(--text-muted);font-weight:600;">ms</th></tr></thead><tbody>' +
+        rows.map(c =>
+          '<tr style="border-top:1px solid var(--border-light);">' +
+          '<td style="padding:6px;color:var(--text-muted);white-space:nowrap;">' + _fmtDate(c.called_at) + '</td>' +
+          '<td style="padding:6px;">' + esc(c.project_name || '—') + '</td>' +
+          '<td style="padding:6px;font-weight:600;">' + esc(c.requirement_code || '—') + '</td>' +
+          '<td style="padding:6px;color:var(--text-muted);">' + esc(c.purpose || '—') + '</td>' +
+          '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + (c.input_tokens || 0) + ' / ' + (c.output_tokens || 0) + '</td>' +
+          '<td style="padding:6px;text-align:right;font-weight:600;">' + _fmtUSD(c.cost_usd) + '</td>' +
+          '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + (c.duration_ms || '—') + '</td>' +
+          '</tr>'
+        ).join('') + '</tbody></table></div>';
     }
   </script>
 

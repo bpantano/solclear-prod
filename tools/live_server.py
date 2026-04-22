@@ -347,6 +347,49 @@ class LiveHandler(BaseHTTPRequestHandler):
         self._send_json({"error": "Insufficient permissions"}, 403)
         return False
 
+    def _require_org_access(self, session, org_id):
+        """Verify the session user may act on the given organization.
+        Superadmins can access any org; admins only their own. Any other
+        role (or a mismatched admin) gets 403. Returns True if allowed."""
+        if not session:
+            self._send_json({"error": "Not authenticated"}, 401)
+            return False
+        role = session.get("role")
+        if role == "superadmin":
+            return True
+        if role == "admin":
+            try:
+                if int(org_id) == session.get("org_id"):
+                    return True
+            except (TypeError, ValueError):
+                pass
+        self._send_json({"error": "Forbidden"}, 403)
+        return False
+
+    def _get_user_org(self, user_id):
+        """Look up a user's organization_id. Returns None if user not found."""
+        try:
+            row = fetch_one("SELECT organization_id FROM users WHERE id = %s", (user_id,))
+            return row.get("organization_id") if row else None
+        except Exception:
+            return None
+
+    def _require_user_access(self, session, user_id):
+        """Verify the session user may act on the given user (e.g. edit/toggle).
+        Superadmin: any user. Admin: only users in their org. Returns True if allowed."""
+        if not session:
+            self._send_json({"error": "Not authenticated"}, 401)
+            return False
+        role = session.get("role")
+        if role == "superadmin":
+            return True
+        if role == "admin":
+            target_org = self._get_user_org(user_id)
+            if target_org is not None and target_org == session.get("org_id"):
+                return True
+        self._send_json({"error": "Forbidden"}, 403)
+        return False
+
     def _serve_logo_svg(self):
         """Serve the Solclear wordmark SVG as an image (public, used in emails)."""
         svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" width="640" height="160">
@@ -450,6 +493,16 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._serve_html()
         elif path == "/change-password":
             self._serve_change_password_page()
+        elif path == "/api/me":
+            self._api_me(session)
+        elif path == "/api/admin/cost/summary":
+            if not self._require_role(session, ("superadmin",)):
+                return
+            self._api_admin_cost_summary(qs)
+        elif path == "/api/admin/cost/filter-options":
+            if not self._require_role(session, ("superadmin",)):
+                return
+            self._api_admin_cost_filter_options()
         elif path == "/api/projects":
             self._api_projects(qs)
         elif path.startswith("/api/projects/") and path.endswith("/thumbnail"):
@@ -477,21 +530,27 @@ class LiveHandler(BaseHTTPRequestHandler):
         elif path == "/api/organizations":
             if not self._require_role(session, ("superadmin", "admin")):
                 return
-            self._api_orgs_list()
+            self._api_orgs_list(session)
         elif path.startswith("/api/users/"):
             if not self._require_role(session, ("superadmin", "admin")):
                 return
             uid = path.split("/")[3]
+            if not self._require_user_access(session, uid):
+                return
             self._api_user_detail(uid)
         elif path.startswith("/api/organizations/") and path.endswith("/users"):
             if not self._require_role(session, ("superadmin", "admin")):
                 return
             oid = path.split("/")[3]
+            if not self._require_org_access(session, oid):
+                return
             self._api_org_users(oid)
         elif path.startswith("/api/organizations/"):
             if not self._require_role(session, ("superadmin", "admin")):
                 return
             oid = path.split("/")[3]
+            if not self._require_org_access(session, oid):
+                return
             self._api_org_detail(oid)
         elif path.startswith("/report/"):
             pid = path.split("/")[2]
@@ -532,28 +591,38 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._api_change_password(body, session)
         # ── Admin POST routes (superadmin/admin only) ──
         elif path == "/api/organizations":
-            if not self._require_role(session, ("superadmin", "admin")):
+            # Creating a new organization is a platform-level operation,
+            # reserved for superadmins. Org admins cannot spawn new orgs.
+            if not self._require_role(session, ("superadmin",)):
                 return
             self._api_org_create(body)
         elif path.startswith("/api/organizations/") and path.endswith("/users/csv"):
             if not self._require_role(session, ("superadmin", "admin")):
                 return
             oid = path.split("/")[3]
+            if not self._require_org_access(session, oid):
+                return
             self._api_org_users_csv(oid, body)
         elif path.startswith("/api/organizations/") and path.endswith("/users"):
             if not self._require_role(session, ("superadmin", "admin")):
                 return
             oid = path.split("/")[3]
+            if not self._require_org_access(session, oid):
+                return
             self._api_org_user_create(oid, body)
         elif path.startswith("/api/users/") and path.endswith("/toggle"):
             if not self._require_role(session, ("superadmin", "admin")):
                 return
             uid = path.split("/")[3]
+            if not self._require_user_access(session, uid):
+                return
             self._api_user_toggle(uid)
         elif path.startswith("/api/users/"):
             if not self._require_role(session, ("superadmin", "admin")):
                 return
             uid = path.split("/")[3]
+            if not self._require_user_access(session, uid):
+                return
             self._api_user_update(uid, body)
         elif path == "/api/requirements/check":
             if not self._require_role(session, ("superadmin", "admin")):
@@ -568,7 +637,9 @@ class LiveHandler(BaseHTTPRequestHandler):
             if not self._require_role(session, ("superadmin", "admin")):
                 return
             oid = path.split("/")[3]
-            self._api_org_update(oid, body)
+            if not self._require_org_access(session, oid):
+                return
+            self._api_org_update(oid, body, session)
         # ── Interactive report item actions ──
         # /api/report/{report_id}/item/{req_code}/resolve  → toggle resolved
         # /api/report/{report_id}/item/{req_code}/note     → save note
@@ -952,18 +1023,25 @@ class LiveHandler(BaseHTTPRequestHandler):
 
     # ── Organization API handlers ──────────────────────────────────────────────
 
-    def _api_orgs_list(self):
-        """List all organizations with user and report counts."""
+    def _api_orgs_list(self, session=None):
+        """List organizations with user + report counts.
+        Superadmin sees all; admin sees only their own organization."""
         try:
-            orgs = fetch_all("""
+            session = session or {}
+            role = session.get("role")
+            base_sql = """
                 SELECT o.*,
                     (SELECT COUNT(*) FROM users u WHERE u.organization_id = o.id) AS user_count,
                     (SELECT COUNT(*) FROM reports r
                         JOIN projects p ON p.id = r.project_id
                         WHERE p.organization_id = o.id) AS report_count
                 FROM organizations o
-                ORDER BY o.created_at DESC
-            """)
+            """
+            if role == "admin":
+                orgs = fetch_all(base_sql + " WHERE o.id = %s ORDER BY o.created_at DESC",
+                                 (session.get("org_id"),))
+            else:
+                orgs = fetch_all(base_sql + " ORDER BY o.created_at DESC")
             for o in orgs:
                 o["created_at"] = o["created_at"].isoformat() if o.get("created_at") else None
                 o["updated_at"] = o["updated_at"].isoformat() if o.get("updated_at") else None
@@ -1027,16 +1105,26 @@ class LiveHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 
-    def _api_org_update(self, org_id, body):
-        """Update an organization's name, status, API keys, or settings."""
+    def _api_org_update(self, org_id, body, session=None):
+        """Update an organization's name, status, API keys, or settings.
+        Admins can edit their own org's name/API keys/settings. Status is
+        a platform-level billing field reserved for superadmins."""
         try:
             data = json.loads(body)
+            role = (session or {}).get("role")
             fields = []
             values = []
-            for field in ("name", "status"):
-                if field in data:
-                    fields.append(f"{field} = %s")
-                    values.append(data[field])
+            if "name" in data:
+                fields.append("name = %s")
+                values.append(data["name"])
+            if "status" in data:
+                # Only superadmin can change status
+                if role == "superadmin":
+                    fields.append("status = %s")
+                    values.append(data["status"])
+                elif data["status"] is not None:
+                    self._send_json({"error": "Only superadmin can change organization status"}, 403)
+                    return
             # Encrypt API keys before storing
             for key_field in ("companycam_api_key", "anthropic_api_key"):
                 if key_field in data and data[key_field]:
@@ -1462,6 +1550,212 @@ class LiveHandler(BaseHTTPRequestHandler):
         )
         resp.raise_for_status()
         return resp.json()["content"][0]["text"].strip()
+
+    # ── Me / session info ────────────────────────────────────────────────────
+
+    def _api_me(self, session):
+        """Return the current user's session info so the SPA can render
+        role-aware UI (e.g. hide superadmin-only nav for other roles).
+
+        The session token only carries user_id/role/org_id — look up email
+        and full_name from the users table for convenience."""
+        if not session:
+            self._send_json({"error": "Not authenticated"}, 401)
+            return
+        out = {
+            "user_id": session.get("user_id"),
+            "role": session.get("role"),
+            "org_id": session.get("org_id"),
+            "email": None,
+            "full_name": None,
+        }
+        user_id = session.get("user_id")
+        if user_id:
+            try:
+                user = fetch_one(
+                    "SELECT email, full_name FROM users WHERE id = %s",
+                    (user_id,),
+                )
+                if user:
+                    out["email"] = user.get("email")
+                    out["full_name"] = user.get("full_name")
+            except Exception:
+                pass  # non-fatal; UI can render without these
+        self._send_json(out)
+
+    # ── Admin: cost dashboard ────────────────────────────────────────────────
+
+    def _api_admin_cost_summary(self, qs=None):
+        """Return per-report / per-requirement / per-day cost stats for the
+        superadmin cost dashboard. Accepts optional filters via query string:
+          org_id=<int>   — only cost from this org's projects
+          user_id=<int>  — only cost from runs this user triggered (reports.run_by)
+          from=YYYY-MM-DD — lower bound on called_at (inclusive)
+          to=YYYY-MM-DD   — upper bound on called_at (inclusive, end-of-day)"""
+        qs = qs or {}
+        try:
+            # Build a shared WHERE clause + params list. Every query joins
+            # reports + projects LEFT so unattributed rows still count when
+            # no report-based filter is set, and get filtered out naturally
+            # when one is.
+            filters = []
+            params_list = []
+
+            org_id = qs.get("org_id", [""])[0]
+            user_id = qs.get("user_id", [""])[0]
+            date_from = qs.get("from", [""])[0]
+            date_to = qs.get("to", [""])[0]
+
+            if org_id:
+                filters.append("p.organization_id = %s")
+                params_list.append(int(org_id))
+            if user_id:
+                filters.append("r.run_by = %s")
+                params_list.append(int(user_id))
+            if date_from:
+                filters.append("a.called_at >= %s::timestamptz")
+                params_list.append(date_from)
+            if date_to:
+                # End-of-day inclusive
+                filters.append("a.called_at <= (%s::date + INTERVAL '1 day')::timestamptz")
+                params_list.append(date_to)
+
+            where_clause = ("WHERE " + " AND ".join(filters)) if filters else ""
+            params_t = tuple(params_list)
+
+            # Totals — joins to reports/projects so org/user filters apply;
+            # today and this_month are scoped to the same filter.
+            totals = fetch_one(f"""
+                SELECT
+                  COALESCE(SUM(a.cost_usd), 0) AS all_time,
+                  COALESCE(SUM(a.cost_usd) FILTER (WHERE a.called_at >= DATE_TRUNC('month', NOW())), 0) AS this_month,
+                  COALESCE(SUM(a.cost_usd) FILTER (WHERE a.called_at >= DATE_TRUNC('day', NOW())), 0) AS today,
+                  COUNT(*) AS call_count
+                FROM api_call_log a
+                LEFT JOIN reports r ON r.id = a.report_id
+                LEFT JOIN projects p ON p.id = r.project_id
+                {where_clause}
+            """, params_t)
+
+            top_reports = fetch_all(f"""
+                SELECT r.id AS report_id,
+                       p.name AS project_name,
+                       p.companycam_id,
+                       r.is_test,
+                       r.completed_at,
+                       COUNT(a.id) AS call_count,
+                       COALESCE(SUM(a.cost_usd), 0) AS cost_usd
+                FROM api_call_log a
+                JOIN reports r ON r.id = a.report_id
+                JOIN projects p ON p.id = r.project_id
+                {where_clause}
+                GROUP BY r.id, p.name, p.companycam_id, r.is_test, r.completed_at
+                ORDER BY cost_usd DESC
+                LIMIT 10
+            """, params_t)
+
+            # requirement_code filter needs to be AND'd with other filters
+            req_where = "WHERE a.requirement_code IS NOT NULL"
+            if filters:
+                req_where += " AND " + " AND ".join(filters)
+            top_reqs = fetch_all(f"""
+                SELECT a.requirement_code,
+                       COUNT(*) AS call_count,
+                       COALESCE(AVG(a.cost_usd), 0) AS avg_cost,
+                       COALESCE(MAX(a.cost_usd), 0) AS max_cost,
+                       COALESCE(SUM(a.cost_usd), 0) AS total_cost
+                FROM api_call_log a
+                LEFT JOIN reports r ON r.id = a.report_id
+                LEFT JOIN projects p ON p.id = r.project_id
+                {req_where}
+                GROUP BY a.requirement_code
+                ORDER BY total_cost DESC
+                LIMIT 10
+            """, params_t)
+
+            # Daily trend: always last 30 days regardless of date filter
+            # (otherwise the chart becomes useless when a single-day filter is
+            # set). Keep org/user filters, ignore date filter for this chart.
+            daily_filters = [f for f in filters if not f.startswith("a.called_at")]
+            daily_params = params_list[:len(daily_filters)]
+            daily_where = "WHERE a.called_at >= NOW() - INTERVAL '30 days'"
+            if daily_filters:
+                daily_where += " AND " + " AND ".join(daily_filters)
+            daily = fetch_all(f"""
+                SELECT DATE_TRUNC('day', a.called_at)::date AS day,
+                       COUNT(*) AS call_count,
+                       COALESCE(SUM(a.cost_usd), 0) AS cost_usd
+                FROM api_call_log a
+                LEFT JOIN reports r ON r.id = a.report_id
+                LEFT JOIN projects p ON p.id = r.project_id
+                {daily_where}
+                GROUP BY day
+                ORDER BY day
+            """, tuple(daily_params))
+
+            recent = fetch_all(f"""
+                SELECT a.id, a.report_id, p.name AS project_name,
+                       a.requirement_code, a.purpose, a.model,
+                       a.input_tokens, a.output_tokens,
+                       a.cost_usd, a.duration_ms, a.called_at
+                FROM api_call_log a
+                LEFT JOIN reports r ON r.id = a.report_id
+                LEFT JOIN projects p ON p.id = r.project_id
+                {where_clause}
+                ORDER BY a.id DESC
+                LIMIT 20
+            """, params_t)
+
+            # Normalize datetime / numeric for JSON
+            def _iso(row, *keys):
+                for k in keys:
+                    if row.get(k) and hasattr(row[k], "isoformat"):
+                        row[k] = row[k].isoformat()
+                # Decimals need to be floats
+                for k in ("cost_usd", "avg_cost", "max_cost", "total_cost", "all_time", "this_month", "today"):
+                    if k in row and row[k] is not None:
+                        row[k] = float(row[k])
+                return row
+
+            totals = _iso(totals or {})
+            top_reports = [_iso(r, "completed_at") for r in top_reports]
+            top_reqs = [_iso(r) for r in top_reqs]
+            daily = [_iso(r, "day") for r in daily]
+            recent = [_iso(r, "called_at") for r in recent]
+
+            self._send_json({
+                "totals": totals,
+                "top_reports": top_reports,
+                "top_requirements": top_reqs,
+                "daily_last_30": daily,
+                "recent_calls": recent,
+            })
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_admin_cost_filter_options(self):
+        """Populate the Costs dashboard filter dropdowns with only the orgs
+        and users that actually have cost rows — less noise than dumping
+        every org/user in the system."""
+        try:
+            orgs = fetch_all("""
+                SELECT DISTINCT o.id, o.name
+                FROM api_call_log a
+                JOIN reports r ON r.id = a.report_id
+                JOIN projects p ON p.id = r.project_id
+                JOIN organizations o ON o.id = p.organization_id
+                ORDER BY o.name
+            """)
+            users = fetch_all("""
+                SELECT DISTINCT u.id, u.full_name, u.email
+                FROM api_call_log a
+                JOIN reports r ON r.id = a.report_id
+                JOIN users u ON u.id = r.run_by
+                ORDER BY u.full_name
+            """)
+            self._send_json({"orgs": orgs, "users": users})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
 
     # ── Report handlers ──────────────────────────────────────────────────────
 
