@@ -671,12 +671,12 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       Reports
     </button>
 
-    <div class="sidebar-section-label">Admin</div>
-    <button class="nav-item" data-nav="orgs" onclick="navigate('orgs')">
+    <div class="sidebar-section-label reviewer-plus" style="display:none;">Admin</div>
+    <button class="nav-item reviewer-plus" data-nav="orgs" onclick="navigate('orgs')" style="display:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1"/><path d="M9 8h1M9 12h1M9 16h1M14 8h1M14 12h1M14 16h1M3 21h18"/></svg>
       Organizations
     </button>
-    <button class="nav-item" data-nav="reqs" onclick="navigate('reqs')">
+    <button class="nav-item reviewer-plus" data-nav="reqs" onclick="navigate('reqs')" style="display:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2h11"/></svg>
       Requirements
     </button>
@@ -750,15 +750,15 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#9ca3af" stroke-width="2" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg>
       </div>
 
-      <div class="home-card" onclick="showStep('orgs')">
-        <div class="home-card-icon" style="background:#fffbeb;color:#f59e0b;">
+      <div class="home-card reviewer-plus" onclick="showStep('orgs')" style="display:none;">
+        <div class="home-card-icon" style="background:var(--warning-subtle);color:var(--warning);">
           <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 21h18M9 8h1M9 12h1M9 16h1M14 8h1M14 12h1M14 16h1"/><rect x="5" y="3" width="14" height="18" rx="1"/></svg>
         </div>
         <div class="home-card-text">
           <div class="home-card-title">Organizations</div>
           <div class="home-card-desc">Manage companies, users, and settings</div>
         </div>
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#9ca3af" stroke-width="2" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg>
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg>
       </div>
     </div>
 
@@ -928,21 +928,22 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           <button class="toggle-btn" data-param="org-edit-status" data-value="inactive" onclick="selectToggle(this)">Inactive</button>
         </div>
       </div>
-      <div class="param-group">
+      <!-- API keys are sensitive — only superadmin/admin can view or edit them -->
+      <div class="param-group admin-write" style="display:none;">
         <label>CompanyCam API Key</label>
         <div style="display:flex;gap:8px;align-items:center;">
           <input class="search-input" id="orgCcKey" type="password" style="font-size:13px;font-family:monospace;flex:1;" placeholder="Not set">
           <button onclick="toggleKeyVis('orgCcKey')" style="background:var(--border-light);border:none;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:12px;min-height:44px;color:var(--text);">Show</button>
         </div>
       </div>
-      <div class="param-group">
+      <div class="param-group admin-write" style="display:none;">
         <label>Anthropic API Key</label>
         <div style="display:flex;gap:8px;align-items:center;">
           <input class="search-input" id="orgAnthKey" type="password" style="font-size:13px;font-family:monospace;flex:1;" placeholder="Not set">
           <button onclick="toggleKeyVis('orgAnthKey')" style="background:var(--border-light);border:none;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:12px;min-height:44px;color:var(--text);">Show</button>
         </div>
       </div>
-      <button class="run-btn" onclick="saveOrg()" style="background:var(--success);">Save Changes</button>
+      <button class="run-btn admin-write" onclick="saveOrg()" style="display:none;background:var(--success);">Save Changes</button>
     </div>
 
     <!-- Users -->
@@ -953,8 +954,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       </div>
       <div id="orgUsersList"></div>
 
-      <!-- Add user form -->
-      <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-light);">
+      <!-- Add user form (admin/superadmin only) -->
+      <div class="admin-write" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border-light);">
         <div style="font-size:11px;color:var(--text-secondary);font-weight:600;margin-bottom:8px;">ADD USER</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <input class="search-input" id="addUserFirst" type="text" placeholder="First Name" style="flex:1;min-width:100px;font-size:13px;">
@@ -967,12 +968,12 @@ EMBEDDED_HTML = """<!DOCTYPE html>
             <option value="reviewer">Reviewer</option>
             <option value="admin">Admin</option>
           </select>
-          <button onclick="addUser()" style="background:#3b82f6;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;min-height:44px;">Add</button>
+          <button onclick="addUser()" style="background:var(--accent);color:var(--text-inverse);border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;min-height:44px;">Add</button>
         </div>
       </div>
 
-      <!-- CSV upload -->
-      <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-light);">
+      <!-- CSV upload (admin/superadmin only) -->
+      <div class="admin-write" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border-light);">
         <div style="font-size:11px;color:var(--text-secondary);font-weight:600;margin-bottom:8px;">BULK IMPORT (CSV)</div>
         <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Format: email, first_name, last_name, role, phone (one per line)</div>
         <input type="file" id="csvUpload" accept=".csv" onchange="uploadCsv()" style="font-size:12px;">
@@ -1142,12 +1143,12 @@ EMBEDDED_HTML = """<!DOCTYPE html>
   <div class="sheet-overlay" id="sheetOverlay" onclick="closeAccountSheet()"></div>
   <aside class="account-sheet" id="accountSheet">
     <div class="sheet-handle"></div>
-    <div class="sidebar-section-label">Admin</div>
-    <button class="nav-item" onclick="closeAccountSheet();navigate('orgs')">
+    <div class="sidebar-section-label reviewer-plus" style="display:none;">Admin</div>
+    <button class="nav-item reviewer-plus" onclick="closeAccountSheet();navigate('orgs')" style="display:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1"/><path d="M9 8h1M9 12h1M9 16h1M14 8h1M14 12h1M14 16h1M3 21h18"/></svg>
       Organizations
     </button>
-    <button class="nav-item" onclick="closeAccountSheet();navigate('reqs')">
+    <button class="nav-item reviewer-plus" onclick="closeAccountSheet();navigate('reqs')" style="display:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2h11"/></svg>
       Requirements
     </button>
@@ -1380,7 +1381,6 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     async function openOrg(orgId) {
       currentOrgId = orgId;
       showStep('orgDetail');
-      const detail = document.getElementById('adminOrgDetail');
       try {
         const r = await fetch('/api/organizations/' + orgId);
         const org = await r.json();
@@ -1390,11 +1390,19 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         document.getElementById('orgCcKey').placeholder = org.companycam_api_key_set ? 'Key is set (enter new value to change)' : 'Not set';
         document.getElementById('orgAnthKey').value = '';
         document.getElementById('orgAnthKey').placeholder = org.anthropic_api_key_set ? 'Key is set (enter new value to change)' : 'Not set';
-        // Set status toggle
+        // Status toggles
         document.querySelectorAll('[data-param="org-edit-status"]').forEach(b => {
           b.classList.toggle('selected', b.dataset.value === org.status);
         });
-        // Render users
+        // Make name/status read-only for reviewers (can see current value,
+        // can't change it). Save button is already hidden via .admin-write.
+        const canWrite = _me && (_me.role === 'superadmin' || _me.role === 'admin');
+        document.getElementById('orgEditName').disabled = !canWrite;
+        document.querySelectorAll('[data-param="org-edit-status"]').forEach(b => {
+          b.disabled = !canWrite;
+          b.style.cursor = canWrite ? 'pointer' : 'default';
+        });
+        // Render users — renderOrgUsers itself checks role for write actions
         renderOrgUsers(org.users || []);
       } catch (e) { alert('Error loading org: ' + e.message); }
     }
@@ -1402,21 +1410,28 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     function renderOrgUsers(users) {
       document.getElementById('orgUserCount').textContent = users.length + ' user' + (users.length !== 1 ? 's' : '');
       const list = document.getElementById('orgUsersList');
-      if (!users.length) { list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No users yet. Add one below.</div>'; return; }
-      list.innerHTML = users.map(u => `
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light);${u.is_active ? '' : 'opacity:0.5;'}">
-          <div style="flex:1;cursor:pointer;" onclick="openUser(${u.id})">
-            <div style="font-weight:500;font-size:13px;color:var(--accent);">${esc(u.full_name || (u.first_name + ' ' + u.last_name))}${u.is_active ? '' : ' <span class="badge badge-danger" style="margin-left:4px;">INACTIVE</span>'}</div>
-            <div style="font-size:11px;color:var(--text-muted)">${esc(u.email)}${u.phone ? ' · ' + esc(u.phone) : ''}</div>
-          </div>
-          <div style="display:flex;align-items:center;gap:8px;">
-            ${roleBadgeHtml(u.role)}
-            <button onclick="toggleUser(${u.id})" style="background:none;border:1px solid ${u.is_active ? '#ef4444' : '#10b981'};color:${u.is_active ? '#ef4444' : '#10b981'};border-radius:6px;padding:4px 10px;font-size:10px;font-weight:600;cursor:pointer;min-height:28px;">
-              ${u.is_active ? 'Deactivate' : 'Activate'}
-            </button>
-          </div>
-        </div>
-      `).join('');
+      if (!users.length) { list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No users yet.</div>'; return; }
+      // Reviewers see names/emails/roles only. Write actions (edit on click,
+      // activate/deactivate) are admin+superadmin.
+      const canWrite = _me && (_me.role === 'superadmin' || _me.role === 'admin');
+      list.innerHTML = users.map(u => {
+        const nameLine = `<div style="font-weight:500;font-size:13px;color:${canWrite ? 'var(--accent)' : 'var(--text)'};">${esc(u.full_name || (u.first_name + ' ' + u.last_name))}${u.is_active ? '' : ' <span class="badge badge-danger" style="margin-left:4px;">INACTIVE</span>'}</div>`;
+        const emailLine = `<div style="font-size:11px;color:var(--text-muted)">${esc(u.email)}${u.phone ? ' · ' + esc(u.phone) : ''}</div>`;
+        const nameBlock = canWrite
+          ? `<div style="flex:1;cursor:pointer;" onclick="openUser(${u.id})">${nameLine}${emailLine}</div>`
+          : `<div style="flex:1;">${nameLine}${emailLine}</div>`;
+        const toggleBtn = canWrite
+          ? `<button onclick="toggleUser(${u.id})" style="background:none;border:1px solid ${u.is_active ? 'var(--danger)' : 'var(--success)'};color:${u.is_active ? 'var(--danger)' : 'var(--success)'};border-radius:6px;padding:4px 10px;font-size:10px;font-weight:600;cursor:pointer;min-height:28px;">${u.is_active ? 'Deactivate' : 'Activate'}</button>`
+          : '';
+        return `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light);${u.is_active ? '' : 'opacity:0.5;'}">
+            ${nameBlock}
+            <div style="display:flex;align-items:center;gap:8px;">
+              ${roleBadgeHtml(u.role)}
+              ${toggleBtn}
+            </div>
+          </div>`;
+      }).join('');
     }
 
     async function saveOrg() {
@@ -2388,18 +2403,30 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     }
 
     // ── Current user (role-aware nav) ──
+    // Role-visibility classes. Elements carrying any of these start with
+    // inline style="display:none" in the markup (so nothing flashes before
+    // the role fetch returns). loadMe() reveals the ones this user is
+    // allowed to see.
+    //   .reviewer-plus  — shown to superadmin / admin / reviewer (hidden for crew)
+    //   .admin-write    — shown to superadmin / admin  (hidden for reviewer + crew)
+    //   .superadmin-only — shown to superadmin only
     let _me = null;
+    function _applyRoleVisibility(role) {
+      const visible = [];
+      if (role === 'superadmin') visible.push('.superadmin-only', '.admin-write', '.reviewer-plus');
+      else if (role === 'admin') visible.push('.admin-write', '.reviewer-plus');
+      else if (role === 'reviewer') visible.push('.reviewer-plus');
+      // crew: no gated classes revealed
+      visible.forEach(sel => {
+        document.querySelectorAll(sel).forEach(el => { el.style.display = ''; });
+      });
+    }
     async function loadMe() {
       try {
         const r = await fetch('/api/me');
         if (!r.ok) return;
         _me = await r.json();
-        // Reveal superadmin-only nav items
-        if (_me && _me.role === 'superadmin') {
-          document.querySelectorAll('.superadmin-only').forEach(el => {
-            el.style.display = '';
-          });
-        }
+        _applyRoleVisibility(_me && _me.role);
       } catch (e) { /* silently ignore — non-critical */ }
     }
     loadMe();

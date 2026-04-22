@@ -347,22 +347,28 @@ class LiveHandler(BaseHTTPRequestHandler):
         self._send_json({"error": "Insufficient permissions"}, 403)
         return False
 
-    def _require_org_access(self, session, org_id):
+    def _require_org_access(self, session, org_id, write=False):
         """Verify the session user may act on the given organization.
-        Superadmins can access any org; admins only their own. Any other
-        role (or a mismatched admin) gets 403. Returns True if allowed."""
+
+        Superadmins: any org.
+        Admins: their own org — read or write.
+        Reviewers: their own org — READ ONLY (write=False). Writes return 403.
+        Any other role: 403.
+        """
         if not session:
             self._send_json({"error": "Not authenticated"}, 401)
             return False
         role = session.get("role")
         if role == "superadmin":
             return True
-        if role == "admin":
-            try:
-                if int(org_id) == session.get("org_id"):
-                    return True
-            except (TypeError, ValueError):
-                pass
+        try:
+            same_org = int(org_id) == session.get("org_id")
+        except (TypeError, ValueError):
+            same_org = False
+        if role == "admin" and same_org:
+            return True
+        if role == "reviewer" and same_org and not write:
+            return True
         self._send_json({"error": "Forbidden"}, 403)
         return False
 
@@ -375,8 +381,9 @@ class LiveHandler(BaseHTTPRequestHandler):
             return None
 
     def _require_user_access(self, session, user_id):
-        """Verify the session user may act on the given user (e.g. edit/toggle).
-        Superadmin: any user. Admin: only users in their org. Returns True if allowed."""
+        """Verify the session user may act on the given user (edit/toggle).
+        Superadmin: any user. Admin: only users in their org.
+        Reviewer + crew cannot manage users."""
         if not session:
             self._send_json({"error": "Not authenticated"}, 401)
             return False
@@ -513,24 +520,31 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._api_checklists(pid)
         elif path == "/api/reports":
             self._api_reports(session)
-        # ── Admin routes (superadmin/admin only) ──
+        # ── Admin routes ──
+        # Requirements: superadmin/admin/reviewer can view AND edit.
+        # Crew has no access to the requirements catalog.
         elif path == "/api/requirements":
-            if not self._require_role(session, ("superadmin", "admin")):
+            if not self._require_role(session, ("superadmin", "admin", "reviewer")):
                 return
             self._api_requirements_list()
         elif path == "/api/requirements/monitor/status":
-            if not self._require_role(session, ("superadmin", "admin")):
+            if not self._require_role(session, ("superadmin", "admin", "reviewer")):
                 return
             self._api_requirements_monitor()
         elif path.startswith("/api/requirements/") and len(path.split("/")) == 4:
-            if not self._require_role(session, ("superadmin", "admin")):
+            if not self._require_role(session, ("superadmin", "admin", "reviewer")):
                 return
             req_id = path.split("/")[3]
             self._api_requirement_detail(req_id)
+        # Organization GETs: superadmin/admin/reviewer can view; reviewer is
+        # scoped to their own org (read-only, enforced by _require_org_access).
         elif path == "/api/organizations":
-            if not self._require_role(session, ("superadmin", "admin")):
+            if not self._require_role(session, ("superadmin", "admin", "reviewer")):
                 return
             self._api_orgs_list(session)
+        # User detail endpoint is management-only (the user edit form); keep
+        # it restricted to admin+superadmin so a reviewer can't pull emails
+        # and phone numbers out of context.
         elif path.startswith("/api/users/"):
             if not self._require_role(session, ("superadmin", "admin")):
                 return
@@ -539,17 +553,17 @@ class LiveHandler(BaseHTTPRequestHandler):
                 return
             self._api_user_detail(uid)
         elif path.startswith("/api/organizations/") and path.endswith("/users"):
-            if not self._require_role(session, ("superadmin", "admin")):
+            if not self._require_role(session, ("superadmin", "admin", "reviewer")):
                 return
             oid = path.split("/")[3]
-            if not self._require_org_access(session, oid):
+            if not self._require_org_access(session, oid):  # read — reviewer allowed
                 return
             self._api_org_users(oid)
         elif path.startswith("/api/organizations/"):
-            if not self._require_role(session, ("superadmin", "admin")):
+            if not self._require_role(session, ("superadmin", "admin", "reviewer")):
                 return
             oid = path.split("/")[3]
-            if not self._require_org_access(session, oid):
+            if not self._require_org_access(session, oid):  # read — reviewer allowed
                 return
             self._api_org_detail(oid)
         elif path.startswith("/report/"):
@@ -600,14 +614,14 @@ class LiveHandler(BaseHTTPRequestHandler):
             if not self._require_role(session, ("superadmin", "admin")):
                 return
             oid = path.split("/")[3]
-            if not self._require_org_access(session, oid):
+            if not self._require_org_access(session, oid, write=True):
                 return
             self._api_org_users_csv(oid, body)
         elif path.startswith("/api/organizations/") and path.endswith("/users"):
             if not self._require_role(session, ("superadmin", "admin")):
                 return
             oid = path.split("/")[3]
-            if not self._require_org_access(session, oid):
+            if not self._require_org_access(session, oid, write=True):
                 return
             self._api_org_user_create(oid, body)
         elif path.startswith("/api/users/") and path.endswith("/toggle"):
@@ -624,20 +638,23 @@ class LiveHandler(BaseHTTPRequestHandler):
             if not self._require_user_access(session, uid):
                 return
             self._api_user_update(uid, body)
+        # Reviewers can trigger the Palmetto monitor check + edit
+        # requirements; crew is excluded.
         elif path == "/api/requirements/check":
-            if not self._require_role(session, ("superadmin", "admin")):
+            if not self._require_role(session, ("superadmin", "admin", "reviewer")):
                 return
             self._api_requirements_check_now()
         elif path.startswith("/api/requirements/"):
-            if not self._require_role(session, ("superadmin", "admin")):
+            if not self._require_role(session, ("superadmin", "admin", "reviewer")):
                 return
             req_id = path.split("/")[3]
             self._api_requirement_update(req_id, body)
         elif path.startswith("/api/organizations/"):
+            # Org updates stay admin+superadmin only. Reviewer cannot edit.
             if not self._require_role(session, ("superadmin", "admin")):
                 return
             oid = path.split("/")[3]
-            if not self._require_org_access(session, oid):
+            if not self._require_org_access(session, oid, write=True):
                 return
             self._api_org_update(oid, body, session)
         # ── Interactive report item actions ──
