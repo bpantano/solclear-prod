@@ -603,6 +603,11 @@ class LiveHandler(BaseHTTPRequestHandler):
 
         if path == "/api/change-password":
             self._api_change_password(body, session)
+        # ── Impersonation (superadmin starts, any impersonating user stops) ──
+        elif path == "/api/admin/impersonate":
+            self._api_impersonate(body, session)
+        elif path == "/api/admin/stop-impersonate":
+            self._api_stop_impersonate(session)
         # ── Admin POST routes (superadmin/admin only) ──
         elif path == "/api/organizations":
             # Creating a new organization is a platform-level operation,
@@ -1572,10 +1577,14 @@ class LiveHandler(BaseHTTPRequestHandler):
 
     def _api_me(self, session):
         """Return the current user's session info so the SPA can render
-        role-aware UI (e.g. hide superadmin-only nav for other roles).
+        role-aware UI.
 
         The session token only carries user_id/role/org_id — look up email
-        and full_name from the users table for convenience."""
+        and full_name from the users table for display convenience.
+
+        When impersonation is active, the active user_id/role/org_id are
+        the impersonated values. is_impersonating + real_full_name/email
+        let the UI render a "Stop impersonating [name]" banner."""
         if not session:
             self._send_json({"error": "Not authenticated"}, 401)
             return
@@ -1585,20 +1594,150 @@ class LiveHandler(BaseHTTPRequestHandler):
             "org_id": session.get("org_id"),
             "email": None,
             "full_name": None,
+            "is_impersonating": bool(session.get("real_user_id")),
+            "real_user_id": session.get("real_user_id"),
+            "real_role": session.get("real_role"),
+            "real_email": None,
+            "real_full_name": None,
         }
-        user_id = session.get("user_id")
-        if user_id:
+        def _lookup(uid):
+            if not uid:
+                return None
             try:
-                user = fetch_one(
+                return fetch_one(
                     "SELECT email, full_name FROM users WHERE id = %s",
-                    (user_id,),
+                    (uid,),
                 )
-                if user:
-                    out["email"] = user.get("email")
-                    out["full_name"] = user.get("full_name")
             except Exception:
-                pass  # non-fatal; UI can render without these
+                return None
+        u = _lookup(session.get("user_id"))
+        if u:
+            out["email"] = u.get("email")
+            out["full_name"] = u.get("full_name")
+        if out["is_impersonating"]:
+            ru = _lookup(session.get("real_user_id"))
+            if ru:
+                out["real_email"] = ru.get("email")
+                out["real_full_name"] = ru.get("full_name")
         self._send_json(out)
+
+    # ── Impersonation ────────────────────────────────────────────────────────
+
+    def _api_impersonate(self, body, session):
+        """Start (or re-target) impersonation. Requires the *real* role to be
+        superadmin — once impersonating, the session.role field will be the
+        impersonated role, so we check real_role first and fall back to role."""
+        if not session:
+            self._send_json({"error": "Not authenticated"}, 401)
+            return
+        # The requester's real role is the authoritative check — once
+        # impersonating as e.g. admin, we still need superadmin powers to
+        # re-target or stop.
+        real_role = session.get("real_role") or session.get("role")
+        real_user_id = session.get("real_user_id") or session.get("user_id")
+        if real_role != "superadmin":
+            self._send_json({"error": "Forbidden"}, 403)
+            return
+        try:
+            data = json.loads(body) if body else {}
+            target_id = int(data.get("user_id", 0) or 0)
+            reason = (data.get("reason") or "").strip() or None
+        except (ValueError, json.JSONDecodeError):
+            self._send_json({"error": "Invalid request"}, 400)
+            return
+        if target_id <= 0:
+            self._send_json({"error": "user_id is required"}, 400)
+            return
+        if target_id == real_user_id:
+            self._send_json({"error": "You cannot impersonate yourself"}, 400)
+            return
+        try:
+            target = fetch_one(
+                "SELECT id, role, organization_id, is_active, full_name FROM users WHERE id = %s",
+                (target_id,),
+            )
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+            return
+        if not target:
+            self._send_json({"error": "User not found"}, 404)
+            return
+        if not target.get("is_active"):
+            self._send_json({"error": "Cannot impersonate an inactive user"}, 403)
+            return
+        # Close any currently-open impersonation log row for this superadmin
+        try:
+            execute(
+                """UPDATE impersonation_log SET ended_at = NOW()
+                   WHERE superadmin_id = %s AND ended_at IS NULL""",
+                (real_user_id,),
+            )
+            execute(
+                """INSERT INTO impersonation_log
+                   (superadmin_id, impersonated_user_id, reason)
+                   VALUES (%s, %s, %s)""",
+                (real_user_id, target["id"], reason),
+            )
+        except Exception as e:
+            print(f"WARNING: impersonation_log write failed: {e}", file=sys.stderr)
+        # Mint the new session cookie
+        token = create_session_token(
+            user_id=target["id"],
+            role=target["role"],
+            org_id=target.get("organization_id"),
+            real_user_id=real_user_id,
+            real_role="superadmin",
+            real_org_id=None,
+        )
+        body_out = json.dumps({
+            "ok": True,
+            "impersonating": {
+                "user_id": target["id"],
+                "full_name": target.get("full_name"),
+                "role": target["role"],
+            },
+        }).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Set-Cookie", set_session_cookie_header(token))
+        self.send_header("Content-Length", str(len(body_out)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body_out)
+
+    def _api_stop_impersonate(self, session):
+        """End an active impersonation and restore the superadmin session.
+        No-op 200 if there's no active impersonation — safe to call anytime."""
+        if not session:
+            self._send_json({"error": "Not authenticated"}, 401)
+            return
+        real_user_id = session.get("real_user_id")
+        if not real_user_id:
+            self._send_json({"ok": True, "impersonating": False})
+            return
+        # Close the open log row
+        try:
+            execute(
+                """UPDATE impersonation_log SET ended_at = NOW()
+                   WHERE superadmin_id = %s AND ended_at IS NULL""",
+                (real_user_id,),
+            )
+        except Exception as e:
+            print(f"WARNING: impersonation_log close failed: {e}", file=sys.stderr)
+        # Restore the superadmin session
+        token = create_session_token(
+            user_id=real_user_id,
+            role=session.get("real_role") or "superadmin",
+            org_id=session.get("real_org_id"),
+        )
+        body_out = json.dumps({"ok": True, "impersonating": False}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Set-Cookie", set_session_cookie_header(token))
+        self.send_header("Content-Length", str(len(body_out)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body_out)
 
     # ── Admin: cost dashboard ────────────────────────────────────────────────
 

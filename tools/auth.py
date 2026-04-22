@@ -40,14 +40,32 @@ def check_password(password: str, password_hash: str) -> bool:
     return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
 
 
-def create_session_token(user_id: int, role: str, org_id: int = None) -> str:
-    """Create a signed session token containing user info and expiry. Base64-encoded for cookie safety."""
+def create_session_token(
+    user_id: int,
+    role: str,
+    org_id: int = None,
+    real_user_id: int = None,
+    real_role: str = None,
+    real_org_id: int = None,
+) -> str:
+    """Create a signed session token.
+
+    When impersonation is active, the active user_id/role/org_id are the
+    *impersonated* values — permission checks that read role/org_id thus
+    see the impersonated user automatically. The real_* fields are carried
+    alongside so the session can be restored on stop-impersonate. All
+    real_* fields are omitted from the payload when not impersonating.
+    """
     payload = {
         "user_id": user_id,
         "role": role,
         "org_id": org_id,
         "exp": int(time.time()) + SESSION_MAX_AGE,
     }
+    if real_user_id is not None:
+        payload["real_user_id"] = real_user_id
+        payload["real_role"] = real_role
+        payload["real_org_id"] = real_org_id
     data = json.dumps(payload, separators=(",", ":"))
     sig = hmac.new(SESSION_SECRET.encode(), data.encode(), hashlib.sha256).hexdigest()
     raw = f"{data}.{sig}"

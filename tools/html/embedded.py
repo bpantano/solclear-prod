@@ -719,6 +719,21 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 
   <main class="main-content">
 
+  <!-- Impersonation banner — shown when a superadmin is acting as another
+       user. Lives inside .main-content so it respects the desktop sidebar
+       offset. Sticky so 'Stop' stays reachable while scrolling.
+       Explicit dark-on-amber colors (not theme tokens) so contrast works
+       in both light and dark mode — amber bg looks similar in both, so
+       hardcoded #1a1a2e text reads cleanly either way. -->
+  <div id="impersonationBanner" style="display:none;background:#f59e0b;color:#1a1a2e;padding:10px 16px;align-items:center;gap:12px;font-size:var(--text-sm);font-weight:500;border-bottom:1px solid rgba(0,0,0,0.18);position:sticky;top:0;z-index:35;">
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+    <div style="flex:1;min-width:0;line-height:1.35;">
+      <strong>Impersonating</strong> <span id="impersonationTarget">—</span>
+      <span style="opacity:0.75;"> · <span id="impersonationInitiator">—</span></span>
+    </div>
+    <button onclick="stopImpersonate()" style="background:#1a1a2e;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:var(--text-xs);font-weight:600;cursor:pointer;flex-shrink:0;min-height:32px;font-family:inherit;">Stop impersonating</button>
+  </div>
+
   <!-- Landing page -->
   <div id="homePage" class="step active" style="display:block;">
     <div style="padding:4px 0 20px;">
@@ -1412,8 +1427,12 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       const list = document.getElementById('orgUsersList');
       if (!users.length) { list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No users yet.</div>'; return; }
       // Reviewers see names/emails/roles only. Write actions (edit on click,
-      // activate/deactivate) are admin+superadmin.
+      // activate/deactivate) are admin+superadmin. Impersonate is
+      // superadmin-only, and only offered when NOT already impersonating.
       const canWrite = _me && (_me.role === 'superadmin' || _me.role === 'admin');
+      const realRole = _me && (_me.real_role || _me.role);
+      const canImpersonate = realRole === 'superadmin' && !(_me && _me.is_impersonating);
+      const myActiveId = _me && _me.user_id;
       list.innerHTML = users.map(u => {
         const nameLine = `<div style="font-weight:500;font-size:13px;color:${canWrite ? 'var(--accent)' : 'var(--text)'};">${esc(u.full_name || (u.first_name + ' ' + u.last_name))}${u.is_active ? '' : ' <span class="badge badge-danger" style="margin-left:4px;">INACTIVE</span>'}</div>`;
         const emailLine = `<div style="font-size:11px;color:var(--text-muted)">${esc(u.email)}${u.phone ? ' · ' + esc(u.phone) : ''}</div>`;
@@ -1423,11 +1442,16 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         const toggleBtn = canWrite
           ? `<button onclick="toggleUser(${u.id})" style="background:none;border:1px solid ${u.is_active ? 'var(--danger)' : 'var(--success)'};color:${u.is_active ? 'var(--danger)' : 'var(--success)'};border-radius:6px;padding:4px 10px;font-size:10px;font-weight:600;cursor:pointer;min-height:28px;">${u.is_active ? 'Deactivate' : 'Activate'}</button>`
           : '';
+        // Only show Impersonate for active users who aren't the current user
+        const impersonateBtn = (canImpersonate && u.is_active && u.id !== myActiveId)
+          ? `<button onclick="startImpersonate(${u.id}, ${JSON.stringify(u.full_name || u.email || '').replace(/"/g, '&quot;')})" style="background:var(--bg-subtle);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:10px;font-weight:600;cursor:pointer;min-height:28px;">Impersonate</button>`
+          : '';
         return `
           <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light);${u.is_active ? '' : 'opacity:0.5;'}">
             ${nameBlock}
-            <div style="display:flex;align-items:center;gap:8px;">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
               ${roleBadgeHtml(u.role)}
+              ${impersonateBtn}
               ${toggleBtn}
             </div>
           </div>`;
@@ -2427,9 +2451,47 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         if (!r.ok) return;
         _me = await r.json();
         _applyRoleVisibility(_me && _me.role);
+        _applyImpersonationBanner(_me);
       } catch (e) { /* silently ignore — non-critical */ }
     }
     loadMe();
+
+    function _applyImpersonationBanner(me) {
+      const banner = document.getElementById('impersonationBanner');
+      if (!banner) return;
+      if (me && me.is_impersonating) {
+        document.getElementById('impersonationTarget').textContent =
+          (me.full_name || me.email || 'user #' + me.user_id) + ' (' + me.role + ')';
+        document.getElementById('impersonationInitiator').textContent =
+          'as ' + (me.real_full_name || me.real_email || 'superadmin');
+        banner.style.display = 'flex';
+      } else {
+        banner.style.display = 'none';
+      }
+    }
+
+    async function startImpersonate(userId, userName) {
+      if (!confirm('Impersonate ' + (userName || 'this user') + '? You\\'ll see the app from their perspective until you stop.')) return;
+      try {
+        const r = await fetch('/api/admin/impersonate', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({user_id: userId}),
+        });
+        const data = await r.json();
+        if (!r.ok) { alert(data.error || 'Could not impersonate'); return; }
+        // Full reload so the new session cookie + role-gated UI apply cleanly
+        window.location.href = '/';
+      } catch (e) { alert('Error: ' + e.message); }
+    }
+
+    async function stopImpersonate() {
+      try {
+        const r = await fetch('/api/admin/stop-impersonate', {method: 'POST'});
+        if (!r.ok) { alert('Could not stop impersonation'); return; }
+        window.location.href = '/';
+      } catch (e) { alert('Error: ' + e.message); }
+    }
 
     // ── Cost dashboard ──
     function _fmtUSD(n) {
