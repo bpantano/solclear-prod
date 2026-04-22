@@ -131,12 +131,24 @@ REQUIREMENTS = [
         "title": "MCI Location & Photo (Tesla only)",
         "condition": if_tesla,
         "task_titles": ["Stringing Map"],
-        "keywords": ["MCI", "string map", "motor circuit interrupter", "stringing"],
+        "keywords": ["MCI", "string map", "stringing map", "mid-circuit interrupter", "stringing"],
         "validation_prompt": (
-            "This photo should show either (a) a string map with the MCI location marked, "
-            "or (b) the MCI device installed on site. "
-            "Verify: Is the MCI visible or labeled on a map? "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Context: On Tesla solar installs, an MCI (Mid-Circuit Interrupter) is a "
+            "rapid-shutdown device installed on the roof in-line with the DC strings. "
+            "To document its location, installers submit a stringing map — a simple "
+            "diagram of the array showing which panels are on which string and where "
+            "the MCI sits. These maps are usually HAND-DRAWN on a notepad or whiteboard; "
+            "typography, stick-figure drawings, and informal notation are normal and "
+            "acceptable. "
+            "\n\nPASS this requirement if the photo shows EITHER: "
+            "(a) any stringing/string map diagram of the array (hand-drawn is fine) "
+            "that indicates the MCI's approximate position, OR "
+            "(b) a photograph of the physical MCI device installed on the roof. "
+            "\n\nFAIL only if the photo shows neither of those — e.g., a blank page, "
+            "an unrelated subject, or a map with no MCI marking at all. "
+            "\n\nDo NOT fail on the grounds of drawing quality, informal style, or "
+            "because a diagram isn't a photograph of hardware. "
+            "\n\nRespond: PASS or FAIL, then one sentence explaining what you see."
         ),
     },
     {
@@ -161,11 +173,22 @@ REQUIREMENTS = [
         "task_titles": ["Manufacturer Labels"],
         "keywords": ["manufacturer labels", "module serial", "panel serial", "serial number"],
         "validation_prompt": (
-            "This photo should show a serial number from a solar module installed on site. "
-            "Verify: (1) Is a serial number present in the photo? (2) Can the serial number be identified? "
-            "PASS if a serial number is visible, even if the photo angle or distance requires zooming to read it fully. "
-            "Only FAIL if no serial number can be found in the photo at all. "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "This photo should show a serial number label from a solar module. "
+            "\n\nIMPORTANT — ground your answer in pixels, not guesses: "
+            "A serial number is a specific alphanumeric string printed on the module's "
+            "data label, typically near a barcode. Do NOT assume one exists — you must "
+            "be able to actually read characters in the image. "
+            "\n\nPASS only if you can transcribe AT LEAST 4 consecutive characters of "
+            "a serial number that you actually see in the photo. Include those "
+            "characters in your response as proof. If the photo is too blurry, too "
+            "far away, or the angle obscures the label such that no characters are "
+            "legible, respond FAIL. "
+            "\n\nFAIL if: no serial label is visible, no characters are legible, or "
+            "the photo shows something other than a module data label. "
+            "\n\nDo NOT invent or guess at a serial number — if you cannot clearly "
+            "read specific characters from the image, the answer is FAIL. "
+            "\n\nRespond: PASS or FAIL, then one sentence that either quotes the "
+            "characters you read, or explains why you cannot read any."
         ),
     },
     {

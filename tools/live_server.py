@@ -1738,16 +1738,21 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._send_json({"error": str(e)}, 500)
 
     def _recompute_report_summary(self, report_id):
-        """Recount PASS/FAIL/MISSING across requirement_results and write back to reports."""
+        """Recount PASS/FAIL/MISSING across requirement_results and write back to reports.
+
+        Totals exclude optional requirements and N/A rows, matching the aggregation
+        done at initial save time in run_check_thread.
+        """
         try:
             counts = fetch_one(
                 """SELECT
-                     COUNT(*) FILTER (WHERE status != 'N/A') AS total,
-                     COUNT(*) FILTER (WHERE status = 'PASS') AS passed,
-                     COUNT(*) FILTER (WHERE status = 'FAIL') AS failed,
-                     COUNT(*) FILTER (WHERE status = 'MISSING') AS missing
-                   FROM requirement_results
-                   WHERE report_id = %s""",
+                     COUNT(*) FILTER (WHERE rr.status != 'N/A') AS total,
+                     COUNT(*) FILTER (WHERE rr.status = 'PASS') AS passed,
+                     COUNT(*) FILTER (WHERE rr.status = 'FAIL') AS failed,
+                     COUNT(*) FILTER (WHERE rr.status = 'MISSING') AS missing
+                   FROM requirement_results rr
+                   JOIN requirements req ON req.id = rr.requirement_id
+                   WHERE rr.report_id = %s AND req.is_optional = FALSE""",
                 (report_id,),
             )
             if counts:
