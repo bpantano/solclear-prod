@@ -259,14 +259,16 @@ def run_check_thread(cc_project_id, params, rerun_ids=None, session=None):
         n_pass = sum(1 for r in required if r["status"] == "PASS")
         n_fail = sum(1 for r in required if r["status"] == "FAIL")
         n_missing = sum(1 for r in required if r["status"] == "MISSING")
+        n_review = sum(1 for r in required if r["status"] == "NEEDS_REVIEW")
 
         if db_report_id:
             try:
                 execute(
                     """UPDATE reports SET status = 'complete', completed_at = NOW(),
-                       total_required = %s, total_passed = %s, total_failed = %s, total_missing = %s
+                       total_required = %s, total_passed = %s, total_failed = %s,
+                       total_missing = %s, total_needs_review = %s
                        WHERE id = %s""",
-                    (len(required), n_pass, n_fail, n_missing, db_report_id)
+                    (len(required), n_pass, n_fail, n_missing, n_review, db_report_id)
                 )
             except Exception as e:
                 print(f"WARNING: Could not update report in DB: {e}", file=sys.stderr)
@@ -277,6 +279,7 @@ def run_check_thread(cc_project_id, params, rerun_ids=None, session=None):
                 "passed": n_pass,
                 "failed": n_fail,
                 "missing": n_missing,
+                "needs_review": n_review,
                 "total": len(required),
                 "project_id": cc_project_id,
                 "db_report_id": db_report_id,
@@ -1468,7 +1471,7 @@ class LiveHandler(BaseHTTPRequestHandler):
             if role == "superadmin":
                 rows = fetch_all("""
                     SELECT r.id, r.project_id, p.companycam_id, p.name, r.total_passed, r.total_failed,
-                           r.total_missing, r.total_required, r.is_test, r.created_at
+                           r.total_missing, r.total_needs_review, r.total_required, r.is_test, r.created_at
                     FROM reports r
                     JOIN projects p ON p.id = r.project_id
                     WHERE r.status = 'complete'
@@ -1478,7 +1481,7 @@ class LiveHandler(BaseHTTPRequestHandler):
             else:
                 rows = fetch_all("""
                     SELECT r.id, r.project_id, p.companycam_id, p.name, r.total_passed, r.total_failed,
-                           r.total_missing, r.total_required, r.is_test, r.created_at
+                           r.total_missing, r.total_needs_review, r.total_required, r.is_test, r.created_at
                     FROM reports r
                     JOIN projects p ON p.id = r.project_id
                     WHERE r.status = 'complete' AND r.is_test = FALSE
@@ -1508,6 +1511,8 @@ class LiveHandler(BaseHTTPRequestHandler):
                     "name": row["name"],
                     "passed": row["total_passed"],
                     "failed": row["total_failed"],
+                    "missing": row["total_missing"],
+                    "needs_review": row.get("total_needs_review", 0) or 0,
                     "total": row["total_required"],
                     "is_test": row["is_test"],
                     "timestamp": int(row["created_at"].timestamp()) if row.get("created_at") else 0,
@@ -1738,7 +1743,7 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._send_json({"error": str(e)}, 500)
 
     def _recompute_report_summary(self, report_id):
-        """Recount PASS/FAIL/MISSING across requirement_results and write back to reports.
+        """Recount status buckets across requirement_results and write back to reports.
 
         Totals exclude optional requirements and N/A rows, matching the aggregation
         done at initial save time in run_check_thread.
@@ -1749,7 +1754,8 @@ class LiveHandler(BaseHTTPRequestHandler):
                      COUNT(*) FILTER (WHERE rr.status != 'N/A') AS total,
                      COUNT(*) FILTER (WHERE rr.status = 'PASS') AS passed,
                      COUNT(*) FILTER (WHERE rr.status = 'FAIL') AS failed,
-                     COUNT(*) FILTER (WHERE rr.status = 'MISSING') AS missing
+                     COUNT(*) FILTER (WHERE rr.status = 'MISSING') AS missing,
+                     COUNT(*) FILTER (WHERE rr.status = 'NEEDS_REVIEW') AS needs_review
                    FROM requirement_results rr
                    JOIN requirements req ON req.id = rr.requirement_id
                    WHERE rr.report_id = %s AND req.is_optional = FALSE""",
@@ -1758,8 +1764,10 @@ class LiveHandler(BaseHTTPRequestHandler):
             if counts:
                 execute(
                     """UPDATE reports SET total_required = %s, total_passed = %s,
-                       total_failed = %s, total_missing = %s WHERE id = %s""",
-                    (counts["total"], counts["passed"], counts["failed"], counts["missing"], report_id),
+                       total_failed = %s, total_missing = %s, total_needs_review = %s
+                       WHERE id = %s""",
+                    (counts["total"], counts["passed"], counts["failed"],
+                     counts["missing"], counts["needs_review"], report_id),
                 )
         except Exception as e:
             print(f"WARNING: Failed to recompute report summary: {e}", file=sys.stderr)

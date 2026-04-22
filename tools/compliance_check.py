@@ -27,6 +27,7 @@ Output:
 import argparse
 import json
 import os
+import re
 import sys
 import base64
 from pathlib import Path
@@ -108,7 +109,7 @@ REQUIREMENTS = [
             "This photo should show a manufacturer label for an inverter, micro-inverter, or AC optimizer. "
             "Verify: (1) Is a manufacturer label present in the photo? (2) Can the model information be identified? "
             "PASS if the label is present and the model can be determined, even if the photo requires zooming. "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -122,7 +123,7 @@ REQUIREMENTS = [
             "This photo should show serial numbers for an inverter, DC safety switch, or combiner box. "
             "Verify: (1) Is a serial number present in the photo? (2) Can the serial number be identified? "
             "PASS if a serial number is visible and can be read, even if zooming would help. "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -148,7 +149,7 @@ REQUIREMENTS = [
             "an unrelated subject, or a map with no MCI marking at all. "
             "\n\nDo NOT fail on the grounds of drawing quality, informal style, or "
             "because a diagram isn't a photograph of hardware. "
-            "\n\nRespond: PASS or FAIL, then one sentence explaining what you see."
+            "\n\nDescribe what you see in the photo, then end with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -162,7 +163,7 @@ REQUIREMENTS = [
             "This photo should show the manufacturer label from a solar module/panel. "
             "Verify: (1) Is a panel label present? (2) Can make/model information be identified? "
             "PASS if the label is visible, even if zooming would be needed to read fine print. "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -187,8 +188,9 @@ REQUIREMENTS = [
             "the photo shows something other than a module data label. "
             "\n\nDo NOT invent or guess at a serial number — if you cannot clearly "
             "read specific characters from the image, the answer is FAIL. "
-            "\n\nRespond: PASS or FAIL, then one sentence that either quotes the "
-            "characters you read, or explains why you cannot read any."
+            "\n\nExplain what you see: either quote the characters you can actually "
+            "read in the photo, or explain why you cannot read any. Then end with a "
+            "final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -203,7 +205,7 @@ REQUIREMENTS = [
             "Verify: (1) Is a roof attachment point visible? (2) Is flashing or sealant present? "
             "PASS if the photo documents the attachment point with flashing or sealant visible. "
             "Do not judge installation quality — only verify the photo shows what is required. "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -218,7 +220,7 @@ REQUIREMENTS = [
             "Verify: (1) Is racking/rail visible? (2) Is wire management visible (clips, secured wires)? "
             "PASS if the photo shows the racking area with wire management present. "
             "A grounding conductor may not be clearly distinguishable at photo resolution — do not fail solely for that. "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -231,7 +233,7 @@ REQUIREMENTS = [
         "validation_prompt": (
             "This photo should show a complete solar array with all modules visible and rail trimmed. "
             "Verify: (1) Are all panels visible in the frame? (2) Is the rail trimmed (not extending past the last module)? "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -241,10 +243,39 @@ REQUIREMENTS = [
         "condition": always,
         "task_titles": ["Wire Management / Under Array"],
         "keywords": ["wire management / under array", "under array", "wire management"],
+        "selection_criteria": "a photo showing wires under the solar array secured with clips, rail clamps, or wire management hardware above the roof surface",
         "validation_prompt": (
             "This photo should show wire management under the solar array after panels are installed. "
-            "Verify: (1) Are wires NOT touching the roof surface? (2) Are wires secured/bundled above the surface? "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "The rule is that wires must not touch the roof surface; they should be secured and "
+            "bundled above the roof using clips, rail clamps, management channels, or standoffs. "
+            "\n\nIMPORTANT — work through these observations BEFORE picking a verdict. Write each "
+            "observation as a numbered line:"
+            "\n1. Hardware check — Do you see any of the following in the photo: wire clips, "
+            "rail clamps, wire management channels, standoffs, or the edge of the module/rack "
+            "the wires appear secured to? Describe specifically what you see (including their "
+            "approximate location in the frame)."
+            "\n2. Contact check — Where do the wires physically contact the structure? Options: "
+            "(a) clipped to a rail/channel above the roof, (b) resting directly on shingles with "
+            "no visible support, (c) the contact point is obscured, blurred, or out of frame."
+            "\n3. Camera angle check — Note whether the photo is taken at an angle that makes the "
+            "clip/rail attachment points hard to see (e.g. parallel-to-roof shot, extreme close-up)."
+            "\n\nOnly AFTER those three observations, choose:"
+            "\n- PASS: observation #1 shows visible clips/rails AND observation #2 shows wires "
+            "secured to them above the roof."
+            "\n- FAIL: observation #1 shows NO management hardware AND observation #2 clearly "
+            "shows wires resting flat on the roof surface. Both conditions required — absence "
+            "of visible hardware alone is NOT enough to FAIL."
+            "\n- NEEDS_REVIEW: anything else. Use this when hardware is partially visible, "
+            "contact points are obscured, the camera angle defeats your ability to see attachment "
+            "clearly, or you're tempted to say FAIL because 'wires are near shingles' without "
+            "positive evidence of non-compliance. When in doubt, this is the correct answer."
+            "\n\nFORMAT — your response MUST follow this structure, in this order:"
+            "\n1. <your observation #1 text>"
+            "\n2. <your observation #2 text>"
+            "\n3. <your observation #3 text>"
+            "\nVERDICT: PASS   (or FAIL, or NEEDS_REVIEW)"
+            "\n\nDo NOT put the verdict at the top. Work through observations first, then "
+            "commit to a verdict on the last line. This discipline is required."
         ),
     },
     {
@@ -258,7 +289,7 @@ REQUIREMENTS = [
             "This photo should show a tilt/pitch measurement taken on the solar module itself. "
             "Verify: (1) Is the measurement clearly legible? (2) Is the measurement taken on the module "
             "(NOT just a phone app screenshot without array context)? (3) Is the array visible in the photo? "
-            "Respond: PASS or FAIL, then one sentence explaining why. "
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL. "
             "FAIL if this is just a screenshot of a tilt app without the array visible."
         ),
     },
@@ -269,11 +300,36 @@ REQUIREMENTS = [
         "condition": always,
         "task_titles": ["J-Box"],
         "keywords": ["J-Box", "j-box", "junction box", "jbox"],
+        "selection_criteria": "a photo of a rooftop junction box with the COVER REMOVED, showing internal wiring and terminations (NOT a closed/sealed box viewed from outside)",
         "validation_prompt": (
-            "This photo should show an open rooftop junction box with completed wiring and bonding. "
-            "Verify: (1) Is the junction box open and wiring visible? (2) Are conductors terminated properly? "
-            "(3) Is there no more than 2 inches of exposed conductors outside the array (more requires conduit)? "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "This photo should show a rooftop junction box (J-Box) with its cover removed "
+            "so conductor terminations and bonding are visible for inspection. "
+            "\n\nIMPORTANT — work through these observations BEFORE picking a verdict. Write each "
+            "observation as a numbered line:"
+            "\n1. Lid/cover state — Is the junction box lid/cover REMOVED, LIFTED, or CLOSED? "
+            "Describe what you see: is the internal chamber visible (lid off), or is the enclosure "
+            "sealed with only its exterior visible? Note whether you see screw holes/gasket around "
+            "the edge (indicates removed lid) or a flat covered top (indicates closed)."
+            "\n2. Wiring visibility — Can you see individual conductors/wires terminated inside "
+            "the box? If yes, describe color and count roughly. If no, describe what is blocking "
+            "the view (closed lid, extreme angle, glare, obstruction)."
+            "\n3. Exposed conductor check — If wiring IS visible, is there more than ~2 inches of "
+            "exposed conductor exiting the box before entering a conduit or the array? Skip this if "
+            "you can't see the wiring at all."
+            "\n\nOnly AFTER those observations, choose:"
+            "\n- PASS: lid is clearly off/removed AND conductors are visible AND terminations "
+            "look complete AND no excessive exposed conductor. All four required."
+            "\n- FAIL: lid is clearly closed/sealed (no internal view), OR you can clearly see "
+            "conductors with excessive >2\" exposure outside the box."
+            "\n- NEEDS_REVIEW: any ambiguity — lid state unclear, partially obscured view, glare "
+            "or angle prevents confirming termination quality, or you're tempted to FAIL because "
+            "you 'can't see wiring' without positive evidence the lid is actually closed."
+            "\n\nFORMAT — your response MUST follow this structure, in this order:"
+            "\n1. <observation #1>"
+            "\n2. <observation #2>"
+            "\n3. <observation #3>"
+            "\nVERDICT: PASS   (or FAIL, or NEEDS_REVIEW)"
+            "\n\nDo NOT put the verdict at the top. Work through observations first."
         ),
     },
     {
@@ -286,7 +342,7 @@ REQUIREMENTS = [
         "validation_prompt": (
             "This photo should show an open combiner box with complete AC wiring and branch circuit breakers. "
             "Verify: (1) Is the box open? (2) Is all AC wiring visible? (3) Are all branch circuit breakers visible? "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -300,7 +356,7 @@ REQUIREMENTS = [
             "This photo should show the main breaker with its amperage rating. "
             "Verify: (1) Is the main breaker visible? (2) Can the amperage rating be identified? "
             "PASS if the main breaker is shown and the rating can be determined, even if zooming would help. "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -314,7 +370,7 @@ REQUIREMENTS = [
             "This photo should show the main panel's busbar rating label/sticker. "
             "Verify: (1) Is a panel label or sticker present? (2) Can the busbar rating be identified? "
             "PASS if the label is visible, even if zooming would be needed. "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -330,7 +386,7 @@ REQUIREMENTS = [
             "Verify: (1) Are interconnection components visible? (2) Can termination points be seen? "
             "PASS if the photo documents the point of interconnection. A single well-framed photo showing "
             "the components is sufficient — do not require both a pullback and close-up in one photo. "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -345,7 +401,7 @@ REQUIREMENTS = [
             "Verify: (1) Does the photo show the general BOS area? (2) Is equipment visible in the frame? "
             "PASS if the photo provides context of where the BOS equipment is installed. "
             "Do not require every individual component to be identifiable. "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -359,7 +415,7 @@ REQUIREMENTS = [
             "This photo should show the production meter or production current transformers (CTs). "
             "Verify: (1) Is a production meter or CT visible? (2) For Enphase: is L1 wiring from branch circuits "
             "passing through the production CT visible? Are CT terminal lugs with correct phase landing visible? "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -372,7 +428,7 @@ REQUIREMENTS = [
         "validation_prompt": (
             "This photo should show consumption monitoring CTs on service feeders. "
             "Verify: (1) Are CTs visible on service feeders? (2) Is the CT direction/orientation visible? "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -387,7 +443,7 @@ REQUIREMENTS = [
             "This photo should show a fused AC disconnect with wiring and fuse ratings. "
             "Verify: (1) Is the disconnect visible with wiring? (2) Are fuse ratings present in the photo? "
             "PASS if the disconnect is documented with fuses visible, even if zooming is needed to read ratings. "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -402,7 +458,7 @@ REQUIREMENTS = [
             "This photo should show a sub panel with wiring, breakers, and bus rating label. "
             "Verify: (1) Is the sub panel visible with wiring? (2) Are breakers present? "
             "PASS if the sub panel is documented showing its wiring and breakers. "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -415,7 +471,7 @@ REQUIREMENTS = [
         "validation_prompt": (
             "This photo should show the manufacturer label on the battery/storage unit. "
             "Verify: (1) Is the battery label visible? (2) Is the make/model readable? "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -429,7 +485,7 @@ REQUIREMENTS = [
             "This photo should show battery comms cable terminations with the drain wire visible. "
             "Verify: (1) Are both ends of the comms cable terminated and visible? "
             "(2) Is the drain wire visible and landed on ONE end only (not both)? "
-            "Respond: PASS or FAIL, then one sentence explaining why. "
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL. "
             "FAIL if drain wire is on both ends or neither end."
         ),
     },
@@ -443,7 +499,7 @@ REQUIREMENTS = [
         "validation_prompt": (
             "This photo should show the battery CT with its location and direction visible. "
             "Verify: (1) Is the CT visible? (2) Is the CT direction/orientation discernible? "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -458,7 +514,7 @@ REQUIREMENTS = [
             "in context of the surrounding equipment. "
             "Verify: (1) Is a battery/storage unit visible? (2) Is surrounding equipment context shown? "
             "PASS if the photo shows the battery install location with context. "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -472,7 +528,7 @@ REQUIREMENTS = [
             "This photo should show the transfer switch/gateway panel interior with all wiring "
             "and breaker ratings clearly legible. "
             "Verify: (1) Is the internal wiring visible? (2) Are breaker ratings readable? "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -485,7 +541,7 @@ REQUIREMENTS = [
         "validation_prompt": (
             "This photo should show the manufacturer label for the ATS/gateway installed on site. "
             "Verify: (1) Is a manufacturer label visible? (2) Is the make/model readable? "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -496,12 +552,18 @@ REQUIREMENTS = [
         "task_titles": ["Monitoring App Screenshots"],
         "keywords": ["monitoring app screenshots", "commissioning", "LightReach partner", "cellular", "PCS settings"],
         "validation_prompt": (
-            "This screenshot should show Tesla system commissioning confirming: LightReach added as partner, "
-            "inverter & CTs enabled, networking connected to Cellular, and operations settings "
-            "with panel current limit & PCS settings. "
-            "Verify which of these four items are visible. "
-            "Respond: PASS if all four are shown, FAIL if any are missing, then list what is confirmed vs. missing."
+            "These are screenshots from the Tesla installer commissioning app. A "
+            "complete commissioning record confirms several separate operational "
+            "settings that typically live on DIFFERENT screens — so criteria will "
+            "be spread across multiple screenshots. Verify each criterion is "
+            "confirmed SOMEWHERE in the set."
         ),
+        "criteria": [
+            "LightReach is added as a monitoring/service partner (installer partner entry)",
+            "Inverter and CTs (current transformers) are enabled — not in an error/alert state",
+            "Networking is connected via Cellular (cellular shown as active connection type)",
+            "Operations settings show both a panel current limit value AND PCS (power control system) settings configured",
+        ],
     },
     {
         "id": "SC2",
@@ -511,11 +573,14 @@ REQUIREMENTS = [
         "task_titles": ["Monitoring App Screenshots"],
         "keywords": ["monitoring app screenshots", "commissioning", "backup reserve", "storm guard", "SolarEdge"],
         "validation_prompt": (
-            "This screenshot should show SolarEdge system commissioning confirming: "
-            "20% minimum backup reserve set, and Storm Guard enabled. "
-            "Verify: (1) Is backup reserve visible and set to 20% or more? (2) Is Storm Guard enabled? "
-            "Respond: PASS if both are confirmed, FAIL if either is missing, then explain."
+            "These are screenshots from the SolarEdge installer/monitoring app. "
+            "Verify each commissioning criterion is confirmed SOMEWHERE in the set "
+            "of screenshots (they commonly live on separate screens)."
         ),
+        "criteria": [
+            "Backup reserve is set to at least 20% (any value ≥ 20% qualifies)",
+            "Storm Guard is enabled (shown as ON or active)",
+        ],
     },
     {
         "id": "SI2",
@@ -529,7 +594,7 @@ REQUIREMENTS = [
             "required for incentive state projects. "
             "Verify: (1) Is a serial number present in the photo? (2) Can the serial number be identified? "
             "PASS if a serial number is visible, even if zooming would be needed. "
-            "Respond: PASS or FAIL, then one sentence explaining why."
+            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
         ),
     },
 ]
@@ -638,130 +703,233 @@ def _download_image(url: str) -> Optional[tuple]:
         return None
 
 
+VISION_MODEL = "claude-sonnet-4-6"
+
+
 def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
     """
-    Two-tier vision check for maximum accuracy:
+    Single-tier vision check. Sends all candidate photos + validation prompt to
+    Sonnet in one call. The model both picks the best-matching photo (CHOICE)
+    and validates it (VERDICT) within a single response, plus emits a
+    customer-facing EXPLANATION that the UI surfaces as the reason.
 
-    Tier 1 (selection): Send ALL candidate thumbnails to Haiku. Ask which photo
-    best represents the requirement. Thumbnails are small (~400 tokens each),
-    so even 15 photos is cheap.
-
-    Tier 2 (validation): Download the full-res winner and validate it against
-    the requirement's validation prompt.
-
-    Cost: ~2 Haiku calls per requirement. Tier 1 is cheap (thumbnails),
-    Tier 2 is one full image. Total similar to old single-pass with 5 photos,
-    but evaluates ALL candidates.
+    Why single-tier: previously ran a cheap Haiku selection pass ("Tier 1")
+    followed by a Haiku validation pass ("Tier 2"). Haiku's multi-image
+    reasoning was ~80% reliable — compounding across 25 requirements that
+    meant only ~0.4% of reports were fully correct. Sonnet handles both
+    tasks reliably in one call, with lower total API round trips and simpler
+    code. See diagnosis notes in memory for 2026-04-22.
     """
     if not ANTHROPIC_API_KEY:
         return {"result": "SKIP", "reason": "ANTHROPIC_API_KEY not set"}
 
-    import concurrent.futures
-
-    # ── Tier 1: Selection — download ALL thumbnails and pick the best ─────
-
-    thumb_urls = []
-    for photo in candidates:
-        url = get_photo_thumbnail_url(photo)
-        if url:
-            thumb_urls.append(url)
-
-    if not thumb_urls:
-        return {"result": "ERROR", "reason": "No photo URLs found", "photo_urls": {}}
-
-    # If only 1 candidate, skip selection tier
-    if len(thumb_urls) == 1:
-        best_idx = 0
-    else:
-        # Download all thumbnails in parallel
-        thumb_downloaded = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(thumb_urls))) as executor:
-            future_to_url = {executor.submit(_download_image, url): url for url in thumb_urls}
-            for future in concurrent.futures.as_completed(future_to_url):
-                url = future_to_url[future]
-                try:
-                    result = future.result()
-                    if result:
-                        thumb_downloaded[url] = result
-                except Exception:
-                    pass
-
-        # Build thumbnail image blocks
-        thumb_blocks = []
-        valid_indices = []
-        for i, url in enumerate(thumb_urls):
-            if url in thumb_downloaded:
-                data, media_type = thumb_downloaded[url]
-                thumb_blocks.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
-                thumb_blocks.append({"type": "text", "text": f"[Photo {i + 1}]"})
-                valid_indices.append(i)
-
-        if not thumb_blocks:
-            return {"result": "ERROR", "reason": "Could not download any candidate photos", "photo_urls": {}}
-
-        # Ask Haiku to pick the best photo
-        selection_payload = {
-            "model": "claude-haiku-4-5-20251001",
-            "max_tokens": 5,
-            "messages": [{"role": "user", "content": thumb_blocks + [{"type": "text", "text": (
-                f"These are {len(valid_indices)} photos from a solar installation checklist task.\n"
-                f"Requirement: {requirement['title']}\n"
-                f"Which photo number (1-{len(thumb_urls)}) best shows this requirement? Reply with only the number."
-            )}]}],
-        }
-
-        selection_text = _call_anthropic(selection_payload, requirement["id"] + "-select")
-        try:
-            best_idx = int("".join(c for c in (selection_text or "1") if c.isdigit())) - 1
-            if best_idx < 0 or best_idx >= len(candidates):
-                best_idx = 0
-        except (ValueError, TypeError):
-            best_idx = 0
-
-    # ── Tier 2: Validation — download full-res winner and validate ────────
-
-    best_photo = candidates[best_idx]
-    full_url = get_photo_web_url(best_photo)
-    if not full_url:
-        return {"result": "ERROR", "reason": "Could not get URL for selected photo", "photo_urls": {}}
-
-    full_result = _download_image(full_url)
-    if not full_result:
-        return {"result": "ERROR", "reason": "Could not download selected photo", "photo_urls": {}}
-
-    data, media_type = full_result
-    photo_urls = {1: full_url}
-
-    # Also include URLs of all candidates for reference in the report
-    all_photo_urls = {}
+    # Download all candidates (full-res). Skip any that fail — the model can
+    # still reason about the ones that succeeded. Photos keep their original
+    # task-list order for consistency with what the CompanyCam API returns.
+    downloaded = []  # list of (candidate_idx, url, data, media_type)
     for i, photo in enumerate(candidates):
         url = get_photo_web_url(photo)
-        if url:
-            all_photo_urls[i + 1] = url
+        if not url:
+            continue
+        result = _download_image(url)
+        if result is None:
+            continue
+        data, media_type = result
+        downloaded.append((i, url, data, media_type))
 
-    prompt = (
-        f"Requirement {requirement['id']}: {requirement['title']}\n\n"
-        f"{requirement['validation_prompt']}\n\n"
-        "IMPORTANT: Your response MUST start with exactly 'PASS' or 'FAIL' on the first line "
-        "(no asterisks, headers, or other text before it), followed by one sentence explaining why."
-    )
+    if not downloaded:
+        return {"result": "ERROR", "reason": "Could not download any candidate photos", "photo_urls": {}}
 
+    # Build content: label BEFORE each image (Anthropic best practice for
+    # multi-image reasoning — label-after was causing the model to bind labels
+    # to the NEXT image, which swapped descriptions).
+    content = []
+    for model_idx, (_, _, data, media_type) in enumerate(downloaded, start=1):
+        content.append({"type": "text", "text": f"Photo {model_idx}:"})
+        content.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
+
+    # Multi-criterion mode: when the requirement specifies a list of criteria
+    # that must ALL be confirmed across a SET of photos (commonly used for
+    # commissioning screenshots where each criterion lives on a different
+    # screen). Otherwise the default single-winner-pick + validate flow.
+    if requirement.get("criteria"):
+        content.append({"type": "text", "text": _build_multi_criterion_prompt(requirement, len(downloaded))})
+    else:
+        content.append({"type": "text", "text": _build_validation_prompt(requirement, len(downloaded))})
+
+    # max_tokens budgets per-photo description room plus validation reasoning
+    # plus the final VERDICT + EXPLANATION lines. Capped so a task with 15+
+    # photos can't blow up costs.
+    dynamic_max_tokens = min(450 + 60 * len(downloaded), 1200)
     payload = {
-        "model": "claude-haiku-4-5-20251001",
-        "max_tokens": 150,
-        "messages": [{"role": "user", "content": [
-            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}},
-            {"type": "text", "text": prompt},
-        ]}],
+        "model": VISION_MODEL,
+        "max_tokens": dynamic_max_tokens,
+        "messages": [{"role": "user", "content": content}],
     }
-
     text = _call_anthropic(payload, requirement["id"])
     if text and text.startswith("ERROR"):
+        # Best-effort photo_urls even on error — default to task order.
+        all_photo_urls = {i + 1: get_photo_web_url(p) for i, p in enumerate(candidates) if get_photo_web_url(p)}
         return {"result": "ERROR", "reason": text, "photo_urls": all_photo_urls}
 
-    first_word = (text or "").strip().split()[0].upper().rstrip(".:,")
-    passed = first_word == "PASS"
-    return {"result": "PASS" if passed else "FAIL", "reason": text, "photo_urls": all_photo_urls}
+    # In multi-criterion mode there's no single winner — every photo is
+    # part of the evidence set. Keep task-order indexing so photo_urls[1] is
+    # just "first screenshot" (a stable, predictable reference).
+    if requirement.get("criteria"):
+        all_photo_urls = {}
+        for i, photo in enumerate(candidates):
+            url = get_photo_web_url(photo)
+            if url:
+                all_photo_urls[i + 1] = url
+    else:
+        # Single-winner-pick mode: rotate photo_urls so winner is at key 1.
+        choice_idx = _parse_choice(text or "", len(downloaded))
+        winner_candidate_idx = downloaded[choice_idx][0]
+        winner_url = downloaded[choice_idx][1]
+
+        all_photo_urls = {1: winner_url}
+        next_key = 2
+        for i, photo in enumerate(candidates):
+            if i == winner_candidate_idx:
+                continue
+            url = get_photo_web_url(photo)
+            if url:
+                all_photo_urls[next_key] = url
+                next_key += 1
+
+    verdict = _parse_verdict(text or "")
+    explanation = _parse_explanation(text or "")
+    reason = explanation or text  # fall back to full response if EXPLANATION missing
+    return {"result": verdict, "reason": reason, "photo_urls": all_photo_urls}
+
+
+def _build_validation_prompt(requirement: dict, n_photos: int) -> str:
+    """Compose the single-tier prompt wrapped around the requirement's
+    validation_prompt. For N=1 we skip the selection step."""
+    selection_criteria = requirement.get("selection_criteria") or requirement["title"]
+    base = (
+        f"REQUIREMENT: {requirement['id']} — {requirement['title']}\n\n"
+        f"{requirement['validation_prompt']}\n\n"
+    )
+    if n_photos == 1:
+        return base + (
+            "Work through what you see in the photo, then end your response with "
+            "these two lines exactly:\n"
+            "  VERDICT: PASS   (or FAIL, or NEEDS_REVIEW)\n"
+            "  EXPLANATION: <one sentence describing what was actually seen that led "
+            "to the verdict. Customer-facing — do NOT reference photo numbers like "
+            "'Photo 1'; describe what's physically visible instead.>"
+        )
+    return base + (
+        f"You have {n_photos} candidate photos. Work through this in four steps:\n\n"
+        "STEP 1 — Describe each photo briefly (one line each):\n"
+        "  Photo 1: <what you see>\n"
+        "  Photo 2: <what you see>\n"
+        "  ...\n\n"
+        "STEP 2 — Pick the photo that best matches this selection criteria:\n"
+        f"  \"{selection_criteria}\"\n"
+        "  If multiple photos are of the same general subject, prefer the one that "
+        "matches the specific criteria over a generic shot. State your choice:\n"
+        "  CHOICE: <number>\n\n"
+        "STEP 3 — For the photo you chose, apply the validation rules from the "
+        "REQUIREMENT block above.\n\n"
+        "STEP 4 — End your response with these two lines exactly:\n"
+        "  VERDICT: PASS   (or FAIL, or NEEDS_REVIEW)\n"
+        "  EXPLANATION: <one sentence describing what was actually seen that led "
+        "to the verdict. Customer-facing — do NOT reference photo numbers like "
+        "'Photo 1'; describe what's physically visible instead.>"
+    )
+
+
+def _build_multi_criterion_prompt(requirement: dict, n_photos: int) -> str:
+    """Compose a prompt for requirements where multiple criteria must ALL be
+    confirmed across a SET of photos (no single winner to pick). The model
+    scans across the set and produces CONFIRMED/MISSING/VERDICT lines."""
+    criteria = requirement["criteria"]
+    criteria_lines = "\n".join(f"  {i+1}. {c}" for i, c in enumerate(criteria))
+    intro = requirement.get("validation_prompt", "") or ""
+    base = (
+        f"REQUIREMENT: {requirement['id']} — {requirement['title']}\n\n"
+        f"{intro}\n\n" if intro else f"REQUIREMENT: {requirement['id']} — {requirement['title']}\n\n"
+    )
+
+    set_context = (
+        f"There is only 1 photo to check." if n_photos == 1
+        else f"You have {n_photos} photos. Scan across ALL of them — criteria may be "
+             f"confirmed in any photo, not necessarily the same one."
+    )
+
+    return (
+        base +
+        f"{set_context} The following criteria must ALL be confirmed for this requirement to PASS:\n\n"
+        f"{criteria_lines}\n\n"
+        "STEP 1 — For each criterion, note which photo(s) confirm it (or that none do), "
+        "quoting visible UI text / describing specific elements as proof.\n\n"
+        "STEP 2 — End your response with these lines exactly:\n"
+        "  CONFIRMED: <comma-separated list of criterion numbers confirmed, e.g. 1, 2, 4>\n"
+        "  MISSING: <comma-separated list of criterion numbers NOT confirmed, e.g. 3>\n"
+        "  VERDICT: PASS (all criteria confirmed) / FAIL (any missing) / NEEDS_REVIEW (genuine ambiguity)\n"
+        "  EXPLANATION: <one sentence, customer-facing, listing what was confirmed vs missing. "
+        "Do NOT reference photo/screenshot numbers — describe the content instead (e.g. 'the "
+        "cellular networking screen', 'the operations settings panel').>"
+    )
+
+
+def _parse_choice(text: str, n_downloaded: int) -> int:
+    """Extract the winning photo index from CHOICE: N. Returns 0-based index
+    into the `downloaded` list. Defaults to 0 if missing or invalid."""
+    m = re.search(r"CHOICE\s*:\s*(?:Photo\s*)?(\d+)", text, re.IGNORECASE)
+    if not m:
+        return 0
+    try:
+        idx = int(m.group(1)) - 1
+    except ValueError:
+        return 0
+    if idx < 0 or idx >= n_downloaded:
+        return 0
+    return idx
+
+
+def _parse_explanation(text: str) -> str:
+    """Extract the customer-facing EXPLANATION line(s) from the response.
+    Empty string if no anchor found — caller falls back to full text."""
+    m = re.search(r"EXPLANATION\s*:\s*(.+?)(?:\n\n|\Z)", text, re.IGNORECASE | re.DOTALL)
+    if not m:
+        return ""
+    return m.group(1).strip()
+
+
+def _parse_verdict(text: str) -> str:
+    """Extract PASS / FAIL / NEEDS_REVIEW from a model response.
+
+    Two strategies, in order:
+      1. Anchored verdict: look for the LAST occurrence of "VERDICT: X" in the
+         response. Prompts that ask the model to reason first should end with
+         this anchor so we aren't fooled by the word "PASS" or "FAIL" appearing
+         inside the reasoning text.
+      2. First-word heuristic: for legacy prompts that just say
+         "Respond: PASS or FAIL, ...", the first non-markdown token is the verdict.
+    """
+    # Strategy 1: VERDICT: anchor (case-insensitive, accepts dash/underscore variants)
+    anchor_matches = re.findall(
+        r"\bVERDICT\s*:\s*(PASS|FAIL|NEEDS[_\-\s]?REVIEW|INCONCLUSIVE)\b",
+        text, re.IGNORECASE,
+    )
+    if anchor_matches:
+        token = anchor_matches[-1].upper()  # last occurrence wins
+        token = re.sub(r"[\s\-]", "_", token)
+        if token in ("NEEDS_REVIEW", "INCONCLUSIVE", "NEEDSREVIEW"):
+            return "NEEDS_REVIEW"
+        return token if token in ("PASS", "FAIL") else "FAIL"
+
+    # Strategy 2: first-word heuristic (legacy prompts)
+    cleaned = text.strip().lstrip("*_`").strip()
+    first_word = cleaned.split()[0].upper().rstrip(".:,*_") if cleaned.split() else ""
+    if first_word in ("NEEDS_REVIEW", "NEEDS-REVIEW", "NEEDSREVIEW", "REVIEW", "INCONCLUSIVE"):
+        return "NEEDS_REVIEW"
+    if first_word == "PASS":
+        return "PASS"
+    return "FAIL"
 
 
 # ── Photo matching ────────────────────────────────────────────────────────────

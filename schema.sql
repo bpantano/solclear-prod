@@ -151,11 +151,12 @@ CREATE TABLE reports (
     is_incentive_state BOOLEAN NOT NULL DEFAULT FALSE,
     portal_access_granted BOOLEAN NOT NULL DEFAULT FALSE,
     -- Summary
-    total_required  INTEGER NOT NULL DEFAULT 0,
-    total_passed    INTEGER NOT NULL DEFAULT 0,
-    total_failed    INTEGER NOT NULL DEFAULT 0,
-    total_missing   INTEGER NOT NULL DEFAULT 0,
-    status          TEXT NOT NULL DEFAULT 'running',  -- 'running', 'complete', 'error'
+    total_required     INTEGER NOT NULL DEFAULT 0,
+    total_passed       INTEGER NOT NULL DEFAULT 0,
+    total_failed       INTEGER NOT NULL DEFAULT 0,
+    total_missing      INTEGER NOT NULL DEFAULT 0,
+    total_needs_review INTEGER NOT NULL DEFAULT 0,  -- see migrations/002_needs_review_status.sql
+    status             TEXT NOT NULL DEFAULT 'running',  -- 'running', 'complete', 'error'
     is_test         BOOLEAN NOT NULL DEFAULT FALSE,  -- true for superadmin runs
     -- Timestamps
     started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),

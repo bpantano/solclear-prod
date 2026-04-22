@@ -71,6 +71,9 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       --purple: #8b5cf6;
       --purple-subtle: #f5f3ff;
       --purple-text: #5b21b6;
+      --review: #06b6d4;
+      --review-subtle: #ecfeff;
+      --review-text: #155e75;
 
       /* Badge aliases */
       --badge-pass-bg: var(--success-subtle);
@@ -81,6 +84,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       --badge-missing-text: var(--warning-text);
       --badge-error-bg: var(--purple-subtle);
       --badge-error-text: var(--purple-text);
+      --badge-review-bg: var(--review-subtle);
+      --badge-review-text: var(--review-text);
 
       /* Shadows */
       --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.06);
@@ -142,6 +147,9 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       --purple: #a78bfa;
       --purple-subtle: #3730a3;
       --purple-text: #c4b5fd;
+      --review: #22d3ee;
+      --review-subtle: #164e63;
+      --review-text: #a5f3fc;
 
       --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.2);
       --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
@@ -346,6 +354,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     .badge-fail    { background: var(--badge-fail-bg); color: var(--badge-fail-text); }
     .badge-missing { background: var(--badge-missing-bg); color: var(--badge-missing-text); }
     .badge-error   { background: var(--badge-error-bg); color: var(--badge-error-text); }
+    .badge-review,
+    .badge-needs_review { background: var(--badge-review-bg); color: var(--badge-review-text); }
     .badge-info    { background: var(--accent-subtle); color: var(--accent-text); }
     .badge-neutral { background: var(--bg-subtle); color: var(--text-secondary); }
     .badge-success { background: var(--success-subtle); color: var(--success-text); }
@@ -465,10 +475,11 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       box-shadow: var(--shadow-sm);
       animation: fadeIn 0.2s ease;
     }
-    .result-row.pass    { border-left-color: var(--success); }
-    .result-row.fail    { border-left-color: var(--danger); }
-    .result-row.missing { border-left-color: var(--warning); }
-    .result-row.error   { border-left-color: var(--purple); }
+    .result-row.pass         { border-left-color: var(--success); }
+    .result-row.fail         { border-left-color: var(--danger); }
+    .result-row.missing      { border-left-color: var(--warning); }
+    .result-row.error        { border-left-color: var(--purple); }
+    .result-row.needs_review { border-left-color: var(--review); }
 
     .result-header { display: flex; align-items: center; gap: 8px; }
     .result-detail { transition: max-height 0.2s ease; }
@@ -769,6 +780,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         <option value="all">All Status</option>
         <option value="passed">Passed Only</option>
         <option value="failed">Has Failures</option>
+        <option value="needs_review">Needs Review</option>
       </select>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;align-items:center;">
@@ -1704,17 +1716,24 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     // ── Reports ──
     function renderReportList(reports) {
       return reports.map(rpt => {
-        const isPass = rpt.failed === 0;
+        const nReview = rpt.needs_review || 0;
+        const hasFailures = rpt.failed > 0 || (rpt.missing || 0) > 0;
+        // Border rail: red for failures/missing, cyan if only items needing review,
+        // green if everything is clean.
+        let railColor = 'var(--success)';
+        if (hasFailures) railColor = 'var(--danger)';
+        else if (nReview > 0) railColor = 'var(--review)';
+        const reviewHint = nReview ? ` · ${nReview} to review` : '';
         const date = new Date(rpt.timestamp * 1000).toLocaleDateString('en-US', {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
         const img = rpt.featured_image
           ? `<img class="project-card-img" src="${rpt.featured_image}" alt="" loading="lazy">`
           : `<div class="project-card-img"></div>`;
         return `
-          <a href="/report/${rpt.db_report_id || rpt.project_id}" class="project-card" style="text-decoration:none;color:inherit;border-left:4px solid ${isPass ? 'var(--success)' : 'var(--danger)'};">
+          <a href="/report/${rpt.db_report_id || rpt.project_id}" class="project-card" style="text-decoration:none;color:inherit;border-left:4px solid ${railColor};">
             ${img}
             <div class="project-card-info">
               <div class="project-card-name">${esc(rpt.name)}${rpt.is_test ? ' <span class="badge badge-info" style="margin-left:4px;">TEST</span>' : ''}</div>
-              <div class="project-card-addr">${rpt.passed}/${rpt.total} passed · ${date}</div>
+              <div class="project-card-addr">${rpt.passed}/${rpt.total} passed${reviewHint} · ${date}</div>
             </div>
           </a>`;
       }).join('');
@@ -1772,9 +1791,13 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       const filtered = _allReports.filter(rpt => {
         // Search filter
         if (search && !(rpt.name || '').toLowerCase().includes(search)) return false;
-        // Status filter
-        if (status === 'passed' && rpt.failed > 0) return false;
+        // Status filter — "passed" means fully clean (no fails and no review items);
+        // "failed" means any hard failures; "needs_review" surfaces reports where
+        // a human still needs to weigh in on at least one item.
+        const nReview = rpt.needs_review || 0;
+        if (status === 'passed' && (rpt.failed > 0 || nReview > 0)) return false;
         if (status === 'failed' && rpt.failed === 0) return false;
+        if (status === 'needs_review' && nReview === 0) return false;
         // Date range filter
         if (rpt.timestamp < fromTs || rpt.timestamp > toTs) return false;
         return true;
@@ -2149,17 +2172,21 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           document.getElementById('progressText').textContent = `Complete — ${s.passed}/${s.total} passed`;
 
           const banner = document.getElementById('doneBanner');
-          const isPass = s.failed === 0 && s.missing === 0;
+          const nReview = s.needs_review || 0;
+          // "Ready for submission" only when nothing needs a human — failures,
+          // missing photos, and review items all block the ready state.
+          const isPass = s.failed === 0 && s.missing === 0 && nReview === 0;
           banner.className = 'done-banner ' + (isPass ? 'done-pass' : 'done-fail');
           let ccLink = '';
           if (s.checklist_ids && s.checklist_ids.length) {
             ccLink = `<a class="cc-link" href="https://app.companycam.com/projects/${s.project_id}/todos/${s.checklist_ids[0]}" target="_blank">Open in CompanyCam</a>`;
           }
           const reportLink = `<a class="cc-link" href="/report/${s.db_report_id || s.project_id}" style="background:#111827;">View Full Report</a>`;
+          const reviewStat = nReview ? ` · ${nReview} to review` : '';
           banner.innerHTML = `
             <div>
               <div class="done-label">${isPass ? 'READY FOR SUBMISSION' : 'ACTION REQUIRED'}</div>
-              <div class="done-stats">${s.passed} passed · ${s.failed} failed · ${s.missing} missing · ${s.total} required</div>
+              <div class="done-stats">${s.passed} passed · ${s.failed} failed · ${s.missing} missing${reviewStat} · ${s.total} required</div>
               <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
                 ${reportLink}
                 ${ccLink}
@@ -2191,6 +2218,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       const list = document.getElementById('resultsList');
       const status = req.status.toLowerCase();
       const badgeCls = 'badge-' + status;
+      // Pretty label for the badge (e.g. NEEDS_REVIEW → "NEEDS REVIEW")
+      const statusLabel = (req.status === 'NEEDS_REVIEW') ? 'NEEDS REVIEW' : req.status;
       let reason = '';
       if (status !== 'pass' && req.reason) {
         let full = esc(req.reason);
@@ -2229,7 +2258,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       list.insertAdjacentHTML('beforeend', `
         <div class="result-row ${status}" style="cursor:pointer;" onclick="this.classList.toggle('collapsed')">
           <div class="result-header">
-            <span class="badge ${badgeCls}">${req.status}</span>
+            <span class="badge ${badgeCls}">${statusLabel}</span>
             <span class="result-id">${req.id}</span>
             <span class="result-title">${esc(req.title)}</span>
             <span class="collapse-arrow" style="margin-left:auto;color:var(--text-muted);font-size:10px;">&#9662;</span>

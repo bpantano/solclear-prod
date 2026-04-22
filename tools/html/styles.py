@@ -49,6 +49,9 @@ DESIGN_TOKENS_CSS = """
       --purple: #8b5cf6;
       --purple-subtle: #f5f3ff;
       --purple-text: #5b21b6;
+      --review: #06b6d4;
+      --review-subtle: #ecfeff;
+      --review-text: #155e75;
 
       --badge-pass-bg: var(--success-subtle);
       --badge-pass-text: var(--success-text);
@@ -58,6 +61,8 @@ DESIGN_TOKENS_CSS = """
       --badge-missing-text: var(--warning-text);
       --badge-error-bg: var(--purple-subtle);
       --badge-error-text: var(--purple-text);
+      --badge-review-bg: var(--review-subtle);
+      --badge-review-text: var(--review-text);
 
       --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.06);
       --shadow-md: 0 4px 6px -1px rgba(15, 23, 42, 0.08), 0 2px 4px -1px rgba(15, 23, 42, 0.04);
@@ -108,6 +113,9 @@ DESIGN_TOKENS_CSS = """
       --purple: #a78bfa;
       --purple-subtle: #3730a3;
       --purple-text: #c4b5fd;
+      --review: #22d3ee;
+      --review-subtle: #164e63;
+      --review-text: #a5f3fc;
 
       --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.2);
       --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);

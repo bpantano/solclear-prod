@@ -36,17 +36,22 @@ API_BASE = "https://api.companycam.com/v2"
 
 # Status rendering config. Keys are the raw status strings from the engine.
 _STATUS_CONFIG = {
-    "PASS":            ("pass",    "PASS"),
-    "FAIL":            ("fail",    "FAIL"),
-    "MISSING":         ("missing", "MISSING"),
-    "ERROR":           ("error",   "ERROR"),
-    "FOUND_NO_VISION": ("skip",    "SKIPPED"),
-    "N/A":             ("na",      "N/A"),
+    "PASS":            ("pass",         "PASS"),
+    "FAIL":            ("fail",         "FAIL"),
+    "MISSING":         ("missing",      "MISSING"),
+    "ERROR":           ("error",        "ERROR"),
+    "NEEDS_REVIEW":    ("needs_review", "NEEDS REVIEW"),
+    "FOUND_NO_VISION": ("skip",         "SKIPPED"),
+    "N/A":             ("na",           "N/A"),
 }
+# Statuses that belong in the "Needs attention" tab. NEEDS_REVIEW is a
+# first-class attention state — it's an item a reviewer must confirm.
+_ATTENTION_STATUSES = {"FAIL", "MISSING", "ERROR", "NEEDS_REVIEW"}
+# Kept for internal detection of hard failures vs review items.
 _FAILURE_STATUSES = {"FAIL", "MISSING", "ERROR"}
-# Sort order within a section. Failures first, then missing, then errors,
-# then skipped, then pass last.
-_STATUS_SORT_ORDER = {"FAIL": 0, "MISSING": 1, "ERROR": 2, "FOUND_NO_VISION": 3, "PASS": 4}
+# Sort order within a section. Failures first, then needs-review, then
+# missing, errors, skipped, pass last.
+_STATUS_SORT_ORDER = {"FAIL": 0, "NEEDS_REVIEW": 1, "MISSING": 2, "ERROR": 3, "FOUND_NO_VISION": 4, "PASS": 5}
 
 
 def fetch_project(project_id: str) -> dict:
@@ -113,7 +118,7 @@ def render_requirement(req: dict, is_interactive: bool, checklist_id: str, proje
     status = req.get("status", "")
     code = req.get("id", "")
     photo_urls = req.get("photo_urls", {}) or {}
-    is_failure = status in _FAILURE_STATUSES
+    is_failure = status in _FAILURE_STATUSES or status == "NEEDS_REVIEW"
     is_resolved = bool(req.get("resolved_at"))
 
     optional_tag = '<span class="optional-tag">optional</span>' if req.get("optional") else ""
@@ -206,11 +211,19 @@ def render_section(section_name: str, reqs: list, is_interactive: bool,
     passed = sum(1 for r in applicable if r["status"] == "PASS")
     total = len(applicable)
     failed = sum(1 for r in applicable if r["status"] in _FAILURE_STATUSES)
+    review = sum(1 for r in applicable if r["status"] == "NEEDS_REVIEW")
 
     sorted_reqs = sorted(applicable, key=lambda r: _STATUS_SORT_ORDER.get(r["status"], 5))
     rows = "".join(render_requirement(r, is_interactive, checklist_id, project_id) for r in sorted_reqs)
 
-    score_class = "score-clean" if failed == 0 else "score-issues"
+    # score-clean only when fully clean; score-review when only review items remain;
+    # score-issues for hard failures (which take priority over review).
+    if failed > 0:
+        score_class = "score-issues"
+    elif review > 0:
+        score_class = "score-review"
+    else:
+        score_class = "score-clean"
     return f'''
   <div class="section">
     <div class="section-header">
@@ -286,6 +299,7 @@ def _report_style_block() -> str:
     .chip-fail { background: var(--danger-subtle); color: var(--danger-text); }
     .chip-missing { background: var(--warning-subtle); color: var(--warning-text); }
     .chip-error { background: var(--purple-subtle); color: var(--purple-text); }
+    .chip-review { background: var(--review-subtle); color: var(--review-text); }
     .summary-ctas { display: flex; flex-wrap: wrap; gap: 8px; }
 
     /* Buttons */
@@ -352,8 +366,9 @@ def _report_style_block() -> str:
       font-size: var(--text-xs); font-weight: 700;
       padding: 2px 8px; border-radius: 10px;
     }
-    .score-clean { background: var(--success-subtle); color: var(--success-text); }
+    .score-clean  { background: var(--success-subtle); color: var(--success-text); }
     .score-issues { background: var(--danger-subtle); color: var(--danger-text); }
+    .score-review { background: var(--review-subtle); color: var(--review-text); }
 
     /* Requirement rows */
     .requirement {
@@ -363,10 +378,11 @@ def _report_style_block() -> str:
       box-shadow: var(--shadow-sm);
       transition: all 0.15s ease;
     }
-    .req-pass    { border-left-color: var(--success); }
-    .req-fail    { border-left-color: var(--danger); }
-    .req-missing { border-left-color: var(--warning); }
-    .req-error   { border-left-color: var(--purple); }
+    .req-pass         { border-left-color: var(--success); }
+    .req-fail         { border-left-color: var(--danger); }
+    .req-missing      { border-left-color: var(--warning); }
+    .req-error        { border-left-color: var(--purple); }
+    .req-needs_review { border-left-color: var(--review); }
 
     .requirement.collapsed {
       padding: 8px 14px;
@@ -399,13 +415,14 @@ def _report_style_block() -> str:
       font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 3px;
       letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap;
     }
-    .badge-pass    { background: var(--badge-pass-bg); color: var(--badge-pass-text); }
-    .badge-fail    { background: var(--badge-fail-bg); color: var(--badge-fail-text); }
-    .badge-missing { background: var(--badge-missing-bg); color: var(--badge-missing-text); }
-    .badge-error   { background: var(--badge-error-bg); color: var(--badge-error-text); }
-    .badge-skip    { background: var(--bg-subtle); color: var(--text-muted); }
-    .badge-na      { background: var(--bg-subtle); color: var(--text-muted); }
-    .badge-success { background: var(--success-subtle); color: var(--success-text); }
+    .badge-pass         { background: var(--badge-pass-bg); color: var(--badge-pass-text); }
+    .badge-fail         { background: var(--badge-fail-bg); color: var(--badge-fail-text); }
+    .badge-missing      { background: var(--badge-missing-bg); color: var(--badge-missing-text); }
+    .badge-error        { background: var(--badge-error-bg); color: var(--badge-error-text); }
+    .badge-needs_review { background: var(--badge-review-bg); color: var(--badge-review-text); }
+    .badge-skip         { background: var(--bg-subtle); color: var(--text-muted); }
+    .badge-na           { background: var(--bg-subtle); color: var(--text-muted); }
+    .badge-success      { background: var(--success-subtle); color: var(--success-text); }
 
     .req-photo-link { display: block; margin-top: 10px; }
     .req-photo {
@@ -555,11 +572,12 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
       document.querySelectorAll('.requirement').forEach(row => {{
         const status = row.dataset.status;
         const resolved = row.dataset.resolved === '1';
-        const isFailure = status === 'FAIL' || status === 'MISSING' || status === 'ERROR';
+        // Attention tab includes hard failures AND items flagged for review.
+        const needsAttention = ['FAIL','MISSING','ERROR','NEEDS_REVIEW'].includes(status);
         let show = false;
         if (tab === 'all') show = true;
         else if (tab === 'passed') show = status === 'PASS';
-        else /* attention */ show = isFailure && !resolved;
+        else /* attention */ show = needsAttention && !resolved;
         row.style.display = show ? '' : 'none';
       }});
       // Hide empty sections for clarity
@@ -575,7 +593,7 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
       const anyAttention = Array.from(document.querySelectorAll('.requirement'))
         .some(r => {{
           const s = r.dataset.status;
-          return (s === 'FAIL' || s === 'MISSING' || s === 'ERROR') && r.dataset.resolved !== '1';
+          return ['FAIL','MISSING','ERROR','NEEDS_REVIEW'].includes(s) && r.dataset.resolved !== '1';
         }});
       filterTab(anyAttention ? 'attention' : 'all');
     }})();
@@ -596,11 +614,11 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
       const counts = {{attention: 0, passed: 0, all: 0}};
       document.querySelectorAll('.requirement').forEach(r => {{
         const s = r.dataset.status;
-        const isFailure = s === 'FAIL' || s === 'MISSING' || s === 'ERROR';
+        const needsAttention = ['FAIL','MISSING','ERROR','NEEDS_REVIEW'].includes(s);
         const resolved = r.dataset.resolved === '1';
         counts.all++;
         if (s === 'PASS') counts.passed++;
-        if (isFailure && !resolved) counts.attention++;
+        if (needsAttention && !resolved) counts.attention++;
       }});
       const set = (tab, n) => {{
         const el = document.querySelector('.report-tab[data-tab="' + tab + '"] .count');
@@ -713,13 +731,14 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
         const newStatus = data.status || '';
         row.dataset.status = newStatus;
         row.className = 'requirement req-' + newStatus.toLowerCase();
-        // Update badge
+        // Update badge (class + display label)
         const badge = row.querySelector('.badge');
         if (badge) {{
-          const cfg = {{PASS:'pass', FAIL:'fail', MISSING:'missing', ERROR:'error'}};
+          const cfg = {{PASS:'pass', FAIL:'fail', MISSING:'missing', ERROR:'error', NEEDS_REVIEW:'needs_review'}};
+          const labels = {{PASS:'PASS', FAIL:'FAIL', MISSING:'MISSING', ERROR:'ERROR', NEEDS_REVIEW:'NEEDS REVIEW'}};
           const cls = cfg[newStatus] || 'na';
           badge.className = 'badge badge-' + cls;
-          badge.textContent = newStatus;
+          badge.textContent = labels[newStatus] || newStatus;
         }}
         // Resolved state is cleared server-side on recheck
         row.dataset.resolved = '';
@@ -762,11 +781,20 @@ def generate_html(report: dict, project: dict) -> str:
     n_fail    = sum(1 for r in required if r["status"] == "FAIL")
     n_missing = sum(1 for r in required if r["status"] == "MISSING")
     n_error   = sum(1 for r in required if r["status"] == "ERROR")
+    n_review  = sum(1 for r in required if r["status"] == "NEEDS_REVIEW")
     n_total   = len(required)
-    n_attention = n_fail + n_missing + n_error
+    n_attention = n_fail + n_missing + n_error + n_review
 
+    # "Ready for submission" only when there's nothing left needing a human.
+    # The summary-fail rail covers both hard failures and review items —
+    # they both block ready state, though only hard failures are red.
     summary_class = "summary-pass" if n_attention == 0 else "summary-fail"
-    summary_label = "READY FOR SUBMISSION" if n_attention == 0 else "ACTION REQUIRED"
+    if n_fail + n_missing + n_error > 0:
+        summary_label = "ACTION REQUIRED"
+    elif n_review > 0:
+        summary_label = "REVIEW REQUIRED"
+    else:
+        summary_label = "READY FOR SUBMISSION"
     pct = round((n_pass / n_total) * 100) if n_total else 0
 
     checklist_ids = report.get("checklist_ids", []) or []
@@ -804,6 +832,7 @@ def generate_html(report: dict, project: dict) -> str:
     chips.append(f'<span class="chip chip-pass">✓ {n_pass} passed</span>')
     if n_fail:    chips.append(f'<span class="chip chip-fail">✗ {n_fail} failed</span>')
     if n_missing: chips.append(f'<span class="chip chip-missing">⊘ {n_missing} missing</span>')
+    if n_review:  chips.append(f'<span class="chip chip-review">⟳ {n_review} review</span>')
     if n_error:   chips.append(f'<span class="chip chip-error">⚠ {n_error} error</span>')
     chips_html = "".join(chips)
 
