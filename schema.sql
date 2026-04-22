@@ -206,6 +206,27 @@ CREATE TABLE run_pricing (
 
 CREATE INDEX idx_pricing_report ON run_pricing(report_id);
 
+-- ── API Call Log ─────────────────────────────────────────────────────────────
+-- Per-call Anthropic usage + cost, for attribution and debugging.
+-- See migrations/003_api_call_log.sql.
+
+CREATE TABLE api_call_log (
+    id                  SERIAL PRIMARY KEY,
+    report_id           INTEGER REFERENCES reports(id) ON DELETE CASCADE,
+    requirement_code    TEXT,
+    purpose             TEXT,                          -- 'validate', 'monitor', etc.
+    model               TEXT NOT NULL,
+    input_tokens        INTEGER NOT NULL DEFAULT 0,
+    output_tokens       INTEGER NOT NULL DEFAULT 0,
+    cost_usd            NUMERIC(12, 6) NOT NULL DEFAULT 0,
+    duration_ms         INTEGER,
+    called_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_api_call_log_report ON api_call_log(report_id);
+CREATE INDEX idx_api_call_log_model  ON api_call_log(model);
+CREATE INDEX idx_api_call_log_called ON api_call_log(called_at);
+
 -- ── Requirement Snapshots ────────────────────────────────────────────────────
 -- Stores Palmetto page baselines for change detection.
 

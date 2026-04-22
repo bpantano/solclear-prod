@@ -240,12 +240,18 @@ def run_check_thread(cc_project_id, params, rerun_ids=None, session=None):
                 except Exception:
                     pass  # Requirements table may not have matching rows yet
 
-        if rerun_ids:
-            _result_queue.put(json.dumps({"type": "status", "message": f"Re-checking {len(rerun_ids)} failed requirements..."}))
-            report = run_compliance_check(cc_project_id, params, run_vision=True,
-                                          progress_callback=on_progress, only_ids=rerun_ids)
-        else:
-            report = run_compliance_check(cc_project_id, params, run_vision=True, progress_callback=on_progress)
+        # Scope every _call_anthropic inside this check to the db_report_id
+        # so api_call_log rows can be attributed back to this report. If the
+        # DB insert above failed and db_report_id is None, logging is skipped
+        # automatically (the check still runs fine).
+        from tools.compliance_check import set_call_context
+        with set_call_context(report_id=db_report_id, purpose="vision"):
+            if rerun_ids:
+                _result_queue.put(json.dumps({"type": "status", "message": f"Re-checking {len(rerun_ids)} failed requirements..."}))
+                report = run_compliance_check(cc_project_id, params, run_vision=True,
+                                              progress_callback=on_progress, only_ids=rerun_ids)
+            else:
+                report = run_compliance_check(cc_project_id, params, run_vision=True, progress_callback=on_progress)
 
         # Also save to .tmp/ for backward compatibility
         TMP_DIR.mkdir(exist_ok=True)
@@ -1709,10 +1715,14 @@ class LiveHandler(BaseHTTPRequestHandler):
                 "is_incentive_state": row.get("is_incentive_state", False),
                 "portal_access_granted": row.get("portal_access_granted", False),
             }
-            report = run_compliance_check(
-                row["companycam_id"], params,
-                run_vision=True, only_ids={req_code},
-            )
+            # Scope API-call logging to this report + requirement so the
+            # recheck cost gets attributed correctly in api_call_log.
+            from tools.compliance_check import set_call_context
+            with set_call_context(report_id=int(report_id), purpose="recheck"):
+                report = run_compliance_check(
+                    row["companycam_id"], params,
+                    run_vision=True, only_ids={req_code},
+                )
             # Find the matching requirement result
             new_result = next(
                 (r for r in report.get("requirements", []) if r.get("id") == req_code),

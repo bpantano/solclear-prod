@@ -667,24 +667,116 @@ ANTHROPIC_HEADERS = {
 }
 
 
+# ── API cost tracking ────────────────────────────────────────────────────────
+
+# Pricing per million tokens (USD). Keep this aligned with Anthropic's
+# published rates; models not listed fall through with zero cost.
+_MODEL_PRICING = {
+    "claude-haiku-4-5-20251001": {"input": 1.0, "output": 5.0},
+    "claude-sonnet-4-6":         {"input": 3.0, "output": 15.0},
+    "claude-opus-4-7":           {"input": 15.0, "output": 75.0},
+}
+
+
+def _calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    """Return estimated USD cost for a single API call."""
+    price = _MODEL_PRICING.get(model)
+    if not price:
+        return 0.0
+    return (input_tokens * price["input"] + output_tokens * price["output"]) / 1_000_000
+
+
+# Thread-local attribution context. Callers (e.g. live_server.run_check_thread)
+# wrap a compliance-check invocation in `set_call_context(report_id=...)` so
+# every _call_anthropic inside that scope gets attributed to that report.
+# Leaving this None (no context) simply skips logging — useful for one-off
+# scripts that shouldn't pollute the DB.
+import threading as _threading
+_call_ctx = _threading.local()
+
+
+class set_call_context:
+    """Context manager that scopes API-call attribution to a report_id etc.
+
+    Usage:
+        with set_call_context(report_id=42):
+            run_compliance_check(...)
+    """
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+    def __enter__(self):
+        prior = getattr(_call_ctx, "attrs", None)
+        self._prior = prior
+        merged = {**(prior or {}), **self.kwargs}
+        _call_ctx.attrs = merged
+        return merged
+
+    def __exit__(self, *args):
+        _call_ctx.attrs = self._prior
+
+
+def _log_api_call(model, input_tokens, output_tokens, duration_ms, req_id):
+    """Insert a row in api_call_log. Never raises — logging must not break checks."""
+    ctx = getattr(_call_ctx, "attrs", None) or {}
+    if not ctx.get("report_id") and not ctx.get("log_anyway"):
+        return  # no report context → skip (e.g. diagnostic scripts)
+    try:
+        from tools.db import execute
+        # req_id is typically the requirement code (e.g. "R6"); purpose comes
+        # from the surrounding context when set, otherwise defaults to "vision".
+        cost = _calculate_cost(model, input_tokens or 0, output_tokens or 0)
+        execute(
+            """INSERT INTO api_call_log
+               (report_id, requirement_code, purpose, model,
+                input_tokens, output_tokens, cost_usd, duration_ms)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+            (
+                ctx.get("report_id"),
+                req_id,
+                ctx.get("purpose", "vision"),
+                model,
+                input_tokens or 0,
+                output_tokens or 0,
+                cost,
+                duration_ms,
+            ),
+        )
+    except Exception as e:
+        print(f"WARNING: api_call_log insert failed: {e}", file=sys.stderr)
+
+
 def _call_anthropic(payload: dict, req_id: str) -> Optional[str]:
-    """Make an Anthropic API call with up to 3 retries on 429. Returns response text or None."""
+    """Make an Anthropic API call with up to 3 retries on 429.
+    Returns response text or None. Logs usage to api_call_log when a
+    report context is active (see set_call_context)."""
     import time
     for attempt in range(3):
         try:
+            t0 = time.time()
             resp = requests.post(
                 "https://api.anthropic.com/v1/messages",
                 json=payload,
                 headers=ANTHROPIC_HEADERS,
                 timeout=60,
             )
+            duration_ms = int((time.time() - t0) * 1000)
             if resp.status_code == 429:
                 wait = 20 * (attempt + 1)
                 print(f"  Rate limited on {req_id}, retrying in {wait}s...", file=sys.stderr)
                 time.sleep(wait)
                 continue
             resp.raise_for_status()
-            return resp.json()["content"][0]["text"]
+            body = resp.json()
+            usage = body.get("usage", {}) or {}
+            _log_api_call(
+                model=payload.get("model", ""),
+                input_tokens=usage.get("input_tokens"),
+                output_tokens=usage.get("output_tokens"),
+                duration_ms=duration_ms,
+                req_id=req_id,
+            )
+            return body["content"][0]["text"]
         except Exception as e:
             if attempt == 2:
                 return f"ERROR: {e}"
