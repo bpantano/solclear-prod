@@ -1,7 +1,15 @@
 """
 Tool: generate_report_html.py
-Purpose: Generate a self-contained HTML compliance report from a compliance check JSON file.
-         Opens the report in the default browser automatically.
+Purpose: Render the compliance report detail page.
+
+Two render paths share this file:
+- CLI: produces a self-contained .html file from a .tmp/compliance_{id}.json.
+- Live server: _serve_report passes a db-backed report dict; the page becomes
+  interactive (mark resolved, add note, re-check a single item) when
+  db_report_id is present.
+
+Shared design tokens come from tools/html/styles.py so light/dark mode stays
+consistent with the rest of the app.
 
 Usage:
   python tools/generate_report_html.py --project_id <id>
@@ -11,6 +19,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 import webbrowser
 from pathlib import Path
@@ -18,10 +27,26 @@ from datetime import datetime
 import requests
 from dotenv import load_dotenv
 
+from tools.html.styles import DESIGN_TOKENS_CSS
+
 load_dotenv()
 
 TMP_DIR = Path(__file__).parent.parent / ".tmp"
 API_BASE = "https://api.companycam.com/v2"
+
+# Status rendering config. Keys are the raw status strings from the engine.
+_STATUS_CONFIG = {
+    "PASS":            ("pass",    "PASS"),
+    "FAIL":            ("fail",    "FAIL"),
+    "MISSING":         ("missing", "MISSING"),
+    "ERROR":           ("error",   "ERROR"),
+    "FOUND_NO_VISION": ("skip",    "SKIPPED"),
+    "N/A":             ("na",      "N/A"),
+}
+_FAILURE_STATUSES = {"FAIL", "MISSING", "ERROR"}
+# Sort order within a section. Failures first, then missing, then errors,
+# then skipped, then pass last.
+_STATUS_SORT_ORDER = {"FAIL": 0, "MISSING": 1, "ERROR": 2, "FOUND_NO_VISION": 3, "PASS": 4}
 
 
 def fetch_project(project_id: str) -> dict:
@@ -41,19 +66,8 @@ def fetch_project(project_id: str) -> dict:
 
 
 def status_badge(status: str) -> str:
-    cfg = {
-        "PASS":          ("pass",    "PASS"),
-        "FAIL":          ("fail",    "FAIL"),
-        "MISSING":       ("missing", "MISSING"),
-        "ERROR":         ("error",   "ERROR"),
-        "FOUND_NO_VISION": ("skip",  "SKIPPED"),
-        "N/A":           ("na",      "N/A"),
-    }
-    cls, label = cfg.get(status, ("na", status))
+    cls, label = _STATUS_CONFIG.get(status, ("na", status))
     return f'<span class="badge badge-{cls}">{label}</span>'
-
-
-import re
 
 
 def linkify_photos(text: str, photo_urls: dict) -> str:
@@ -64,11 +78,16 @@ def linkify_photos(text: str, photo_urls: dict) -> str:
         num = match.group(1)
         url = photo_urls.get(num) or photo_urls.get(int(num))
         if url:
-            return f'<a href="{url}" target="_blank" style="color:#3b82f6;font-weight:500;">{num}</a>'
+            return f'<a href="{url}" target="_blank" style="color:var(--accent);font-weight:500;">{num}</a>'
         return num
     def replacer(match):
         return re.sub(r'(\d+)', link_number, match.group(0))
-    return re.sub(r'Photos?\s+(\d+(?:\s*(?:,\s*(?:and\s+)?|and\s+|&\s*)\d+)*)', replacer, text, flags=re.IGNORECASE)
+    return re.sub(
+        r'Photos?\s+(\d+(?:\s*(?:,\s*(?:and\s+)?|and\s+|&\s*)\d+)*)',
+        replacer,
+        text,
+        flags=re.IGNORECASE,
+    )
 
 
 def truncate_reason(reason: str, limit: int = 120) -> tuple:
@@ -81,13 +100,25 @@ def truncate_reason(reason: str, limit: int = 120) -> tuple:
     return clean[:limit].rsplit(" ", 1)[0] + "...", clean
 
 
-def render_requirement(req: dict) -> str:
-    status = req.get("status", "")
-    optional_tag = '<span class="optional-tag">optional</span>' if req.get("optional") else ""
-    candidates = req.get("candidates")
-    candidates_note = f'<span class="meta">{candidates} photos</span>' if candidates and candidates > 1 else ""
-    photo_urls = req.get("photo_urls", {})
+def _esc(s) -> str:
+    """Escape for HTML attributes/text. Handles None safely."""
+    if s is None:
+        return ""
+    return (str(s)
+            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;").replace("'", "&#39;"))
 
+
+def render_requirement(req: dict, is_interactive: bool, checklist_id: str, project_id: str) -> str:
+    status = req.get("status", "")
+    code = req.get("id", "")
+    photo_urls = req.get("photo_urls", {}) or {}
+    is_failure = status in _FAILURE_STATUSES
+    is_resolved = bool(req.get("resolved_at"))
+
+    optional_tag = '<span class="optional-tag">optional</span>' if req.get("optional") else ""
+
+    # Reason with show-more/less toggle for long text
     reason_html = ""
     if status not in ("PASS", "N/A", "FOUND_NO_VISION") and req.get("reason"):
         short, full = truncate_reason(req["reason"])
@@ -95,419 +126,415 @@ def render_requirement(req: dict) -> str:
             short_linked = linkify_photos(short, photo_urls)
             full_linked = linkify_photos(full, photo_urls)
             reason_html = f'''
-      <p class="reason">{short_linked}</p>
+      <p class="reason reason-short">{short_linked}</p>
       <div class="reason-full" style="display:none"><p class="reason">{full_linked}</p></div>
       <button class="expand-btn" onclick="toggleReason(this)">Show more <span class="arrow">&#9662;</span></button>'''
         else:
             reason_html = f'<p class="reason">{linkify_photos(short, photo_urls)}</p>'
 
-    collapsed_class = " collapsed" if status == "PASS" else ""
-    click_handler = ' onclick="this.classList.toggle(\'collapsed\')"' if status == "PASS" else ""
-
-    # Show the evaluated photo thumbnail (key 1 is the selected winner)
+    # Photo thumbnail (the evaluated winner is key 1)
     eval_url = photo_urls.get(1) or photo_urls.get("1")
     photo_html = ""
     if eval_url and status not in ("N/A", "FOUND_NO_VISION"):
-        photo_html = f'<a href="{eval_url}" target="_blank" style="display:block;margin-top:8px;"><img src="{eval_url}" style="width:100%;max-width:280px;border-radius:6px;border:2px solid #e5e7eb;" loading="lazy"></a>'
+        photo_html = (
+            f'<a href="{_esc(eval_url)}" target="_blank" class="req-photo-link">'
+            f'<img src="{_esc(eval_url)}" alt="Evaluated photo" loading="lazy" class="req-photo">'
+            f'</a>'
+        )
 
-    return f"""
-    <div class="requirement req-{status.lower()}{collapsed_class}"{click_handler}>
+    # Resolved chip — shown when the item is marked resolved
+    resolved_chip = ""
+    if is_resolved:
+        by = _esc(req.get("resolved_by_name") or "Unknown")
+        resolved_chip = f'<span class="badge badge-success resolved-chip" title="Resolved by {by}">Resolved</span>'
+
+    # Note display (only if a note exists)
+    note_text = req.get("notes") or ""
+    note_html = ""
+    if note_text:
+        note_html = f'<div class="req-note">{_esc(note_text)}</div>'
+
+    # Actions (only for interactive reports, only on failures).
+    actions_html = ""
+    if is_interactive and is_failure:
+        # Deep-link to the CompanyCam checklist (no direct task-level URL,
+        # so we link to the checklist for the project).
+        cc_task_url = (
+            f"https://app.companycam.com/projects/{_esc(project_id)}/todos/{_esc(checklist_id)}"
+            if project_id and checklist_id else ""
+        )
+        cc_btn = (
+            f'<a href="{cc_task_url}" target="_blank" class="btn btn-sm btn-ghost" onclick="event.stopPropagation()">Open in CompanyCam ↗</a>'
+            if cc_task_url else ""
+        )
+        resolve_label = "Undo resolve" if is_resolved else "Mark resolved"
+        actions_html = f'''
+      <div class="req-actions">
+        {cc_btn}
+        <button class="btn btn-sm btn-subtle" data-role="resolve-btn" onclick="event.stopPropagation();toggleResolved(this, '{_esc(code)}')">{resolve_label}</button>
+        <button class="btn btn-sm btn-subtle" onclick="event.stopPropagation();openNoteEditor(this, '{_esc(code)}')">{'Edit note' if note_text else 'Add note'}</button>
+        <button class="btn btn-sm btn-primary" onclick="event.stopPropagation();recheckItem(this, '{_esc(code)}')">Re-check</button>
+      </div>'''
+
+    # PASS rows start collapsed so the page leads with failures
+    collapsed_class = " collapsed" if status == "PASS" and not note_text else ""
+    click_handler = ' onclick="this.classList.toggle(\'collapsed\')"' if status == "PASS" else ""
+
+    resolved_data = ' data-resolved="1"' if is_resolved else ""
+    return f'''
+    <div class="requirement req-{status.lower()}{collapsed_class}" data-status="{_esc(status)}" data-id="{_esc(code)}"{resolved_data}{click_handler}>
       <div class="req-header">
         {status_badge(status)}
-        <span class="req-id">{req["id"]}</span>
-        <span class="req-title">{req["title"]}</span>
+        <span class="req-id">{_esc(code)}</span>
+        <span class="req-title">{_esc(req.get("title", ""))}</span>
+        {resolved_chip}
         {optional_tag}
-        {candidates_note}
       </div>
       {photo_html}
       {reason_html}
-    </div>"""
+      {note_html}
+      {actions_html}
+    </div>'''
 
 
-def render_section(section_name: str, reqs: list, companycam_url: str = "") -> str:
+def render_section(section_name: str, reqs: list, is_interactive: bool,
+                   checklist_id: str, project_id: str) -> str:
     applicable = [r for r in reqs if r.get("status") != "N/A"]
     if not applicable:
         return ""
 
     passed = sum(1 for r in applicable if r["status"] == "PASS")
-    failed = sum(1 for r in applicable if r["status"] in ("FAIL", "MISSING", "ERROR"))
     total = len(applicable)
+    failed = sum(1 for r in applicable if r["status"] in _FAILURE_STATUSES)
 
-    # Sort: failures first, then missing, then errors, then pass
-    order = {"FAIL": 0, "MISSING": 1, "ERROR": 2, "FOUND_NO_VISION": 3, "PASS": 4}
-    sorted_reqs = sorted(applicable, key=lambda r: order.get(r["status"], 5))
-
-    rows = "".join(render_requirement(r) for r in sorted_reqs)
+    sorted_reqs = sorted(applicable, key=lambda r: _STATUS_SORT_ORDER.get(r["status"], 5))
+    rows = "".join(render_requirement(r, is_interactive, checklist_id, project_id) for r in sorted_reqs)
 
     score_class = "score-clean" if failed == 0 else "score-issues"
-    cc_link = f'<a class="cc-link" href="{companycam_url}" target="_blank">Open in CompanyCam &#8599;</a>' if companycam_url else ""
-
-    return f"""
+    return f'''
   <div class="section">
     <div class="section-header">
-      <h2>{section_name}</h2>
-      <div class="section-right">
-        {cc_link}
-        <span class="section-score {score_class}">{passed}/{total}</span>
-      </div>
+      <h2>{_esc(section_name)}</h2>
+      <span class="section-score {score_class}">{passed}/{total}</span>
     </div>
     {rows}
-  </div>"""
+  </div>'''
 
 
-def generate_html(report: dict, project: dict) -> str:
-    reqs = report.get("requirements", [])
-    params = report.get("params", {})
-    project_id = report.get("project_id", "")
-
-    name = project.get("name") or f"Project {project_id}"
-    address = project.get("address", {})
-    addr_str = ", ".join(filter(None, [
-        address.get("street_address_1"),
-        address.get("city"),
-        address.get("state"),
-    ]))
-    generated = datetime.now().strftime("%B %d, %Y at %I:%M %p")
-
-    required = [r for r in reqs if r["status"] != "N/A" and not r.get("optional")]
-    n_pass    = sum(1 for r in required if r["status"] == "PASS")
-    n_fail    = sum(1 for r in required if r["status"] == "FAIL")
-    n_missing = sum(1 for r in required if r["status"] == "MISSING")
-    n_error   = sum(1 for r in required if r["status"] == "ERROR")
-    n_total   = len(required)
-
-    overall_class = "overall-pass" if (n_fail + n_missing + n_error) == 0 else "overall-fail"
-    overall_label = "READY FOR SUBMISSION" if (n_fail + n_missing + n_error) == 0 else "ACTION REQUIRED"
-
-    manufacturer = params.get("manufacturer", "—")
-    lender = params.get("lender", "—")
-    has_battery = "Yes" if params.get("has_battery") else "No"
-    backup = "Yes" if params.get("is_backup_battery") else "No"
-    incentive = "Yes" if params.get("is_incentive_state") else "No"
-    portal = "Yes" if params.get("portal_access_granted") else "No"
-
-    pct = round((n_pass / n_total) * 100) if n_total else 0
-
-    # CompanyCam checklist URL
-    checklist_ids = report.get("checklist_ids", [])
-    cc_url = f"https://app.companycam.com/projects/{project_id}/todos/{checklist_ids[0]}" if checklist_ids else ""
-
-    sections: dict = {}
-    for r in reqs:
-        sections.setdefault(r["section"], []).append(r)
-
-    sections_html = "".join(render_section(sec, reqs, cc_url) for sec, reqs in sections.items())
-
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>M1 Compliance — {name}</title>
-  <style>
-    *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
-
-    body {{
+def _report_style_block() -> str:
+    """Report-specific styles (layout + utility classes). Tokens come from DESIGN_TOKENS_CSS."""
+    return """
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #f8f9fb;
-      color: #1a1a2e;
-      font-size: 14px;
-      line-height: 1.5;
+      background: var(--bg); color: var(--text);
+      font-size: var(--text-base); line-height: 1.5;
       -webkit-font-smoothing: antialiased;
-    }}
+      min-height: 100dvh;
+      padding-bottom: 64px;
+    }
 
-    /* ── Header ── */
-    .header {{
-      background: #111827;
-      color: #fff;
-      padding: 24px 32px;
+    /* Top bar */
+    .report-topbar {
+      background: var(--header-bg); color: var(--text-inverse);
+      padding: 12px 20px;
+      display: flex; align-items: center; justify-content: space-between;
+      position: sticky; top: 0; z-index: 30;
+    }
+    .report-topbar a {
+      color: #9ca3af; text-decoration: none;
+      font-size: var(--text-sm); font-weight: 500;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .report-topbar a:hover { color: #fff; }
+    .theme-toggle {
+      background: none; border: none; color: inherit; cursor: pointer;
+      width: 40px; height: 40px; display: flex; align-items: center; justify-content: center;
+      border-radius: 8px;
+    }
+    .theme-toggle:hover { background: rgba(255,255,255,0.08); }
+    .theme-toggle svg { width: 20px; height: 20px; }
+
+    /* Sticky summary card */
+    .report-summary {
+      position: sticky; top: 56px; z-index: 20;
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 20px;
+      box-shadow: var(--shadow-sm);
+    }
+    .summary-inner { max-width: 920px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+    .summary-main { display: flex; align-items: center; gap: 14px; }
+    .summary-ring { flex-shrink: 0; }
+    .summary-ring circle { fill: none; stroke-width: 5; transform: rotate(-90deg); transform-origin: 50% 50%; }
+    .ring-bg { stroke: var(--border); }
+    .ring-fill { stroke-linecap: round; transition: stroke-dashoffset 0.5s ease; }
+    .summary-pass .ring-fill { stroke: var(--success); }
+    .summary-fail .ring-fill { stroke: var(--danger); }
+    .ring-text { font-size: 11px; font-weight: 700; fill: var(--text); text-anchor: middle; dominant-baseline: central; }
+    .summary-text { flex: 1; min-width: 0; }
+    .summary-headline { font-size: var(--text-xl); font-weight: 700; color: var(--text); }
+    .summary-project { font-size: var(--text-sm); color: var(--text-muted); margin-top: 2px; }
+    .summary-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .chip {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: var(--text-xs); font-weight: 600;
+      padding: 3px 8px; border-radius: 12px;
+      background: var(--bg-subtle); color: var(--text-secondary);
+    }
+    .chip-pass { background: var(--success-subtle); color: var(--success-text); }
+    .chip-fail { background: var(--danger-subtle); color: var(--danger-text); }
+    .chip-missing { background: var(--warning-subtle); color: var(--warning-text); }
+    .chip-error { background: var(--purple-subtle); color: var(--purple-text); }
+    .summary-ctas { display: flex; flex-wrap: wrap; gap: 8px; }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      border: none; border-radius: 10px; padding: 10px 16px;
+      font-size: var(--text-md); font-weight: 600;
+      cursor: pointer; min-height: 44px;
+      text-decoration: none; font-family: inherit;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn-primary { background: var(--accent); color: var(--text-inverse); }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+    .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+    .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+    .btn-ghost:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-strong); }
+    .btn-subtle { background: var(--bg-subtle); color: var(--text); border: none; }
+    .btn-subtle:hover:not(:disabled) { background: var(--bg-hover); }
+    .btn-sm { min-height: 32px; padding: 6px 12px; font-size: var(--text-xs); }
+
+    /* Tabs */
+    .report-tabs {
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
       display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 16px;
-    }}
-    .header-left h1 {{ font-size: 18px; font-weight: 600; margin-bottom: 2px; }}
-    .header-left .address {{ font-size: 13px; color: #9ca3af; }}
-    .header-right {{ text-align: right; font-size: 11px; color: #6b7280; white-space: nowrap; }}
+      max-width: 920px; margin: 0 auto;
+      overflow-x: auto; -webkit-overflow-scrolling: touch;
+      position: sticky; top: calc(56px + 100px); z-index: 10;
+    }
+    .report-tab {
+      background: none; border: none; cursor: pointer;
+      padding: 12px 16px;
+      font-size: var(--text-sm); font-weight: 500; color: var(--text-secondary);
+      border-bottom: 2px solid transparent;
+      white-space: nowrap;
+      font-family: inherit;
+    }
+    .report-tab .count {
+      display: inline-block;
+      padding: 1px 7px; margin-left: 4px;
+      font-size: 10px; font-weight: 700;
+      background: var(--bg-subtle); color: var(--text-secondary);
+      border-radius: 10px;
+    }
+    .report-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .report-tab.active .count { background: var(--accent-subtle); color: var(--accent-text); }
 
-    /* ── Overall banner ── */
-    .overall-banner {{
-      padding: 14px 32px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      flex-wrap: wrap;
-    }}
-    .overall-pass {{ background: #ecfdf5; border-bottom: 2px solid #10b981; }}
-    .overall-fail {{ background: #fef2f2; border-bottom: 2px solid #ef4444; }}
+    /* Body */
+    .report-body { max-width: 920px; margin: 20px auto; padding: 0 16px; }
 
-    .overall-left {{
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }}
-    .overall-label {{
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-    }}
-    .overall-pass .overall-label {{ color: #065f46; }}
-    .overall-fail .overall-label {{ color: #991b1b; }}
-
-    .overall-right {{
-      display: flex;
-      gap: 16px;
-      font-size: 12px;
-      color: #6b7280;
-    }}
-    .stat {{ display: flex; align-items: center; gap: 4px; }}
-    .stat-dot {{ width: 8px; height: 8px; border-radius: 50%; }}
-    .stat-dot-pass {{ background: #10b981; }}
-    .stat-dot-fail {{ background: #ef4444; }}
-    .stat-dot-missing {{ background: #f59e0b; }}
-
-    /* ── Progress ring ── */
-    .progress-ring {{
-      width: 40px;
-      height: 40px;
-      flex-shrink: 0;
-    }}
-    .progress-ring circle {{
-      fill: none;
-      stroke-width: 4;
-      transform: rotate(-90deg);
-      transform-origin: 50% 50%;
-    }}
-    .ring-bg {{ stroke: #e5e7eb; }}
-    .ring-fill {{ stroke-linecap: round; transition: stroke-dashoffset 0.5s ease; }}
-    .overall-pass .ring-fill {{ stroke: #10b981; }}
-    .overall-fail .ring-fill {{ stroke: #ef4444; }}
-    .ring-text {{ font-size: 10px; font-weight: 700; fill: #374151; text-anchor: middle; dominant-baseline: central; }}
-
-    /* ── Params bar ── */
-    .params-bar {{
-      background: #fff;
-      border-bottom: 1px solid #e5e7eb;
-      padding: 10px 32px;
-      display: flex;
-      gap: 24px;
-      flex-wrap: wrap;
-    }}
-    .param {{ display: flex; align-items: center; gap: 6px; }}
-    .param-label {{ font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: #9ca3af; font-weight: 500; }}
-    .param-value {{ font-size: 12px; font-weight: 600; color: #374151; }}
-    .param-sep {{ color: #e5e7eb; }}
-
-    /* ── Body ── */
-    .body {{ max-width: 820px; margin: 24px auto; padding: 0 16px; }}
-
-    /* ── Section ── */
-    .section {{ margin-bottom: 24px; }}
-    .section-header {{
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
+    .section { margin-bottom: 24px; }
+    .section-header {
+      display: flex; align-items: center; justify-content: space-between;
       padding: 8px 0;
-      border-bottom: 2px solid #111827;
+      border-bottom: 2px solid var(--text);
       margin-bottom: 8px;
-    }}
-    .section-header h2 {{ font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; color: #374151; }}
-    .section-right {{ display: flex; align-items: center; gap: 12px; }}
-    .cc-link {{
-      font-size: 11px;
-      color: #3b82f6;
-      text-decoration: none;
-      font-weight: 500;
-    }}
-    .cc-link:hover {{ text-decoration: underline; }}
-    .section-score {{ font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; }}
-    .score-clean {{ background: #ecfdf5; color: #065f46; }}
-    .score-issues {{ background: #fef2f2; color: #991b1b; }}
+    }
+    .section-header h2 {
+      font-size: var(--text-xs); text-transform: uppercase;
+      letter-spacing: 0.1em; font-weight: 700; color: var(--text);
+    }
+    .section-score {
+      font-size: var(--text-xs); font-weight: 700;
+      padding: 2px 8px; border-radius: 10px;
+    }
+    .score-clean { background: var(--success-subtle); color: var(--success-text); }
+    .score-issues { background: var(--danger-subtle); color: var(--danger-text); }
 
-    /* ── Requirement row ── */
-    .requirement {{
-      background: #fff;
-      border-radius: 6px;
-      padding: 10px 14px;
-      margin-bottom: 6px;
-      border-left: 3px solid #e5e7eb;
+    /* Requirement rows */
+    .requirement {
+      background: var(--bg-card); border-radius: 8px;
+      padding: 12px 14px; margin-bottom: 8px;
+      border-left: 4px solid var(--border);
+      box-shadow: var(--shadow-sm);
       transition: all 0.15s ease;
-    }}
-    .req-pass    {{ border-left-color: #10b981; }}
-    .req-fail    {{ border-left-color: #ef4444; }}
-    .req-missing {{ border-left-color: #f59e0b; }}
-    .req-error   {{ border-left-color: #8b5cf6; }}
+    }
+    .req-pass    { border-left-color: var(--success); }
+    .req-fail    { border-left-color: var(--danger); }
+    .req-missing { border-left-color: var(--warning); }
+    .req-error   { border-left-color: var(--purple); }
 
-    .requirement.collapsed {{
-      padding: 6px 14px;
-      opacity: 0.6;
+    .requirement.collapsed {
+      padding: 8px 14px;
+      opacity: 0.7;
       cursor: pointer;
-    }}
-    .requirement.collapsed:hover {{ opacity: 0.85; }}
+    }
+    .requirement.collapsed:hover { opacity: 1; }
     .requirement.collapsed .reason,
     .requirement.collapsed .reason-full,
     .requirement.collapsed .expand-btn,
-    .requirement.collapsed .meta {{ display: none !important; }}
+    .requirement.collapsed .req-photo-link,
+    .requirement.collapsed .req-actions,
+    .requirement.collapsed .req-note { display: none !important; }
 
-    .req-header {{
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }}
-    .req-id {{ font-size: 10px; font-weight: 700; color: #9ca3af; min-width: 28px; }}
-    .req-title {{ font-size: 13px; font-weight: 500; flex: 1; color: #1f2937; }}
+    .req-header {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    }
+    .req-id { font-size: 10px; font-weight: 700; color: var(--text-muted); min-width: 28px; }
+    .req-title { font-size: var(--text-sm); font-weight: 500; flex: 1; color: var(--text); min-width: 120px; }
+    .resolved-chip { font-weight: 600; }
+    .optional-tag {
+      font-size: 9px; background: var(--bg-subtle); color: var(--text-muted);
+      padding: 1px 5px; border-radius: 3px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
 
-    .optional-tag {{
-      font-size: 9px;
-      background: #f3f4f6;
-      color: #9ca3af;
-      padding: 1px 5px;
-      border-radius: 3px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }}
-    .meta {{
-      font-size: 10px;
-      color: #d1d5db;
-    }}
+    /* Badges */
+    .badge {
+      display: inline-block;
+      font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 3px;
+      letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap;
+    }
+    .badge-pass    { background: var(--badge-pass-bg); color: var(--badge-pass-text); }
+    .badge-fail    { background: var(--badge-fail-bg); color: var(--badge-fail-text); }
+    .badge-missing { background: var(--badge-missing-bg); color: var(--badge-missing-text); }
+    .badge-error   { background: var(--badge-error-bg); color: var(--badge-error-text); }
+    .badge-skip    { background: var(--bg-subtle); color: var(--text-muted); }
+    .badge-na      { background: var(--bg-subtle); color: var(--text-muted); }
+    .badge-success { background: var(--success-subtle); color: var(--success-text); }
 
-    /* ── Badges ── */
-    .badge {{
-      font-size: 9px;
-      font-weight: 700;
-      padding: 2px 7px;
-      border-radius: 3px;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      white-space: nowrap;
-    }}
-    .badge-pass    {{ background: #ecfdf5; color: #065f46; }}
-    .badge-fail    {{ background: #fef2f2; color: #991b1b; }}
-    .badge-missing {{ background: #fffbeb; color: #92400e; }}
-    .badge-error   {{ background: #f5f3ff; color: #5b21b6; }}
-    .badge-skip    {{ background: #f9fafb; color: #9ca3af; }}
-    .badge-na      {{ background: #f9fafb; color: #d1d5db; }}
+    .req-photo-link { display: block; margin-top: 10px; }
+    .req-photo {
+      display: block; max-width: 100%;
+      border-radius: 6px; border: 2px solid var(--border);
+    }
+    @media (min-width: 640px) { .req-photo { max-width: 280px; } }
 
-    /* ── Reason text ── */
-    .reason {{
-      margin-top: 8px;
-      font-size: 12px;
-      color: #6b7280;
-      line-height: 1.6;
-      padding-left: 10px;
-      border-left: 2px solid #f3f4f6;
-    }}
+    .reason {
+      margin-top: 8px; font-size: var(--text-sm); color: var(--text-secondary);
+      line-height: 1.6; padding-left: 10px;
+      border-left: 2px solid var(--border-light);
+    }
+    .expand-btn {
+      margin-top: 4px; background: none; border: none;
+      color: var(--accent); font-size: var(--text-xs); font-weight: 500;
+      cursor: pointer; padding: 2px 0; font-family: inherit;
+    }
+    .expand-btn:hover { text-decoration: underline; }
+    .expand-btn .arrow { font-size: 10px; margin-left: 2px; }
 
-    .expand-btn {{
-      margin-top: 4px;
-      background: none;
-      border: none;
-      color: #3b82f6;
-      font-size: 11px;
-      font-weight: 500;
-      cursor: pointer;
-      padding: 2px 0;
-    }}
-    .expand-btn:hover {{ text-decoration: underline; }}
-    .expand-btn .arrow {{ font-size: 10px; margin-left: 2px; display: inline-block; transition: transform 0.15s ease; }}
+    /* Note display */
+    .req-note {
+      margin-top: 10px; padding: 10px 12px;
+      background: var(--bg-subtle); border-radius: 6px;
+      font-size: var(--text-sm); color: var(--text);
+      line-height: 1.5; white-space: pre-wrap;
+      border-left: 3px solid var(--accent);
+    }
+    .note-editor {
+      margin-top: 10px; display: flex; flex-direction: column; gap: 8px;
+    }
+    .note-editor textarea {
+      width: 100%; min-height: 60px;
+      padding: 8px 10px;
+      border: 2px solid var(--border); border-radius: 6px;
+      background: var(--bg-input); color: var(--text);
+      font-family: inherit; font-size: var(--text-sm);
+      resize: vertical;
+    }
+    .note-editor textarea:focus { outline: none; border-color: var(--accent); }
+    .note-editor-actions { display: flex; gap: 8px; }
 
-    /* ── Footer ── */
-    .footer {{
-      text-align: center;
-      padding: 24px;
-      font-size: 10px;
-      color: #d1d5db;
-      letter-spacing: 0.02em;
-    }}
+    /* Actions bar */
+    .req-actions {
+      margin-top: 10px;
+      display: flex; gap: 6px; flex-wrap: wrap;
+      padding-top: 10px; border-top: 1px solid var(--border-light);
+    }
 
-    /* ── Mobile ── */
-    @media (max-width: 640px) {{
-      .header {{
-        flex-direction: column;
-        padding: 20px 16px;
-        gap: 8px;
+    /* Inline recheck spinner */
+    .req-rechecking {
+      pointer-events: none; opacity: 0.6;
+      position: relative;
+    }
+    .req-rechecking::after {
+      content: "Re-checking…"; display: inline-block;
+      font-size: var(--text-xs); color: var(--text-muted);
+      margin-left: 8px;
+    }
+
+    /* Alerts */
+    .alert {
+      display: flex; gap: 10px; align-items: center;
+      padding: 10px 14px; border-radius: 8px;
+      font-size: var(--text-sm); line-height: 1.5;
+      border: 1px solid transparent;
+      margin: 10px 0;
+    }
+    .alert-error { background: var(--danger-subtle); color: var(--danger-text); border-color: var(--danger); }
+    .alert-success { background: var(--success-subtle); color: var(--success-text); border-color: var(--success); }
+
+    /* Footer */
+    .report-footer {
+      text-align: center; padding: 24px 20px;
+      font-size: var(--text-xs); color: var(--text-muted); opacity: 0.7;
+    }
+
+    /* Mobile */
+    @media (max-width: 640px) {
+      .summary-main { flex-direction: row; align-items: flex-start; }
+      .summary-headline { font-size: var(--text-lg); }
+      .report-body { padding: 0 12px; }
+      .requirement { padding: 12px; }
+      .req-actions { gap: 6px; }
+      .req-actions .btn { flex: 1 1 calc(50% - 3px); min-width: calc(50% - 3px); }
+    }
+    """
+
+
+def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, params,
+                         project_id, checklist_ids) -> str:
+    """JavaScript for theme toggle, tabs, and (when interactive) resolve/note/recheck."""
+    rerun_params_js = "null"
+    if is_interactive and failed_ids:
+        qs_params = {
+            "project_id": project_id,
+            "checklist_id": checklist_ids[0] if checklist_ids else "",
+            "manufacturer": params.get("manufacturer", "SolarEdge") or "SolarEdge",
+            "project_state": "",
+            "rerun_ids": ",".join(failed_ids),
+        }
+        rerun_params_js = json.dumps(qs_params)
+
+    return f"""
+    // ── Theme ──
+    (function() {{
+      const saved = localStorage.getItem('solclear-theme');
+      if (saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches)) {{
+        document.documentElement.setAttribute('data-theme', 'dark');
       }}
-      .header-right {{ text-align: left; }}
-      .overall-banner {{
-        flex-direction: column;
-        padding: 12px 16px;
-        align-items: flex-start;
-        gap: 8px;
-      }}
-      .overall-right {{ flex-wrap: wrap; gap: 10px; }}
-      .params-bar {{
-        padding: 10px 16px;
-        gap: 12px;
-      }}
-      .param {{ flex-basis: 45%; }}
-      .param-sep {{ display: none; }}
-      .body {{ padding: 0 12px; }}
-      .requirement {{ padding: 10px 12px; }}
-      .req-header {{ gap: 6px; }}
-      .req-title {{ font-size: 12px; }}
+      updateThemeIcon();
+    }})();
+    function toggleTheme() {{
+      const html = document.documentElement;
+      const isDark = html.getAttribute('data-theme') === 'dark';
+      html.setAttribute('data-theme', isDark ? 'light' : 'dark');
+      localStorage.setItem('solclear-theme', isDark ? 'light' : 'dark');
+      updateThemeIcon();
     }}
-  </style>
-</head>
-<body>
+    function updateThemeIcon() {{
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      const sun = document.getElementById('themeIconSun');
+      const moon = document.getElementById('themeIconMoon');
+      if (sun) sun.style.display = isDark ? 'block' : 'none';
+      if (moon) moon.style.display = isDark ? 'none' : 'block';
+    }}
 
-  <div class="header">
-    <div class="header-left">
-      <h1>{name}</h1>
-      <div class="address">{addr_str}</div>
-    </div>
-    <div class="header-right">
-      Palmetto M1 Report<br>
-      {generated}<br>
-      ID: {project_id}
-    </div>
-  </div>
-
-  <div class="overall-banner {overall_class}">
-    <div class="overall-left">
-      <svg class="progress-ring" viewBox="0 0 44 44">
-        <circle class="ring-bg" cx="22" cy="22" r="18"/>
-        <circle class="ring-fill" cx="22" cy="22" r="18"
-          stroke-dasharray="{round(2 * 3.14159 * 18, 1)}"
-          stroke-dashoffset="{round(2 * 3.14159 * 18 * (1 - pct / 100), 1)}"/>
-        <text class="ring-text" x="22" y="22">{pct}%</text>
-      </svg>
-      <span class="overall-label">{overall_label}</span>
-    </div>
-    <div class="overall-right">
-      <span class="stat"><span class="stat-dot stat-dot-pass"></span>{n_pass} passed</span>
-      <span class="stat"><span class="stat-dot stat-dot-fail"></span>{n_fail} failed</span>
-      <span class="stat"><span class="stat-dot stat-dot-missing"></span>{n_missing} missing</span>
-      <span class="stat">{n_total} required</span>
-    </div>
-  </div>
-
-  <div class="params-bar">
-    <div class="param"><span class="param-label">Lender</span><span class="param-value">{lender}</span></div>
-    <span class="param-sep">|</span>
-    <div class="param"><span class="param-label">Manufacturer</span><span class="param-value">{manufacturer}</span></div>
-    <span class="param-sep">|</span>
-    <div class="param"><span class="param-label">Battery</span><span class="param-value">{has_battery}</span></div>
-    <span class="param-sep">|</span>
-    <div class="param"><span class="param-label">Backup</span><span class="param-value">{backup}</span></div>
-    <span class="param-sep">|</span>
-    <div class="param"><span class="param-label">Incentive</span><span class="param-value">{incentive}</span></div>
-    <span class="param-sep">|</span>
-    <div class="param"><span class="param-label">Portal</span><span class="param-value">{portal}</span></div>
-  </div>
-
-  <div class="body">
-    {sections_html}
-  </div>
-
-  <div class="footer">
-    Solclear Compliance &middot; Palmetto LightReach M1
-  </div>
-
-  <script>
+    // ── Show-more/less for long reason text ──
     function toggleReason(btn) {{
       const full = btn.previousElementSibling;
       const short = full.previousElementSibling;
@@ -521,7 +548,326 @@ def generate_html(report: dict, project: dict) -> str:
         btn.innerHTML = 'Show more <span class="arrow">&#9662;</span>';
       }}
     }}
-  </script>
+
+    // ── Tabs ──
+    function filterTab(tab) {{
+      document.querySelectorAll('.report-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+      document.querySelectorAll('.requirement').forEach(row => {{
+        const status = row.dataset.status;
+        const resolved = row.dataset.resolved === '1';
+        const isFailure = status === 'FAIL' || status === 'MISSING' || status === 'ERROR';
+        let show = false;
+        if (tab === 'all') show = true;
+        else if (tab === 'passed') show = status === 'PASS';
+        else /* attention */ show = isFailure && !resolved;
+        row.style.display = show ? '' : 'none';
+      }});
+      // Hide empty sections for clarity
+      document.querySelectorAll('.section').forEach(sec => {{
+        const anyVisible = Array.from(sec.querySelectorAll('.requirement'))
+          .some(r => r.style.display !== 'none');
+        sec.style.display = anyVisible ? '' : 'none';
+      }});
+    }}
+
+    // Default tab: if any attention items exist, start there; otherwise show All.
+    (function() {{
+      const anyAttention = Array.from(document.querySelectorAll('.requirement'))
+        .some(r => {{
+          const s = r.dataset.status;
+          return (s === 'FAIL' || s === 'MISSING' || s === 'ERROR') && r.dataset.resolved !== '1';
+        }});
+      filterTab(anyAttention ? 'attention' : 'all');
+    }})();
+
+    // ── Rerun failed items (non-interactive fallback: navigates to SPA) ──
+    const RERUN_PARAMS = {rerun_params_js};
+    function rerunFailed() {{
+      if (!RERUN_PARAMS) return;
+      const qs = new URLSearchParams(RERUN_PARAMS);
+      window.location.href = "/?rerun=" + encodeURIComponent(qs.toString());
+    }}
+
+    // ── Interactive report actions ──
+    const REPORT_ID = {json.dumps(db_report_id)};
+    const IS_INTERACTIVE = {json.dumps(is_interactive)};
+
+    function _updateTabCounts() {{
+      const counts = {{attention: 0, passed: 0, all: 0}};
+      document.querySelectorAll('.requirement').forEach(r => {{
+        const s = r.dataset.status;
+        const isFailure = s === 'FAIL' || s === 'MISSING' || s === 'ERROR';
+        const resolved = r.dataset.resolved === '1';
+        counts.all++;
+        if (s === 'PASS') counts.passed++;
+        if (isFailure && !resolved) counts.attention++;
+      }});
+      const set = (tab, n) => {{
+        const el = document.querySelector('.report-tab[data-tab="' + tab + '"] .count');
+        if (el) el.textContent = n;
+      }};
+      set('attention', counts.attention);
+      set('passed', counts.passed);
+      set('all', counts.all);
+    }}
+
+    async function toggleResolved(btn, reqCode) {{
+      if (!IS_INTERACTIVE || !REPORT_ID) return;
+      btn.disabled = true;
+      try {{
+        const r = await fetch('/api/report/' + REPORT_ID + '/item/' + reqCode + '/resolve', {{method: 'POST'}});
+        const data = await r.json();
+        if (data.error) throw new Error(data.error);
+        const row = btn.closest('.requirement');
+        const nowResolved = !!data.resolved_at;
+        row.dataset.resolved = nowResolved ? '1' : '';
+        btn.textContent = nowResolved ? 'Undo resolve' : 'Mark resolved';
+        // Update/insert resolved chip in the header
+        let chip = row.querySelector('.resolved-chip');
+        if (nowResolved) {{
+          if (!chip) {{
+            chip = document.createElement('span');
+            chip.className = 'badge badge-success resolved-chip';
+            chip.textContent = 'Resolved';
+            row.querySelector('.req-header').appendChild(chip);
+          }}
+          if (data.resolved_by_name) chip.title = 'Resolved by ' + data.resolved_by_name;
+        }} else if (chip) {{
+          chip.remove();
+        }}
+        _updateTabCounts();
+        // If on 'attention' tab and the item just got resolved, hide it
+        const activeTab = document.querySelector('.report-tab.active')?.dataset.tab;
+        if (activeTab === 'attention' && nowResolved) {{ row.style.display = 'none'; }}
+      }} catch (e) {{
+        alert('Could not update: ' + e.message);
+      }} finally {{
+        btn.disabled = false;
+      }}
+    }}
+
+    function openNoteEditor(btn, reqCode) {{
+      if (!IS_INTERACTIVE || !REPORT_ID) return;
+      const row = btn.closest('.requirement');
+      // If editor already open, close
+      const existing = row.querySelector('.note-editor');
+      if (existing) {{ existing.remove(); return; }}
+      const currentNote = row.querySelector('.req-note');
+      const currentText = currentNote ? currentNote.textContent : '';
+      const editor = document.createElement('div');
+      editor.className = 'note-editor';
+      editor.innerHTML =
+        '<textarea placeholder="Add a note for the crew or reviewer…">' + (currentText ? currentText.replace(/</g, '&lt;') : '') + '</textarea>' +
+        '<div class="note-editor-actions">' +
+          '<button class="btn btn-sm btn-primary">Save note</button>' +
+          '<button class="btn btn-sm btn-subtle">Cancel</button>' +
+        '</div>';
+      const actions = row.querySelector('.req-actions');
+      row.insertBefore(editor, actions);
+      const ta = editor.querySelector('textarea');
+      ta.focus();
+      const [saveBtn, cancelBtn] = editor.querySelectorAll('button');
+      cancelBtn.onclick = () => editor.remove();
+      saveBtn.onclick = async () => {{
+        saveBtn.disabled = true;
+        try {{
+          const r = await fetch('/api/report/' + REPORT_ID + '/item/' + reqCode + '/note', {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{note: ta.value}})
+          }});
+          const data = await r.json();
+          if (data.error) throw new Error(data.error);
+          // Update or insert note display
+          let noteEl = row.querySelector('.req-note');
+          if (data.notes) {{
+            if (!noteEl) {{
+              noteEl = document.createElement('div');
+              noteEl.className = 'req-note';
+              row.insertBefore(noteEl, actions);
+            }}
+            noteEl.textContent = data.notes;
+          }} else if (noteEl) {{
+            noteEl.remove();
+          }}
+          // Toggle button label
+          btn.textContent = data.notes ? 'Edit note' : 'Add note';
+          editor.remove();
+        }} catch (e) {{
+          alert('Could not save note: ' + e.message);
+          saveBtn.disabled = false;
+        }}
+      }};
+    }}
+
+    async function recheckItem(btn, reqCode) {{
+      if (!IS_INTERACTIVE || !REPORT_ID) return;
+      const row = btn.closest('.requirement');
+      row.classList.add('req-rechecking');
+      btn.disabled = true;
+      try {{
+        const r = await fetch('/api/recheck/' + REPORT_ID + '/' + reqCode, {{method: 'POST'}});
+        const data = await r.json();
+        if (data.error) throw new Error(data.error);
+        // Update row visuals without a page reload
+        const newStatus = data.status || '';
+        row.dataset.status = newStatus;
+        row.className = 'requirement req-' + newStatus.toLowerCase();
+        // Update badge
+        const badge = row.querySelector('.badge');
+        if (badge) {{
+          const cfg = {{PASS:'pass', FAIL:'fail', MISSING:'missing', ERROR:'error'}};
+          const cls = cfg[newStatus] || 'na';
+          badge.className = 'badge badge-' + cls;
+          badge.textContent = newStatus;
+        }}
+        // Resolved state is cleared server-side on recheck
+        row.dataset.resolved = '';
+        const chip = row.querySelector('.resolved-chip');
+        if (chip) chip.remove();
+        const resolveBtn = row.querySelector('[data-role="resolve-btn"]');
+        if (resolveBtn) resolveBtn.textContent = 'Mark resolved';
+        _updateTabCounts();
+        // Refresh the view to apply new status vs. current tab filter
+        const activeTab = document.querySelector('.report-tab.active')?.dataset.tab;
+        if (activeTab) filterTab(activeTab);
+      }} catch (e) {{
+        alert('Could not re-check: ' + e.message);
+      }} finally {{
+        row.classList.remove('req-rechecking');
+        btn.disabled = false;
+      }}
+    }}
+    """
+
+
+def generate_html(report: dict, project: dict) -> str:
+    reqs = report.get("requirements", [])
+    params = report.get("params", {})
+    project_id = report.get("project_id", "")
+    db_report_id = report.get("db_report_id")
+    is_interactive = bool(db_report_id)
+
+    name = project.get("name") or f"Project {project_id}"
+    address = project.get("address", {}) or {}
+    addr_str = ", ".join(filter(None, [
+        address.get("street_address_1"),
+        address.get("city"),
+        address.get("state"),
+    ]))
+    generated = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+
+    required = [r for r in reqs if r["status"] != "N/A" and not r.get("optional")]
+    n_pass    = sum(1 for r in required if r["status"] == "PASS")
+    n_fail    = sum(1 for r in required if r["status"] == "FAIL")
+    n_missing = sum(1 for r in required if r["status"] == "MISSING")
+    n_error   = sum(1 for r in required if r["status"] == "ERROR")
+    n_total   = len(required)
+    n_attention = n_fail + n_missing + n_error
+
+    summary_class = "summary-pass" if n_attention == 0 else "summary-fail"
+    summary_label = "READY FOR SUBMISSION" if n_attention == 0 else "ACTION REQUIRED"
+    pct = round((n_pass / n_total) * 100) if n_total else 0
+
+    checklist_ids = report.get("checklist_ids", []) or []
+    checklist_id = checklist_ids[0] if checklist_ids else ""
+    cc_url = (
+        f"https://app.companycam.com/projects/{project_id}/todos/{checklist_id}"
+        if checklist_ids and project_id else ""
+    )
+
+    # Group by section, preserving first-seen order
+    sections: dict = {}
+    for r in reqs:
+        sections.setdefault(r["section"], []).append(r)
+    sections_html = "".join(
+        render_section(sec, secreqs, is_interactive, checklist_id, project_id)
+        for sec, secreqs in sections.items()
+    )
+
+    # Collect failed IDs for the "rerun failed" action
+    failed_ids = [
+        r["id"] for r in reqs
+        if r.get("status") in ("FAIL", "MISSING", "ERROR") and r.get("status") != "N/A"
+    ]
+
+    # CTAs
+    ctas = []
+    if cc_url:
+        ctas.append(f'<a href="{_esc(cc_url)}" target="_blank" class="btn btn-primary">Open in CompanyCam ↗</a>')
+    if failed_ids:
+        ctas.append(f'<button class="btn btn-ghost" onclick="rerunFailed()">Re-run {len(failed_ids)} failed item{"s" if len(failed_ids) != 1 else ""}</button>')
+    ctas_html = "".join(ctas)
+
+    # Pre-compute chips (only show chips with counts > 0 to reduce noise)
+    chips = []
+    chips.append(f'<span class="chip chip-pass">✓ {n_pass} passed</span>')
+    if n_fail:    chips.append(f'<span class="chip chip-fail">✗ {n_fail} failed</span>')
+    if n_missing: chips.append(f'<span class="chip chip-missing">⊘ {n_missing} missing</span>')
+    if n_error:   chips.append(f'<span class="chip chip-error">⚠ {n_error} error</span>')
+    chips_html = "".join(chips)
+
+    ring_dasharray = round(2 * 3.14159 * 18, 1)
+    ring_dashoffset = round(2 * 3.14159 * 18 * (1 - pct / 100), 1)
+
+    style = DESIGN_TOKENS_CSS + _report_style_block()
+    script = _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, params,
+                                  project_id, checklist_ids)
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <title>M1 Compliance — {_esc(name)}</title>
+  <style>{style}</style>
+</head>
+<body>
+
+  <header class="report-topbar">
+    <a href="/"><span>&larr;</span> Back to Solclear</a>
+    <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle dark mode">
+      <svg id="themeIconSun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+      <svg id="themeIconMoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:none;"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
+  </header>
+
+  <div class="report-summary {summary_class}">
+    <div class="summary-inner">
+      <div class="summary-main">
+        <svg class="summary-ring" width="52" height="52" viewBox="0 0 44 44">
+          <circle class="ring-bg" cx="22" cy="22" r="18"/>
+          <circle class="ring-fill" cx="22" cy="22" r="18"
+            stroke-dasharray="{ring_dasharray}"
+            stroke-dashoffset="{ring_dashoffset}"/>
+          <text class="ring-text" x="22" y="22">{pct}%</text>
+        </svg>
+        <div class="summary-text">
+          <div class="summary-headline">{n_pass} of {n_total} passed · {summary_label}</div>
+          <div class="summary-project">{_esc(name)}{(' — ' + _esc(addr_str)) if addr_str else ''}</div>
+          <div class="summary-chips">{chips_html}</div>
+        </div>
+      </div>
+      <div class="summary-ctas">{ctas_html}</div>
+    </div>
+  </div>
+
+  <nav class="report-tabs">
+    <button class="report-tab" data-tab="attention" onclick="filterTab('attention')">Needs attention <span class="count">{n_attention}</span></button>
+    <button class="report-tab" data-tab="passed" onclick="filterTab('passed')">Passed <span class="count">{n_pass}</span></button>
+    <button class="report-tab" data-tab="all" onclick="filterTab('all')">All <span class="count">{n_total}</span></button>
+  </nav>
+
+  <div class="report-body">
+    {sections_html}
+  </div>
+
+  <div class="report-footer">
+    Solclear Compliance &middot; Palmetto LightReach M1 &middot; {generated} &middot; ID: {_esc(project_id)}
+  </div>
+
+  <script>{script}</script>
 
 </body>
 </html>"""

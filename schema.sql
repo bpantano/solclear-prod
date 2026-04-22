@@ -178,6 +178,10 @@ CREATE TABLE requirement_results (
     reason          TEXT,                           -- AI-generated explanation
     photo_urls      JSONB DEFAULT '{}',             -- {1: "https://...", 2: "https://..."}
     candidates      INTEGER DEFAULT 0,             -- how many photos were reviewed
+    -- Interactive report additions (see migrations/001_report_interactivity.sql)
+    resolved_at     TIMESTAMPTZ,                   -- set when a user marks an item as fixed
+    resolved_by     INTEGER REFERENCES users(id),  -- who marked it resolved
+    notes           TEXT,                           -- free-text notes from crew/reviewer
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

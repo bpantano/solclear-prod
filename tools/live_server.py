@@ -560,6 +560,28 @@ class LiveHandler(BaseHTTPRequestHandler):
                 return
             oid = path.split("/")[3]
             self._api_org_update(oid, body)
+        # ── Interactive report item actions ──
+        # /api/report/{report_id}/item/{req_code}/resolve  → toggle resolved
+        # /api/report/{report_id}/item/{req_code}/note     → save note
+        elif path.startswith("/api/report/") and path.endswith("/resolve"):
+            parts = path.split("/")
+            if len(parts) == 7:
+                self._api_report_item_resolve(parts[3], parts[5], session)
+            else:
+                self.send_error(404)
+        elif path.startswith("/api/report/") and path.endswith("/note"):
+            parts = path.split("/")
+            if len(parts) == 7:
+                self._api_report_item_note(parts[3], parts[5], body, session)
+            else:
+                self.send_error(404)
+        # /api/recheck/{report_id}/{req_code} → re-run one requirement
+        elif path.startswith("/api/recheck/"):
+            parts = path.split("/")
+            if len(parts) == 5:
+                self._api_report_item_recheck(parts[3], parts[4], session)
+            else:
+                self.send_error(404)
         else:
             self.send_error(404)
 
@@ -622,12 +644,28 @@ class LiveHandler(BaseHTTPRequestHandler):
             r = http_requests.get(f"{API_BASE}/projects/{project_id}/checklists", headers=cc_headers(), timeout=10)
             r.raise_for_status()
             checklists = r.json()
-            slim = [{
-                "id": cl.get("id"),
-                "name": cl.get("name", "Unknown"),
-                "completed_at": cl.get("completed_at"),
-                "template_id": cl.get("checklist_template_id"),
-            } for cl in checklists]
+            slim = []
+            for cl in checklists:
+                total_tasks = 0
+                completed_tasks = 0
+                # Tasks live either outside any section, or nested inside sections[].tasks[]
+                for task in cl.get("sectionless_tasks", []) or []:
+                    total_tasks += 1
+                    if task.get("completed_at"):
+                        completed_tasks += 1
+                for section in cl.get("sections", []) or []:
+                    for task in section.get("tasks", []) or []:
+                        total_tasks += 1
+                        if task.get("completed_at"):
+                            completed_tasks += 1
+                slim.append({
+                    "id": cl.get("id"),
+                    "name": cl.get("name", "Unknown"),
+                    "completed_at": cl.get("completed_at"),
+                    "template_id": cl.get("checklist_template_id"),
+                    "total_tasks": total_tasks,
+                    "completed_tasks": completed_tasks,
+                })
             self._send_json(slim)
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
@@ -1492,14 +1530,22 @@ class LiveHandler(BaseHTTPRequestHandler):
                 FROM reports r JOIN projects p ON p.id = r.project_id
                 WHERE r.id = %s""", (report_id,))
             if db_report:
-                # Load requirement results
+                # Load requirement results (including interactive fields).
+                # LEFT JOIN on users so resolver name comes along when present.
                 results = fetch_all("""
                     SELECT rr.status, rr.reason, rr.photo_urls, rr.candidates,
+                           rr.resolved_at, rr.resolved_by, rr.notes,
+                           u.full_name AS resolved_by_name,
                            req.code as id, req.title, req.section, req.is_optional as optional
                     FROM requirement_results rr
                     JOIN requirements req ON req.id = rr.requirement_id
+                    LEFT JOIN users u ON u.id = rr.resolved_by
                     WHERE rr.report_id = %s
                     ORDER BY req.id""", (report_id,))
+                # ISO-format timestamps for JSON-serialization in the template
+                for r in results:
+                    if r.get("resolved_at"):
+                        r["resolved_at"] = r["resolved_at"].isoformat()
                 report = {
                     "project_id": db_report["companycam_id"],
                     "params": {
@@ -1547,45 +1593,9 @@ class LiveHandler(BaseHTTPRequestHandler):
 
         try:
             from tools.generate_report_html import generate_html
+            # The template now renders its own top bar, summary card, tabs,
+            # and rerun button — no post-hoc injections needed.
             html = generate_html(report, project)
-
-            # Count failed requirements for the rerun button
-            reqs = report.get("requirements", [])
-            failed_ids = [r["id"] for r in reqs if r.get("status") in ("FAIL", "MISSING", "ERROR") and r.get("status") != "N/A"]
-            n_failed = len(failed_ids)
-            params = report.get("params", {})
-            checklist_ids = report.get("checklist_ids", [])
-
-            # Inject back link at the top (after <body>)
-            back_bar = '''
-<div style="background:#111827;padding:10px 20px;">
-  <a href="/" style="color:#9ca3af;text-decoration:none;font-size:13px;font-weight:500;">&larr; Back to Solclear</a>
-</div>'''
-            html = html.replace("<body>", "<body>" + back_bar, 1)
-
-            # Inject rerun button right after the overall banner
-            if n_failed > 0:
-                rerun_btn = f'''
-<div style="padding:12px 32px;background:#fff;border-bottom:1px solid #e5e7eb;">
-  <button onclick="rerunFailed()" style="background:#ef4444;color:#fff;border:none;border-radius:8px;padding:12px 20px;font-size:14px;font-weight:600;cursor:pointer;min-height:44px;width:100%;">
-    Rerun {n_failed} Failed Item{"s" if n_failed != 1 else ""}
-  </button>
-</div>
-<script>
-function rerunFailed() {{
-  const qs = new URLSearchParams({{
-    project_id: "{project_id}",
-    checklist_id: "{checklist_ids[0] if checklist_ids else ""}",
-    manufacturer: "{params.get("manufacturer", "SolarEdge")}",
-    project_state: "",
-    rerun_ids: "{",".join(failed_ids)}",
-  }});
-  window.location.href = "/?rerun=" + encodeURIComponent(qs.toString());
-}}
-</script>'''
-                # Insert after the params-bar div
-                html = html.replace('class="body">', 'class="body">' + rerun_btn, 1)
-
             body = html.encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -1603,6 +1613,151 @@ function rerunFailed() {{
         self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
+
+    # ── Interactive report item actions ───────────────────────────────────────
+
+    def _load_report_item(self, report_id, req_code, session):
+        """Fetch a single requirement_results row, enforcing org scoping.
+        Returns (row_dict, err_msg). If err_msg is set, respond & stop."""
+        try:
+            row = fetch_one(
+                """SELECT rr.*, p.organization_id, p.companycam_id,
+                          r.manufacturer, r.has_battery, r.is_backup_battery,
+                          r.is_incentive_state, r.portal_access_granted
+                   FROM requirement_results rr
+                   JOIN requirements req ON req.id = rr.requirement_id
+                   JOIN reports r ON r.id = rr.report_id
+                   JOIN projects p ON p.id = r.project_id
+                   WHERE rr.report_id = %s AND req.code = %s""",
+                (report_id, req_code),
+            )
+            if not row:
+                return None, "Report item not found"
+            # Org scoping: non-superadmins must match the project's org
+            if session.get("role") != "superadmin":
+                if row.get("organization_id") != session.get("org_id"):
+                    return None, "Forbidden"
+            return row, None
+        except Exception as e:
+            return None, str(e)
+
+    def _api_report_item_resolve(self, report_id, req_code, session):
+        """Toggle an item's resolved state."""
+        row, err = self._load_report_item(report_id, req_code, session)
+        if err:
+            status = 404 if err == "Report item not found" else (403 if err == "Forbidden" else 500)
+            self._send_json({"error": err}, status)
+            return
+        try:
+            now_null = row.get("resolved_at") is not None  # currently resolved → will un-resolve
+            if now_null:
+                updated = execute_returning(
+                    "UPDATE requirement_results SET resolved_at = NULL, resolved_by = NULL WHERE id = %s RETURNING resolved_at, resolved_by",
+                    (row["id"],),
+                )
+            else:
+                updated = execute_returning(
+                    "UPDATE requirement_results SET resolved_at = NOW(), resolved_by = %s WHERE id = %s RETURNING resolved_at, resolved_by",
+                    (session.get("user_id"), row["id"]),
+                )
+            if updated and updated.get("resolved_at"):
+                updated["resolved_at"] = updated["resolved_at"].isoformat()
+            # Enrich with resolver name for the UI chip
+            if updated and updated.get("resolved_by"):
+                u = fetch_one("SELECT full_name FROM users WHERE id = %s", (updated["resolved_by"],))
+                updated["resolved_by_name"] = u.get("full_name") if u else None
+            self._send_json(updated or {})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_report_item_note(self, report_id, req_code, body, session):
+        """Save a free-text note on a report item."""
+        row, err = self._load_report_item(report_id, req_code, session)
+        if err:
+            status = 404 if err == "Report item not found" else (403 if err == "Forbidden" else 500)
+            self._send_json({"error": err}, status)
+            return
+        try:
+            data = json.loads(body) if body else {}
+            note = (data.get("note") or "").strip() or None
+            updated = execute_returning(
+                "UPDATE requirement_results SET notes = %s WHERE id = %s RETURNING notes",
+                (note, row["id"]),
+            )
+            self._send_json(updated or {})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_report_item_recheck(self, report_id, req_code, session):
+        """Re-run compliance for a single requirement on an existing report.
+        Updates the requirement_results row in place and returns the new result."""
+        row, err = self._load_report_item(report_id, req_code, session)
+        if err:
+            status = 404 if err == "Report item not found" else (403 if err == "Forbidden" else 500)
+            self._send_json({"error": err}, status)
+            return
+        try:
+            params = {
+                "manufacturer": row.get("manufacturer"),
+                "has_battery": row.get("has_battery", False),
+                "is_backup_battery": row.get("is_backup_battery", False),
+                "is_incentive_state": row.get("is_incentive_state", False),
+                "portal_access_granted": row.get("portal_access_granted", False),
+            }
+            report = run_compliance_check(
+                row["companycam_id"], params,
+                run_vision=True, only_ids={req_code},
+            )
+            # Find the matching requirement result
+            new_result = next(
+                (r for r in report.get("requirements", []) if r.get("id") == req_code),
+                None,
+            )
+            if not new_result:
+                self._send_json({"error": "Recheck returned no result"}, 500)
+                return
+            # Update the existing row (not a new row — patches the current report)
+            updated = execute_returning(
+                """UPDATE requirement_results
+                   SET status = %s, reason = %s, photo_urls = %s, candidates = %s,
+                       resolved_at = NULL, resolved_by = NULL
+                   WHERE id = %s
+                   RETURNING status, reason, photo_urls, candidates""",
+                (
+                    new_result.get("status"),
+                    new_result.get("reason"),
+                    json.dumps(new_result.get("photo_urls", {})),
+                    new_result.get("candidates", 0),
+                    row["id"],
+                ),
+            )
+            # Recompute the report summary so totals stay correct
+            self._recompute_report_summary(report_id)
+            self._send_json(updated or {})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _recompute_report_summary(self, report_id):
+        """Recount PASS/FAIL/MISSING across requirement_results and write back to reports."""
+        try:
+            counts = fetch_one(
+                """SELECT
+                     COUNT(*) FILTER (WHERE status != 'N/A') AS total,
+                     COUNT(*) FILTER (WHERE status = 'PASS') AS passed,
+                     COUNT(*) FILTER (WHERE status = 'FAIL') AS failed,
+                     COUNT(*) FILTER (WHERE status = 'MISSING') AS missing
+                   FROM requirement_results
+                   WHERE report_id = %s""",
+                (report_id,),
+            )
+            if counts:
+                execute(
+                    """UPDATE reports SET total_required = %s, total_passed = %s,
+                       total_failed = %s, total_missing = %s WHERE id = %s""",
+                    (counts["total"], counts["passed"], counts["failed"], counts["missing"], report_id),
+                )
+        except Exception as e:
+            print(f"WARNING: Failed to recompute report summary: {e}", file=sys.stderr)
 
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
