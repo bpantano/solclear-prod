@@ -734,6 +734,21 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <button onclick="stopImpersonate()" style="background:#1a1a2e;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:var(--text-xs);font-weight:600;cursor:pointer;flex-shrink:0;min-height:32px;font-family:inherit;">Stop impersonating</button>
   </div>
 
+  <!-- Anthropic platform-status banner — shown when status.anthropic.com
+       reports anything other than all-systems-operational. Color coded by
+       severity (minor/major/critical all shades of red/amber). Driven by
+       the /api/platform_status poll below; hidden until we have a real
+       non-operational indicator so we don't cry wolf during transient
+       status.anthropic.com blips. -->
+  <div id="platformStatusBanner" style="display:none;padding:10px 16px;align-items:center;gap:12px;font-size:var(--text-sm);font-weight:500;border-bottom:1px solid rgba(0,0,0,0.18);position:sticky;top:0;z-index:34;">
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+    <div style="flex:1;min-width:0;line-height:1.35;">
+      <strong id="platformStatusTitle">Anthropic API: degraded</strong>
+      <span id="platformStatusDetail" style="opacity:0.9;"> — compliance checks may be slower or fail intermittently.</span>
+      <a href="https://status.anthropic.com/" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;margin-left:8px;">status page</a>
+    </div>
+  </div>
+
   <!-- Landing page -->
   <div id="homePage" class="step active" style="display:block;">
     <div style="padding:4px 0 20px;">
@@ -2505,9 +2520,60 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         _me = await r.json();
         _applyRoleVisibility(_me && _me.role);
         _applyImpersonationBanner(_me);
+        _applyPlatformStatus(_me && _me.platform_status);
       } catch (e) { /* silently ignore — non-critical */ }
     }
     loadMe();
+
+    // Refresh Anthropic platform status every 60s so the banner appears/
+    // disappears in near real-time without a page reload. Errors are
+    // swallowed — the banner just won't update. Poll interval matches
+    // the backend's own status fetch cadence.
+    async function refreshPlatformStatus() {
+      try {
+        const r = await fetch('/api/platform_status');
+        if (!r.ok) return;
+        const s = await r.json();
+        _applyPlatformStatus(s);
+      } catch (e) { /* silently ignore */ }
+    }
+    setInterval(refreshPlatformStatus, 60000);
+
+    // Map Statuspage indicators to banner styles. "none" → hide.
+    // "maintenance" shown informationally in blue rather than amber/red.
+    const _PLATFORM_STATUS_STYLE = {
+      minor:       {bg: '#f59e0b', fg: '#1a1a2e', label: 'degraded'},
+      major:       {bg: '#dc2626', fg: '#ffffff', label: 'experiencing a partial outage'},
+      critical:    {bg: '#991b1b', fg: '#ffffff', label: 'experiencing a major outage'},
+      maintenance: {bg: '#3b82f6', fg: '#ffffff', label: 'under maintenance'},
+    };
+
+    function _applyPlatformStatus(s) {
+      const banner = document.getElementById('platformStatusBanner');
+      if (!banner) return;
+      const indicator = s && s.indicator;
+      const style = _PLATFORM_STATUS_STYLE[indicator];
+      // "none" (all good), "unknown" (poller failing / not yet run), or
+      // anything unmapped → hide the banner rather than cry wolf.
+      if (!style) {
+        banner.style.display = 'none';
+        return;
+      }
+      banner.style.background = style.bg;
+      banner.style.color = style.fg;
+      document.getElementById('platformStatusTitle').textContent =
+        'Anthropic API: ' + style.label;
+      // Prefer Anthropic's own description when they provide a useful
+      // one (e.g. "Partial Outage — Claude API Degraded Performance");
+      // otherwise keep our fallback about slower/failed checks.
+      const detail = document.getElementById('platformStatusDetail');
+      if (s.description && s.description.toLowerCase() !== 'all systems operational') {
+        detail.textContent = ' — ' + s.description + '. Compliance checks may be slower or fail intermittently.';
+      } else {
+        detail.textContent = ' — compliance checks may be slower or fail intermittently.';
+      }
+      banner.style.display = 'flex';
+    }
 
     function _applyImpersonationBanner(me) {
       const banner = document.getElementById('impersonationBanner');

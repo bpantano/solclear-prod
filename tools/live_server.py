@@ -67,6 +67,56 @@ _result_queue = queue.Queue()
 # POST /api/cancel and cleared in run_check_thread's finally block.
 _cancel_event = threading.Event()
 
+# Cached Anthropic platform status, refreshed by _poll_anthropic_status().
+# Indicator values from Statuspage: "none" (all good), "minor", "major",
+# "critical", "maintenance". `last_check` is epoch seconds — the UI can
+# show "data as of …" if needed. When we can't reach the status page
+# itself, indicator stays "unknown" so we don't falsely claim all clear.
+_anthropic_status = {
+    "indicator": "unknown",
+    "description": "Status unknown — poller has not yet completed its first check.",
+    "last_check": 0,
+}
+_anthropic_status_lock = threading.Lock()
+
+
+def _poll_anthropic_status():
+    """Background thread that fetches status.anthropic.com every 60s and
+    caches the result in _anthropic_status. Runs forever until the process
+    exits; daemon thread, so it doesn't block shutdown. Failures are
+    swallowed and surfaced as indicator=unknown — a transient DNS blip
+    on our side shouldn't spam the UI with fake outage banners."""
+    import requests as _req
+    global _anthropic_status
+    while True:
+        try:
+            r = _req.get(
+                "https://status.anthropic.com/api/v2/status.json",
+                timeout=10,
+            )
+            r.raise_for_status()
+            body = r.json()
+            status = body.get("status", {}) or {}
+            with _anthropic_status_lock:
+                _anthropic_status = {
+                    "indicator": status.get("indicator") or "unknown",
+                    "description": status.get("description") or "",
+                    "last_check": int(time.time()),
+                }
+        except Exception as e:
+            # Don't overwrite a previously-known status with "unknown" on a
+            # single failed poll — only mark unknown if we've never had a
+            # successful read. Logs the error for ops visibility.
+            with _anthropic_status_lock:
+                if _anthropic_status.get("last_check", 0) == 0:
+                    _anthropic_status = {
+                        "indicator": "unknown",
+                        "description": f"Unable to reach status.anthropic.com: {e}",
+                        "last_check": 0,
+                    }
+            print(f"anthropic status poll failed: {e}", file=sys.stderr)
+        time.sleep(60)
+
 # Rate limiting for password reset (in-memory)
 _reset_attempts = {}  # {email: (count, window_start_timestamp)}
 RESET_RATE_LIMIT = 3  # max attempts per window
@@ -534,6 +584,8 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._serve_change_password_page()
         elif path == "/api/me":
             self._api_me(session)
+        elif path == "/api/platform_status":
+            self._api_platform_status(session)
         elif path == "/api/admin/cost/summary":
             if not self._require_role(session, ("superadmin",)):
                 return
@@ -1669,7 +1721,25 @@ class LiveHandler(BaseHTTPRequestHandler):
             if ru:
                 out["real_email"] = ru.get("email")
                 out["real_full_name"] = ru.get("full_name")
+        # Piggy-back the cached Anthropic platform status so the SPA can
+        # render a degraded-service banner without a second round trip.
+        # Fresh polls happen in the background every 60s — /api/me is
+        # called on first load (via loadMe); the SPA also polls
+        # /api/platform_status directly on a 60s interval for refresh.
+        with _anthropic_status_lock:
+            out["platform_status"] = dict(_anthropic_status)
         self._send_json(out)
+
+    def _api_platform_status(self, session):
+        """Lightweight endpoint for the SPA to poll every 60s. Returns
+        just the cached Anthropic status — no DB hits, no auth beyond
+        requiring a signed-in session. Kept separate from /api/me so a
+        repeated 60s poll doesn't spam the users table."""
+        if not session:
+            self._send_json({"error": "Not authenticated"}, 401)
+            return
+        with _anthropic_status_lock:
+            self._send_json(dict(_anthropic_status))
 
     # ── Impersonation ────────────────────────────────────────────────────────
 
@@ -2351,6 +2421,12 @@ def main():
 
     local_ip = get_local_ip()
     server = ThreadedHTTPServer(("0.0.0.0", args.port), LiveHandler)
+
+    # Kick off the Anthropic platform-status poller as a daemon thread so
+    # the UI can surface "API is degraded" banners without having to wait
+    # for a compliance check to fail first. See _poll_anthropic_status.
+    threading.Thread(target=_poll_anthropic_status, daemon=True,
+                     name="anthropic-status-poller").start()
 
     print(f"\n  Solclear Live Compliance Server")
     print(f"  ────────────────────────────────")
