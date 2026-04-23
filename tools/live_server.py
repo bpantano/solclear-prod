@@ -2063,23 +2063,27 @@ class LiveHandler(BaseHTTPRequestHandler):
 
             # Superadmins see all non-test reports + their own test reports
             # Org users see only their org's non-test reports
+            # Include both 'complete' and 'cancelled' so users can get back
+            # to a partially-completed report they cancelled mid-run; the
+            # UI flags cancelled ones with a badge so it's clear the data
+            # is partial.
             if role == "superadmin":
                 rows = fetch_all("""
                     SELECT r.id, r.project_id, p.companycam_id, p.name, r.total_passed, r.total_failed,
-                           r.total_missing, r.total_needs_review, r.total_required, r.is_test, r.created_at
+                           r.total_missing, r.total_needs_review, r.total_required, r.is_test, r.status, r.created_at
                     FROM reports r
                     JOIN projects p ON p.id = r.project_id
-                    WHERE r.status = 'complete'
+                    WHERE r.status IN ('complete', 'cancelled')
                     ORDER BY r.created_at DESC
                     LIMIT 100
                 """)
             else:
                 rows = fetch_all("""
                     SELECT r.id, r.project_id, p.companycam_id, p.name, r.total_passed, r.total_failed,
-                           r.total_missing, r.total_needs_review, r.total_required, r.is_test, r.created_at
+                           r.total_missing, r.total_needs_review, r.total_required, r.is_test, r.status, r.created_at
                     FROM reports r
                     JOIN projects p ON p.id = r.project_id
-                    WHERE r.status = 'complete' AND r.is_test = FALSE
+                    WHERE r.status IN ('complete', 'cancelled') AND r.is_test = FALSE
                       AND p.organization_id = %s
                     ORDER BY r.created_at DESC
                     LIMIT 100
@@ -2110,6 +2114,7 @@ class LiveHandler(BaseHTTPRequestHandler):
                     "needs_review": row.get("total_needs_review", 0) or 0,
                     "total": row["total_required"],
                     "is_test": row["is_test"],
+                    "status": row["status"],
                     "timestamp": int(row["created_at"].timestamp()) if row.get("created_at") else 0,
                     "featured_image": thumb_url,
                 })

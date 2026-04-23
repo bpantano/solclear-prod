@@ -1822,23 +1822,34 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     function renderReportList(reports) {
       return reports.map(rpt => {
         const nReview = rpt.needs_review || 0;
+        const isCancelled = rpt.status === 'cancelled';
         const hasFailures = rpt.failed > 0 || (rpt.missing || 0) > 0;
-        // Border rail: red for failures/missing, cyan if only items needing review,
-        // green if everything is clean.
+        // Border rail: gray for cancelled (data is partial so the usual
+        // red/green signal is misleading), red for failures/missing, cyan
+        // if only items needing review, green if everything's clean.
         let railColor = 'var(--success)';
-        if (hasFailures) railColor = 'var(--danger)';
+        if (isCancelled) railColor = 'var(--text-muted)';
+        else if (hasFailures) railColor = 'var(--danger)';
         else if (nReview > 0) railColor = 'var(--review)';
         const reviewHint = nReview ? ` · ${nReview} to review` : '';
         const date = new Date(rpt.timestamp * 1000).toLocaleDateString('en-US', {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
         const img = rpt.featured_image
           ? `<img class="project-card-img" src="${rpt.featured_image}" alt="" loading="lazy">`
           : `<div class="project-card-img"></div>`;
+        // Badges: TEST (existing) + CANCELLED if the run was stopped early.
+        // Cancelled badge uses warning styling so it stands out as "this
+        // report is incomplete by design, not a failed run."
+        const testBadge = rpt.is_test ? ' <span class="badge badge-info" style="margin-left:4px;">TEST</span>' : '';
+        const cancelBadge = isCancelled ? ' <span class="badge badge-warning" style="margin-left:4px;">CANCELLED</span>' : '';
+        const statusLine = isCancelled
+          ? `Partial — ${rpt.passed}/${rpt.total} completed before cancel · ${date}`
+          : `${rpt.passed}/${rpt.total} passed${reviewHint} · ${date}`;
         return `
           <a href="/report/${rpt.db_report_id || rpt.project_id}" class="project-card" style="text-decoration:none;color:inherit;border-left:4px solid ${railColor};">
             ${img}
             <div class="project-card-info">
-              <div class="project-card-name">${esc(rpt.name)}${rpt.is_test ? ' <span class="badge badge-info" style="margin-left:4px;">TEST</span>' : ''}</div>
-              <div class="project-card-addr">${rpt.passed}/${rpt.total} passed${reviewHint} · ${date}</div>
+              <div class="project-card-name">${esc(rpt.name)}${testBadge}${cancelBadge}</div>
+              <div class="project-card-addr">${statusLine}</div>
             </div>
           </a>`;
       }).join('');
