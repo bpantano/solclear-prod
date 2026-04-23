@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import os
 import pytest
-import requests
 from pathlib import Path
 
 # Auto-load tests/.env if it exists so you don't have to re-export env
@@ -55,35 +54,6 @@ def _skip_if_no_creds(role):
     return email, password
 
 
-def _login_and_get_cookies(email, password):
-    """Hit /api/login and return the session cookies as Playwright dicts."""
-    sess = requests.Session()
-    r = sess.post(
-        f"{BASE_URL}/api/login",
-        json={"email": email, "password": password},
-        timeout=10,
-    )
-    r.raise_for_status()
-    data = r.json()
-    assert data.get("ok"), f"login failed: {data}"
-    # requests stored the Set-Cookie in sess.cookies — translate to
-    # Playwright's context.add_cookies format.
-    from urllib.parse import urlparse
-    parsed = urlparse(BASE_URL)
-    out = []
-    for c in sess.cookies:
-        out.append({
-            "name": c.name,
-            "value": c.value,
-            "domain": c.domain or parsed.hostname,
-            "path": c.path or "/",
-            # HTTP-only cookies don't surface httpOnly from requests, assume True
-            "httpOnly": True,
-            "secure": False,
-        })
-    return out
-
-
 @pytest.fixture(scope="session")
 def base_url() -> str:
     """Where the Solclear dev server is reachable."""
@@ -99,13 +69,23 @@ def browser_context_args(browser_context_args):
 
 def _logged_in_page_factory(role: str):
     """Factory building a Playwright page fixture for the given role.
-    The fixture logs in over HTTP and returns a page with the cookie set."""
+
+    Logs in via the browser context's own APIRequestContext (not the
+    external `requests` library) so the Set-Cookie response lands
+    directly in the context — both `page` navigation and `page.request`
+    calls then carry the session cookie automatically."""
     @pytest.fixture
     def _fixture(browser, browser_context_args):
         email, password = _skip_if_no_creds(role)
-        cookies = _login_and_get_cookies(email, password)
         ctx = browser.new_context(**browser_context_args)
-        ctx.add_cookies(cookies)
+        resp = ctx.request.post(
+            f"{BASE_URL}/api/login",
+            data={"email": email, "password": password},
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.ok, f"login failed for {role} ({resp.status}): {resp.text()}"
+        body = resp.json()
+        assert body.get("ok"), f"login returned non-ok: {body}"
         page = ctx.new_page()
         yield page
         ctx.close()
