@@ -1092,7 +1092,19 @@ def get_photo_thumbnail_url(photo: dict) -> Optional[str]:
 
 # ── Main compliance check ─────────────────────────────────────────────────────
 
-def run_compliance_check(project_id: str, params: dict, run_vision: bool = True, progress_callback=None, only_ids=None) -> dict:
+def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
+                         progress_callback=None, only_ids=None,
+                         should_cancel=None) -> dict:
+    """Run a full compliance check.
+
+    `should_cancel`: optional callable returning True when the caller wants
+    to abort the run. It is polled at each requirement boundary — the
+    currently-executing vision call cannot be interrupted mid-flight, so
+    expect up to one requirement's worth of latency (~5-15s) between
+    cancel request and the function returning. The returned report has
+    a `cancelled: True` flag when cancellation was honored; results
+    array contains only requirements processed before the cancel.
+    """
     # Load photos
     photos_path = TMP_DIR / f"photos_{project_id}.json"
     if not photos_path.exists():
@@ -1133,7 +1145,14 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
         total_applicable = sum(1 for r in REQUIREMENTS if r["condition"](params))
     results = []
     checked = 0
+    cancelled = False
     for req in REQUIREMENTS:
+        # Cooperative cancellation check — poll before starting each
+        # requirement. The in-flight vision call (if any) already
+        # completed; we stop here without launching the next one.
+        if should_cancel and should_cancel():
+            cancelled = True
+            break
         applies = req["condition"](params)
 
         # If only_ids specified, skip requirements not in the set
@@ -1206,6 +1225,7 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
         "total_photos": len(photos),
         "checklist_ids": checklist_ids if COMPANYCAM_API_KEY else [],
         "requirements": results,
+        "cancelled": cancelled,
     }
 
 

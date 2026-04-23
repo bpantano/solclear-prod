@@ -889,6 +889,13 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       <div class="status-msg" id="statusMsg"></div>
       <div class="progress-bar-bg"><div class="progress-bar-fill" id="progressFill"></div></div>
       <div class="progress-text" id="progressText">Preparing...</div>
+      <!-- Cancel button visible only while a check is actively running.
+           cancelRun() hides it + shows "Cancelling…" until the SSE 'cancelled'
+           event fires. The current requirement's vision call finishes first
+           (can't be interrupted mid-request), then the run stops. -->
+      <div id="cancelRunWrap" style="display:none;text-align:right;margin-bottom:8px;">
+        <button onclick="cancelRun()" id="cancelRunBtn" class="btn btn-sm btn-ghost" style="border-color:var(--danger);color:var(--danger);">Cancel checks</button>
+      </div>
       <div id="resultsToggle" style="display:none;text-align:right;margin-bottom:8px;">
         <button onclick="toggleAllResults()" id="toggleAllBtn" style="background:none;border:1px solid var(--border);border-radius:6px;padding:6px 12px;font-size:11px;color:var(--text-secondary);cursor:pointer;font-weight:500;">Collapse All</button>
       </div>
@@ -1933,6 +1940,10 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         fetch('/start?' + params).then(r => r.json()).then(data => {
           if (!data.ok) { alert(data.error); showStep('home'); return; }
           document.getElementById('progressText').textContent = `Checking 0 / ${data.total}...`;
+          const cw = document.getElementById('cancelRunWrap');
+          const cb = document.getElementById('cancelRunBtn');
+          if (cw) cw.style.display = 'block';
+          if (cb) { cb.disabled = false; cb.textContent = 'Cancel checks'; }
           listenSSE(data.total);
         }).catch(e => { alert('Failed: ' + e.message); showStep('home'); });
 
@@ -2212,12 +2223,39 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         document.getElementById('progressFill').style.width = '0%';
         document.getElementById('progressText').textContent = `Checking 0 / ${data.total}...`;
         document.getElementById('statusMsg').style.display = 'none';
+        // Reveal the Cancel button now that a run is in progress.
+        const cancelWrap = document.getElementById('cancelRunWrap');
+        const cancelBtn = document.getElementById('cancelRunBtn');
+        if (cancelWrap) cancelWrap.style.display = 'block';
+        if (cancelBtn) { cancelBtn.disabled = false; cancelBtn.textContent = 'Cancel checks'; }
 
         listenSSE(data.total);
       } catch (e) {
         alert('Failed to start: ' + e.message);
         btn.disabled = false;
         btn.textContent = 'Run Compliance Check';
+      }
+    }
+
+    async function cancelRun() {
+      const btn = document.getElementById('cancelRunBtn');
+      if (!btn) return;
+      if (!confirm('Cancel the remaining compliance checks?\\nThe requirement that is currently running will still finish (about 5-15 seconds).')) return;
+      btn.disabled = true;
+      btn.textContent = 'Cancelling…';
+      try {
+        const r = await fetch('/api/cancel', {method: 'POST'});
+        const data = await r.json();
+        if (!data.ok) {
+          alert(data.error || 'Could not cancel');
+          btn.disabled = false;
+          btn.textContent = 'Cancel checks';
+        }
+        // Otherwise: wait for the SSE 'cancelled' event to finish teardown.
+      } catch (e) {
+        alert('Cancel request failed: ' + e.message);
+        btn.disabled = false;
+        btn.textContent = 'Cancel checks';
       }
     }
 
@@ -2246,29 +2284,40 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           return;
         }
 
-        if (data.type === 'done') {
+        if (data.type === 'done' || data.type === 'cancelled') {
           es.close();
           document.getElementById('loaderAnim').classList.add('hidden');
           const s = data.summary;
-          const pct = Math.round((s.passed / s.total) * 100);
-          document.getElementById('progressFill').style.width = '100%';
-          document.getElementById('progressText').textContent = `Complete — ${s.passed}/${s.total} passed`;
+          const wasCancelled = data.type === 'cancelled';
+          const cancelWrap = document.getElementById('cancelRunWrap');
+          if (cancelWrap) cancelWrap.style.display = 'none';
+
+          document.getElementById('progressFill').style.width = wasCancelled
+            ? Math.round(((s.passed + s.failed + s.missing + (s.needs_review||0)) / (s.total || 1)) * 100) + '%'
+            : '100%';
+          document.getElementById('progressText').textContent = wasCancelled
+            ? `Cancelled — ${s.passed}/${s.total} completed before stopping`
+            : `Complete — ${s.passed}/${s.total} passed`;
 
           const banner = document.getElementById('doneBanner');
           const nReview = s.needs_review || 0;
           // "Ready for submission" only when nothing needs a human — failures,
           // missing photos, and review items all block the ready state.
-          const isPass = s.failed === 0 && s.missing === 0 && nReview === 0;
+          // A cancelled run is never "ready" — partial results by definition.
+          const isPass = !wasCancelled && s.failed === 0 && s.missing === 0 && nReview === 0;
           banner.className = 'done-banner ' + (isPass ? 'done-pass' : 'done-fail');
           let ccLink = '';
           if (s.checklist_ids && s.checklist_ids.length) {
             ccLink = `<a class="cc-link" href="https://app.companycam.com/projects/${s.project_id}/todos/${s.checklist_ids[0]}" target="_blank">Open in CompanyCam</a>`;
           }
-          const reportLink = `<a class="cc-link" href="/report/${s.db_report_id || s.project_id}" style="background:#111827;">View Full Report</a>`;
+          const reportLink = `<a class="cc-link" href="/report/${s.db_report_id || s.project_id}" style="background:#111827;">View Partial Report</a>`;
           const reviewStat = nReview ? ` · ${nReview} to review` : '';
+          const label = wasCancelled
+            ? 'CANCELLED — PARTIAL RESULTS'
+            : (isPass ? 'READY FOR SUBMISSION' : 'ACTION REQUIRED');
           banner.innerHTML = `
             <div>
-              <div class="done-label">${isPass ? 'READY FOR SUBMISSION' : 'ACTION REQUIRED'}</div>
+              <div class="done-label">${label}</div>
               <div class="done-stats">${s.passed} passed · ${s.failed} failed · ${s.missing} missing${reviewStat} · ${s.total} required</div>
               <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
                 ${reportLink}
@@ -2287,6 +2336,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           es.close();
           document.getElementById('loaderAnim').classList.add('hidden');
           document.getElementById('progressText').textContent = 'Error: ' + data.message;
+          const cancelWrap = document.getElementById('cancelRunWrap');
+          if (cancelWrap) cancelWrap.style.display = 'none';
           document.getElementById('runBtn').disabled = false;
           document.getElementById('runBtn').textContent = 'Run Compliance Check';
         }

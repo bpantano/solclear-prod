@@ -53,6 +53,9 @@ CC_TOKEN = os.getenv("COMPANYCAM_API_KEY", "")
 _check_lock = threading.Lock()
 _check_running = False
 _result_queue = queue.Queue()
+# Cooperative cancellation flag for the current compliance run. Set by
+# POST /api/cancel and cleared in run_check_thread's finally block.
+_cancel_event = threading.Event()
 
 # Rate limiting for password reset (in-memory)
 _reset_attempts = {}  # {email: (count, window_start_timestamp)}
@@ -244,14 +247,21 @@ def run_check_thread(cc_project_id, params, rerun_ids=None, session=None):
         # so api_call_log rows can be attributed back to this report. If the
         # DB insert above failed and db_report_id is None, logging is skipped
         # automatically (the check still runs fine).
+        # `should_cancel` is polled at each requirement boundary — if
+        # POST /api/cancel fires, the current vision call finishes, then
+        # the loop breaks out with a partial results array.
         from tools.compliance_check import set_call_context
+        _cancel_event.clear()
         with set_call_context(report_id=db_report_id, purpose="vision"):
             if rerun_ids:
                 _result_queue.put(json.dumps({"type": "status", "message": f"Re-checking {len(rerun_ids)} failed requirements..."}))
                 report = run_compliance_check(cc_project_id, params, run_vision=True,
-                                              progress_callback=on_progress, only_ids=rerun_ids)
+                                              progress_callback=on_progress, only_ids=rerun_ids,
+                                              should_cancel=_cancel_event.is_set)
             else:
-                report = run_compliance_check(cc_project_id, params, run_vision=True, progress_callback=on_progress)
+                report = run_compliance_check(cc_project_id, params, run_vision=True,
+                                              progress_callback=on_progress,
+                                              should_cancel=_cancel_event.is_set)
 
         # Also save to .tmp/ for backward compatibility
         TMP_DIR.mkdir(exist_ok=True)
@@ -266,21 +276,26 @@ def run_check_thread(cc_project_id, params, rerun_ids=None, session=None):
         n_fail = sum(1 for r in required if r["status"] == "FAIL")
         n_missing = sum(1 for r in required if r["status"] == "MISSING")
         n_review = sum(1 for r in required if r["status"] == "NEEDS_REVIEW")
+        was_cancelled = bool(report.get("cancelled"))
 
         if db_report_id:
             try:
+                # 'cancelled' is a new TEXT status alongside 'complete'/'error'/'running'.
+                # Partial totals are recorded so the report detail page can still
+                # render the results we did collect before stopping.
+                final_status = "cancelled" if was_cancelled else "complete"
                 execute(
-                    """UPDATE reports SET status = 'complete', completed_at = NOW(),
+                    """UPDATE reports SET status = %s, completed_at = NOW(),
                        total_required = %s, total_passed = %s, total_failed = %s,
                        total_missing = %s, total_needs_review = %s
                        WHERE id = %s""",
-                    (len(required), n_pass, n_fail, n_missing, n_review, db_report_id)
+                    (final_status, len(required), n_pass, n_fail, n_missing, n_review, db_report_id)
                 )
             except Exception as e:
                 print(f"WARNING: Could not update report in DB: {e}", file=sys.stderr)
 
         _result_queue.put(json.dumps({
-            "type": "done",
+            "type": "cancelled" if was_cancelled else "done",
             "summary": {
                 "passed": n_pass,
                 "failed": n_fail,
@@ -290,6 +305,7 @@ def run_check_thread(cc_project_id, params, rerun_ids=None, session=None):
                 "project_id": cc_project_id,
                 "db_report_id": db_report_id,
                 "checklist_ids": report.get("checklist_ids", []),
+                "cancelled": was_cancelled,
             }
         }))
     except Exception as e:
@@ -300,6 +316,7 @@ def run_check_thread(cc_project_id, params, rerun_ids=None, session=None):
             except Exception:
                 pass
     finally:
+        _cancel_event.clear()
         with _check_lock:
             _check_running = False
 
@@ -603,6 +620,10 @@ class LiveHandler(BaseHTTPRequestHandler):
 
         if path == "/api/change-password":
             self._api_change_password(body, session)
+        # Cancel the currently-running compliance check. Any authenticated
+        # user can request it — there's only ever one running at a time.
+        elif path == "/api/cancel":
+            self._api_cancel_check()
         # ── Impersonation (superadmin starts, any impersonating user stops) ──
         elif path == "/api/admin/impersonate":
             self._api_impersonate(body, session)
@@ -814,6 +835,20 @@ class LiveHandler(BaseHTTPRequestHandler):
         t.start()
 
         self._send_json({"ok": True, "total": total, "project_id": project_id, "derived_params": params})
+
+    def _api_cancel_check(self):
+        """Request cancellation of the currently-running compliance check.
+        Cooperative: the in-flight vision call for the current requirement
+        completes (~5-15s), then the loop exits with partial results. The
+        run_check_thread will emit a 'cancelled' SSE event when it's done
+        unwinding."""
+        with _check_lock:
+            running = _check_running
+        if not running:
+            self._send_json({"ok": False, "error": "No check is running"}, 400)
+            return
+        _cancel_event.set()
+        self._send_json({"ok": True})
 
     def _stream_sse(self):
         self.send_response(200)
