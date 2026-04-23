@@ -2669,6 +2669,14 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       if (!rows || !rows.length) {
         return '<div style="color:var(--text-muted);font-size:var(--text-sm);">No cost data recorded yet.</div>';
       }
+      // Caption clarifies that "Pre-filter" is broken out separately
+      // regardless of whether it ran inside a full vision pass or a
+      // single-item recheck. Without this it's easy to read "Single-item
+      // re-check" as the full cost of rechecks when in reality a recheck
+      // on a heavy requirement also incurs prefilter spend.
+      const caption = '<div style="color:var(--text-muted);font-size:var(--text-xs);margin-bottom:8px;">' +
+        'Pre-filter spend is shown separately and includes calls triggered by both full vision runs and single-item rechecks.' +
+        '</div>';
       const grandTotal = rows.reduce((s, r) => s + (r.total_cost || 0), 0) || 0.0001;
       // Stacked bar at top so the proportion is visible at a glance, then
       // a small table with the underlying numbers.
@@ -2699,7 +2707,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
             '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + _fmtUSD(r.avg_cost) + '</td>' +
             '</tr>';
         }).join('') + '</tbody></table></div>';
-      return bar + table;
+      return caption + bar + table;
     }
 
     function renderTopReports(rows) {

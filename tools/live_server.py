@@ -2230,9 +2230,13 @@ class LiveHandler(BaseHTTPRequestHandler):
             # recheck cost gets attributed correctly in api_call_log.
             from tools.compliance_check import set_call_context
             with set_call_context(report_id=int(report_id), purpose="recheck"):
+                # Single-item rechecks don't benefit from a thread pool —
+                # there's only one task to run. Force sequential to avoid
+                # spinning up a worker thread for nothing.
                 report = run_compliance_check(
                     row["companycam_id"], params,
                     run_vision=True, only_ids={req_code},
+                    max_workers=1,
                 )
             # Find the matching requirement result
             new_result = next(

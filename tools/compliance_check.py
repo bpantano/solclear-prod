@@ -200,12 +200,61 @@ REQUIREMENTS = [
         "condition": always,
         "task_titles": ["Railing Type", "Roof Penetration & Conduit"],
         "keywords": ["railing type", "roof penetration", "flashing", "sealant", "attachment"],
+        "selection_criteria": "a close-up of a roof attachment point that clearly shows the seal between the attachment and the roof — flashing and/or sealant around the penetration",
         "validation_prompt": (
-            "This photo should show a close-up of a roof attachment point with flashing and/or sealant. "
-            "Verify: (1) Is a roof attachment point visible? (2) Is flashing or sealant present? "
-            "PASS if the photo documents the attachment point with flashing or sealant visible. "
-            "Do not judge installation quality — only verify the photo shows what is required. "
-            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
+            "This photo should show a close-up of a roof attachment (lag bolt, "
+            "stanchion, or post) where it penetrates the roof, documenting the "
+            "weatherproof seal. Per Palmetto M1: sealant must always be visible "
+            "and properly applied. Flashing is required when the racking system "
+            "uses flashing (most pitched-roof installs); for systems without "
+            "flashing, sealant alone may be sufficient as long as it's visibly "
+            "applied within or around the attachment in a way that sheds water. "
+            "\n\nIMPORTANT — work through these observations BEFORE picking a "
+            "verdict. Write each observation as a numbered line:"
+            "\n1. Subject check — Does the photo show a roof attachment point "
+            "(lag bolt / stanchion / post penetrating shingles or the roof "
+            "deck)? Or is it of something else (a rail end, a bare deck, "
+            "completed array, etc.)? Describe what is actually centered in "
+            "the frame."
+            "\n2. Sealant check — Is sealant visible at the penetration? "
+            "Sealant typically appears as a black, gray, or clear "
+            "bead/blob/smear applied around the bolt head, under the "
+            "flashing, or directly on the shingle. It is a hand-applied "
+            "caulking material — irregular shape, often glossy, sometimes "
+            "with visible squeeze-out lines. "
+            "Things that are NOT sealant (do not count these): rail end "
+            "caps (molded plastic plugs on cut rail ends), rubber EPDM "
+            "washers under bolt heads (these are gaskets, not sealant — "
+            "though they're often used WITH sealant), the metal flashing "
+            "itself, or shingle adhesive strips. "
+            "State whether you see sealant, where it is, and whether it "
+            "looks freshly applied vs. weathered/missing."
+            "\n3. Flashing check — Is flashing visible (a metal or composite "
+            "plate slid under the upper course of shingles to direct water "
+            "around the attachment)? Note its presence and whether it is "
+            "properly tucked under the upper shingle course or sitting on "
+            "top of shingles."
+            "\n\nOnly AFTER those three observations, choose:"
+            "\n- PASS: observation #1 confirms a roof attachment point AND "
+            "observation #2 confirms sealant is visibly applied at the "
+            "penetration. (Flashing alone without visible sealant is NOT "
+            "enough — sealant is the universally required element.)"
+            "\n- FAIL: observation #1 shows the photo is NOT a roof "
+            "attachment close-up at all (e.g., a rail end, a bare deck, "
+            "an array overview), OR observation #2 confirms NO sealant is "
+            "visible anywhere at the penetration."
+            "\n- NEEDS_REVIEW: subject is the right kind of shot but sealant "
+            "presence/quality is genuinely unclear due to glare, shadow, "
+            "extreme angle, or a part of the attachment being out of frame. "
+            "Use this when you'd be guessing rather than reading."
+            "\n\nFORMAT — your response MUST follow this structure, in this "
+            "order:"
+            "\n1. <observation #1>"
+            "\n2. <observation #2>"
+            "\n3. <observation #3>"
+            "\nVERDICT: PASS   (or FAIL, or NEEDS_REVIEW)"
+            "\n\nDo NOT put the verdict at the top. Work through observations "
+            "first, then commit to a verdict on the last line."
         ),
     },
     {
@@ -823,9 +872,19 @@ def _call_anthropic(payload: dict, req_id: str) -> Optional[str]:
                 req_id=req_id,
             )
             return body["content"][0]["text"]
-        except Exception as e:
+        except requests.exceptions.RequestException as e:
+            # Network/timeout/connection errors — worth retrying. Anything
+            # else (JSON decode, missing keys, etc.) won't get better on
+            # retry, so we let those fail through immediately below.
             if attempt == _MAX_RETRIES - 1:
                 return f"ERROR: {e}"
+            # Continue to next attempt with the same backoff schedule
+            time.sleep(min(_BASE_BACKOFF_S * (2 ** attempt), _MAX_BACKOFF_S))
+            continue
+        except (KeyError, IndexError, ValueError) as e:
+            # Malformed response shape — retrying won't help. Fail fast so
+            # the caller sees an actionable error instead of "Max retries".
+            return f"ERROR: malformed Anthropic response: {e}"
     return "ERROR: Max retries exceeded"
 
 
@@ -839,6 +898,32 @@ def _download_image(url: str) -> Optional[tuple]:
         return data, media_type
     except Exception:
         return None
+
+
+# Concurrent fetcher used by the prefilter + validation steps. With
+# CompanyCam serving from imgproxy at ~50-300ms latency per photo and
+# requirements occasionally fielding 30+ candidates, doing these in
+# series adds several seconds per worker. 8 in parallel is well below
+# any sane HTTP host limit and saturates our outbound bandwidth.
+_DOWNLOAD_CONCURRENCY = 8
+
+
+def _download_images_parallel(urls_with_keys):
+    """Download many images concurrently. Input is an iterable of
+    (key, url) pairs; output is a dict {key: (data, media_type)} only
+    for the ones that succeeded. Order does not matter to callers — they
+    look up by their own key."""
+    from concurrent.futures import ThreadPoolExecutor
+    out = {}
+    pairs = [(k, u) for k, u in urls_with_keys if u]
+    if not pairs:
+        return out
+    with ThreadPoolExecutor(max_workers=_DOWNLOAD_CONCURRENCY) as ex:
+        results = ex.map(lambda p: (p[0], _download_image(p[1])), pairs)
+        for key, result in results:
+            if result is not None:
+                out[key] = result
+    return out
 
 
 VISION_MODEL = "claude-sonnet-4-6"
@@ -872,16 +957,17 @@ def _haiku_prefilter(candidates: list, requirement: dict, keep: int = PREFILTER_
     if not ANTHROPIC_API_KEY:
         return fallback
 
-    downloaded = []  # (orig_idx, data, media_type)
-    for i, photo in enumerate(candidates):
-        url = get_photo_thumbnail_url(photo)
-        if not url:
-            continue
-        result = _download_image(url)
-        if result is None:
-            continue
-        data, media_type = result
-        downloaded.append((i, data, media_type))
+    # Parallel-fetch thumbnails (was serial — added ~3-6s per worker for
+    # 30-candidate requirements). Keys are original-candidate indices so we
+    # preserve the mapping back to `candidates` after Haiku picks winners.
+    fetched = _download_images_parallel(
+        (i, get_photo_thumbnail_url(p)) for i, p in enumerate(candidates)
+    )
+    # Order matters for the labels we send to Haiku (and for index ↔ photo
+    # mapping after) — keep original task order, drop misses.
+    downloaded = [
+        (i, *fetched[i]) for i in range(len(candidates)) if i in fetched
+    ]
 
     if not downloaded:
         return fallback
@@ -959,29 +1045,41 @@ def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
     # - Single-winner mode with > PREFILTER_THRESHOLD candidates: run a Haiku
     #   thumbnail pass first to narrow to PREFILTER_KEEP.
     # - Otherwise (≤ threshold): send everything as-is.
+    truncation_note = ""  # appended to user-facing reason if non-empty
     if requirement.get("criteria"):
         if len(candidates) > MULTI_CRITERION_MAX:
+            original_count = len(candidates)
             # Photos are in task order from CompanyCam; assume newest at the
             # end (typical upload order). Take the tail.
             candidates = candidates[-MULTI_CRITERION_MAX:]
+            truncation_note = (
+                f" (Note: this requirement had {original_count} candidate photos; "
+                f"only the {MULTI_CRITERION_MAX} most recent were analyzed. "
+                f"If a criterion is shown only on an older screenshot it may be missed — "
+                f"consider re-checking after consolidating the screenshot set.)"
+            )
+            print(
+                f"WARNING: {requirement['id']} multi-criterion truncated "
+                f"{original_count} → {MULTI_CRITERION_MAX} candidates "
+                f"(MULTI_CRITERION_MAX cap)",
+                file=sys.stderr, flush=True,
+            )
     elif len(candidates) > PREFILTER_THRESHOLD:
         keep_indices = _haiku_prefilter(candidates, requirement)
         if keep_indices:
             candidates = [candidates[i] for i in keep_indices]
 
-    # Download all candidates (full-res). Skip any that fail — the model can
-    # still reason about the ones that succeeded. Photos keep their original
-    # task-list order for consistency with what the CompanyCam API returns.
-    downloaded = []  # list of (candidate_idx, url, data, media_type)
-    for i, photo in enumerate(candidates):
-        url = get_photo_web_url(photo)
-        if not url:
-            continue
-        result = _download_image(url)
-        if result is None:
-            continue
-        data, media_type = result
-        downloaded.append((i, url, data, media_type))
+    # Download all candidates (full-res) in parallel. Skip any that fail —
+    # the model can still reason about the ones that succeeded. Photos keep
+    # their original task-list order for consistency with what the
+    # CompanyCam API returns.
+    urls_by_idx = {i: get_photo_web_url(p) for i, p in enumerate(candidates)}
+    fetched = _download_images_parallel(urls_by_idx.items())
+    downloaded = [
+        (i, urls_by_idx[i], *fetched[i])
+        for i in range(len(candidates))
+        if i in fetched
+    ]
 
     if not downloaded:
         return {"result": "ERROR", "reason": "Could not download any candidate photos", "photo_urls": {}}
@@ -1016,7 +1114,8 @@ def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
     if text and text.startswith("ERROR"):
         # Best-effort photo_urls even on error — default to task order.
         all_photo_urls = {i + 1: get_photo_web_url(p) for i, p in enumerate(candidates) if get_photo_web_url(p)}
-        return {"result": "ERROR", "reason": text, "photo_urls": all_photo_urls}
+        err_reason = text + (truncation_note or "")
+        return {"result": "ERROR", "reason": err_reason, "photo_urls": all_photo_urls}
 
     # In multi-criterion mode there's no single winner — every photo is
     # part of the evidence set. Keep task-order indexing so photo_urls[1] is
@@ -1046,6 +1145,8 @@ def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
     verdict = _parse_verdict(text or "")
     explanation = _parse_explanation(text or "")
     reason = explanation or text  # fall back to full response if EXPLANATION missing
+    if truncation_note:
+        reason = (reason or "").rstrip() + truncation_note
     return {"result": verdict, "reason": reason, "photo_urls": all_photo_urls}
 
 
@@ -1429,6 +1530,16 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
                     continue
                 except Exception as e:
                     req = futures[fut]
+                    # Log the traceback to stderr so the running server
+                    # console (or Railway logs) shows what actually broke,
+                    # not just the user-facing reason. Without this, an
+                    # ERROR row is opaque after the fact.
+                    import traceback
+                    print(
+                        f"WORKER EXCEPTION on {req['id']}: {e}\n"
+                        f"{traceback.format_exc()}",
+                        file=sys.stderr, flush=True,
+                    )
                     result_entry = {
                         "id": req["id"],
                         "title": req["title"],
