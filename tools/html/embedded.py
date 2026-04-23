@@ -622,6 +622,33 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       color: var(--text-muted); font-weight: 600; flex-shrink: 0;
     }
 
+    /* Loading placeholder shown between stage 1 (project list returned)
+       and stage 2 (per-project checklist calls resolve). Without this the
+       card looks finished but then suddenly grows a new row of data —
+       confusing. Shimmer makes it clear something is still coming. */
+    .project-checklists-loading {
+      margin-top: 6px; font-size: var(--text-xs);
+      color: var(--text-muted); display: inline-block;
+      padding: 2px 0;
+    }
+    .project-checklists-loading::before {
+      content: "Loading checklist progress";
+      background: linear-gradient(
+        90deg,
+        var(--text-muted) 0%,
+        var(--text) 50%,
+        var(--text-muted) 100%
+      );
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-size: 200% 100%;
+      animation: checklists-shimmer 1.8s linear infinite;
+    }
+    @keyframes checklists-shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
     @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
     /* ── Responsive: desktop ───────────────────────────────────────────── */
@@ -1995,9 +2022,14 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       const addr = [p.address, p.city, p.state].filter(Boolean).join(', ');
 
       // Per-checklist breakdown. `p.checklists` is populated by the async
-      // enrichment in loadRecentProjects; for the initial render and for
-      // search results it may be undefined, so we fall back to a simple
-      // count (or nothing if we don't know yet).
+      // enrichment in loadRecentProjects; on initial render (stage 1) it
+      // is undefined. We show a shimmering "Loading checklist progress"
+      // placeholder during stage 1 so the card doesn't look finished
+      // before suddenly growing a new row once stage 2 completes.
+      //
+      // If p.checklists_error is set (enrichment failed), we fall through
+      // silently — no placeholder, no noise. If both are set to valid
+      // values we render the real data below.
       let checklistsHtml = '';
       if (Array.isArray(p.checklists) && p.checklists.length) {
         checklistsHtml = '<div class="project-checklists">' + p.checklists.map(c => {
@@ -2020,6 +2052,9 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         }).join('') + '</div>';
       } else if (p.checklist_count !== undefined) {
         checklistsHtml = `<div class="project-card-meta"><span class="project-card-dot"></span>${p.checklist_count} checklist${p.checklist_count !== 1 ? 's' : ''}</div>`;
+      } else if (!p.checklists_error) {
+        // Stage 1: enrichment hasn't returned yet for this project.
+        checklistsHtml = '<div class="project-checklists-loading"></div>';
       }
 
       return `
@@ -2091,7 +2126,13 @@ EMBEDDED_HTML = """<!DOCTYPE html>
             const cr = await fetch('/api/projects/' + p.id + '/checklists');
             p.checklists = await cr.json();
             p.checklist_count = Array.isArray(p.checklists) ? p.checklists.length : 0;
-          } catch (e) { p.checklists = []; p.checklist_count = 0; }
+          } catch (e) {
+            p.checklists = [];
+            p.checklist_count = 0;
+            // Flag so renderProjectCard stops showing the shimmer on this
+            // card (we failed; no point pretending data is still coming).
+            p.checklists_error = true;
+          }
           return p;
         }));
 
