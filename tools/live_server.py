@@ -2236,6 +2236,18 @@ class LiveHandler(BaseHTTPRequestHandler):
                 "is_incentive_state": row.get("is_incentive_state", False),
                 "portal_access_granted": row.get("portal_access_granted", False),
             }
+            # Ensure the photos cache exists. Railway redeploys wipe
+            # /app/.tmp/, so any recheck on a report from a prior deploy
+            # would otherwise hit FileNotFoundError. Refetch on miss —
+            # full check path does the same. (Longer-term fix: move the
+            # cache out of ephemeral disk; see project_multi_user_readiness.md)
+            cc_project_id = row["companycam_id"]
+            photos_path = TMP_DIR / f"photos_{cc_project_id}.json"
+            if not photos_path.exists():
+                photos = get_all_photos(cc_project_id)
+                TMP_DIR.mkdir(exist_ok=True)
+                with open(photos_path, "w") as f:
+                    json.dump(photos, f, indent=2)
             # Scope API-call logging to this report + requirement so the
             # recheck cost gets attributed correctly in api_call_log.
             from tools.compliance_check import set_call_context
@@ -2244,7 +2256,7 @@ class LiveHandler(BaseHTTPRequestHandler):
                 # there's only one task to run. Force sequential to avoid
                 # spinning up a worker thread for nothing.
                 report = run_compliance_check(
-                    row["companycam_id"], params,
+                    cc_project_id, params,
                     run_vision=True, only_ids={req_code},
                     max_workers=1,
                 )
