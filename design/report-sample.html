@@ -1,0 +1,1085 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <title>M1 Compliance — IND-5584 Freddy Ramos</title>
+  <style>
+    :root {
+      --bg: #f8f9fb;
+      --bg-card: #fff;
+      --bg-input: #fff;
+      --bg-elevated: #fff;
+      --bg-subtle: #f3f4f6;
+      --bg-hover: #f9fafb;
+      --header-bg: #111827;
+
+      --text: #1a1a2e;
+      --text-secondary: #6b7280;
+      --text-muted: #9ca3af;
+      --text-inverse: #fff;
+
+      --border: #e5e7eb;
+      --border-light: #f3f4f6;
+      --border-strong: #d1d5db;
+
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --accent-subtle: #eff6ff;
+      --accent-text: #1d4ed8;
+      --success: #10b981;
+      --success-subtle: #ecfdf5;
+      --success-text: #065f46;
+      --danger: #ef4444;
+      --danger-subtle: #fef2f2;
+      --danger-text: #991b1b;
+      --warning: #f59e0b;
+      --warning-subtle: #fffbeb;
+      --warning-text: #92400e;
+      --purple: #8b5cf6;
+      --purple-subtle: #f5f3ff;
+      --purple-text: #5b21b6;
+      --review: #06b6d4;
+      --review-subtle: #ecfeff;
+      --review-text: #155e75;
+
+      --badge-pass-bg: var(--success-subtle);
+      --badge-pass-text: var(--success-text);
+      --badge-fail-bg: var(--danger-subtle);
+      --badge-fail-text: var(--danger-text);
+      --badge-missing-bg: var(--warning-subtle);
+      --badge-missing-text: var(--warning-text);
+      --badge-error-bg: var(--purple-subtle);
+      --badge-error-text: var(--purple-text);
+      --badge-review-bg: var(--review-subtle);
+      --badge-review-text: var(--review-text);
+
+      --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.06);
+      --shadow-md: 0 4px 6px -1px rgba(15, 23, 42, 0.08), 0 2px 4px -1px rgba(15, 23, 42, 0.04);
+      --shadow-lg: 0 10px 15px -3px rgba(15, 23, 42, 0.1), 0 4px 6px -2px rgba(15, 23, 42, 0.05);
+
+      --text-xs: 11px;
+      --text-sm: 12px;
+      --text-base: 14px;
+      --text-md: 15px;
+      --text-lg: 16px;
+      --text-xl: 18px;
+      --text-2xl: 22px;
+
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+    }
+
+    [data-theme="dark"] {
+      --bg: #0f172a;
+      --bg-card: #1e293b;
+      --bg-input: #1e293b;
+      --bg-elevated: #293548;
+      --bg-subtle: #1a2236;
+      --bg-hover: #253149;
+      --header-bg: #020617;
+
+      --text: #e2e8f0;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --text-inverse: #0f172a;
+
+      --border: #334155;
+      --border-light: #1e293b;
+      --border-strong: #475569;
+
+      --accent: #60a5fa;
+      --accent-hover: #3b82f6;
+      --accent-subtle: rgba(59, 130, 246, 0.15);
+      --accent-text: #93c5fd;
+      --success: #34d399;
+      --success-subtle: #064e3b;
+      --success-text: #6ee7b7;
+      --danger: #f87171;
+      --danger-subtle: #7f1d1d;
+      --danger-text: #fca5a5;
+      --warning: #fbbf24;
+      --warning-subtle: #78350f;
+      --warning-text: #fcd34d;
+      --purple: #a78bfa;
+      --purple-subtle: #3730a3;
+      --purple-text: #c4b5fd;
+      --review: #22d3ee;
+      --review-subtle: #164e63;
+      --review-text: #a5f3fc;
+
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.2);
+      --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
+      --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -2px rgba(0, 0, 0, 0.3);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text);
+      font-size: var(--text-base); line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      min-height: 100dvh;
+      padding-bottom: 64px;
+    }
+
+    /* Top bar */
+    .report-topbar {
+      background: var(--header-bg); color: var(--text-inverse);
+      padding: 12px 20px;
+      display: flex; align-items: center; justify-content: space-between;
+      position: sticky; top: 0; z-index: 30;
+    }
+    .report-topbar a {
+      color: #9ca3af; text-decoration: none;
+      font-size: var(--text-sm); font-weight: 500;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .report-topbar a:hover { color: #fff; }
+    .theme-toggle {
+      background: none; border: none; color: inherit; cursor: pointer;
+      width: 40px; height: 40px; display: flex; align-items: center; justify-content: center;
+      border-radius: 8px;
+    }
+    .theme-toggle:hover { background: rgba(255,255,255,0.08); }
+    .theme-toggle svg { width: 20px; height: 20px; }
+
+    /* Sticky summary card */
+    .report-summary {
+      position: sticky; top: 56px; z-index: 20;
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 20px;
+      box-shadow: var(--shadow-sm);
+    }
+    .summary-inner { max-width: 920px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+    .summary-main { display: flex; align-items: center; gap: 14px; }
+    .summary-ring { flex-shrink: 0; }
+    .summary-ring circle { fill: none; stroke-width: 5; transform: rotate(-90deg); transform-origin: 50% 50%; }
+    .ring-bg { stroke: var(--border); }
+    .ring-fill { stroke-linecap: round; transition: stroke-dashoffset 0.5s ease; }
+    .summary-pass .ring-fill { stroke: var(--success); }
+    .summary-fail .ring-fill { stroke: var(--danger); }
+    .ring-text { font-size: 11px; font-weight: 700; fill: var(--text); text-anchor: middle; dominant-baseline: central; }
+    .summary-text { flex: 1; min-width: 0; }
+    .summary-headline { font-size: var(--text-xl); font-weight: 700; color: var(--text); }
+    .summary-project { font-size: var(--text-sm); color: var(--text-muted); margin-top: 2px; }
+    .summary-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .chip {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: var(--text-xs); font-weight: 600;
+      padding: 3px 8px; border-radius: 12px;
+      background: var(--bg-subtle); color: var(--text-secondary);
+    }
+    .chip-pass { background: var(--success-subtle); color: var(--success-text); }
+    .chip-fail { background: var(--danger-subtle); color: var(--danger-text); }
+    .chip-missing { background: var(--warning-subtle); color: var(--warning-text); }
+    .chip-error { background: var(--purple-subtle); color: var(--purple-text); }
+    .chip-review { background: var(--review-subtle); color: var(--review-text); }
+    .summary-ctas { display: flex; flex-wrap: wrap; gap: 8px; }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      border: none; border-radius: 10px; padding: 10px 16px;
+      font-size: var(--text-md); font-weight: 600;
+      cursor: pointer; min-height: 44px;
+      text-decoration: none; font-family: inherit;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn-primary { background: var(--accent); color: var(--text-inverse); }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+    .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+    .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+    .btn-ghost:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-strong); }
+    .btn-subtle { background: var(--bg-subtle); color: var(--text); border: none; }
+    .btn-subtle:hover:not(:disabled) { background: var(--bg-hover); }
+    .btn-sm { min-height: 32px; padding: 6px 12px; font-size: var(--text-xs); }
+
+    /* Tabs */
+    .report-tabs {
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      max-width: 920px; margin: 0 auto;
+      overflow-x: auto; -webkit-overflow-scrolling: touch;
+      position: sticky; top: calc(56px + 100px); z-index: 10;
+    }
+    .report-tab {
+      background: none; border: none; cursor: pointer;
+      padding: 12px 16px;
+      font-size: var(--text-sm); font-weight: 500; color: var(--text-secondary);
+      border-bottom: 2px solid transparent;
+      white-space: nowrap;
+      font-family: inherit;
+    }
+    .report-tab .count {
+      display: inline-block;
+      padding: 1px 7px; margin-left: 4px;
+      font-size: 10px; font-weight: 700;
+      background: var(--bg-subtle); color: var(--text-secondary);
+      border-radius: 10px;
+    }
+    .report-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .report-tab.active .count { background: var(--accent-subtle); color: var(--accent-text); }
+
+    /* Body */
+    .report-body { max-width: 920px; margin: 20px auto; padding: 0 16px; }
+
+    .section { margin-bottom: 24px; }
+    .section-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 2px solid var(--text);
+      margin-bottom: 8px;
+    }
+    .section-header h2 {
+      font-size: var(--text-xs); text-transform: uppercase;
+      letter-spacing: 0.1em; font-weight: 700; color: var(--text);
+    }
+    .section-score {
+      font-size: var(--text-xs); font-weight: 700;
+      padding: 2px 8px; border-radius: 10px;
+    }
+    .score-clean  { background: var(--success-subtle); color: var(--success-text); }
+    .score-issues { background: var(--danger-subtle); color: var(--danger-text); }
+    .score-review { background: var(--review-subtle); color: var(--review-text); }
+
+    /* Requirement rows */
+    .requirement {
+      background: var(--bg-card); border-radius: 8px;
+      padding: 12px 14px; margin-bottom: 8px;
+      border-left: 4px solid var(--border);
+      box-shadow: var(--shadow-sm);
+      transition: all 0.15s ease;
+    }
+    .req-pass         { border-left-color: var(--success); }
+    .req-fail         { border-left-color: var(--danger); }
+    .req-missing      { border-left-color: var(--warning); }
+    .req-error        { border-left-color: var(--purple); }
+    .req-needs_review { border-left-color: var(--review); }
+
+    .requirement.collapsed {
+      padding: 8px 14px;
+      opacity: 0.7;
+      cursor: pointer;
+    }
+    .requirement.collapsed:hover { opacity: 1; }
+    .requirement.collapsed .reason,
+    .requirement.collapsed .reason-full,
+    .requirement.collapsed .expand-btn,
+    .requirement.collapsed .req-photo-link,
+    .requirement.collapsed .req-actions,
+    .requirement.collapsed .req-note { display: none !important; }
+
+    .req-header {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    }
+    .req-id { font-size: 10px; font-weight: 700; color: var(--text-muted); min-width: 28px; }
+    .req-title { font-size: var(--text-sm); font-weight: 500; flex: 1; color: var(--text); min-width: 120px; }
+    .resolved-chip { font-weight: 600; }
+    .optional-tag {
+      font-size: 9px; background: var(--bg-subtle); color: var(--text-muted);
+      padding: 1px 5px; border-radius: 3px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+
+    /* Badges */
+    .badge {
+      display: inline-block;
+      font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 3px;
+      letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap;
+    }
+    .badge-pass         { background: var(--badge-pass-bg); color: var(--badge-pass-text); }
+    .badge-fail         { background: var(--badge-fail-bg); color: var(--badge-fail-text); }
+    .badge-missing      { background: var(--badge-missing-bg); color: var(--badge-missing-text); }
+    .badge-error        { background: var(--badge-error-bg); color: var(--badge-error-text); }
+    .badge-needs_review { background: var(--badge-review-bg); color: var(--badge-review-text); }
+    .badge-skip         { background: var(--bg-subtle); color: var(--text-muted); }
+    .badge-na           { background: var(--bg-subtle); color: var(--text-muted); }
+    .badge-success      { background: var(--success-subtle); color: var(--success-text); }
+
+    .req-photo-link { display: block; margin-top: 10px; }
+    .req-photo {
+      display: block; max-width: 100%;
+      border-radius: 6px; border: 2px solid var(--border);
+    }
+    @media (min-width: 640px) { .req-photo { max-width: 280px; } }
+
+    .reason {
+      margin-top: 8px; font-size: var(--text-sm); color: var(--text-secondary);
+      line-height: 1.6; padding-left: 10px;
+      border-left: 2px solid var(--border-light);
+    }
+    .expand-btn {
+      margin-top: 4px; background: none; border: none;
+      color: var(--accent); font-size: var(--text-xs); font-weight: 500;
+      cursor: pointer; padding: 2px 0; font-family: inherit;
+    }
+    .expand-btn:hover { text-decoration: underline; }
+    .expand-btn .arrow { font-size: 10px; margin-left: 2px; }
+
+    /* Note display */
+    .req-note {
+      margin-top: 10px; padding: 10px 12px;
+      background: var(--bg-subtle); border-radius: 6px;
+      font-size: var(--text-sm); color: var(--text);
+      line-height: 1.5; white-space: pre-wrap;
+      border-left: 3px solid var(--accent);
+    }
+    .note-editor {
+      margin-top: 10px; display: flex; flex-direction: column; gap: 8px;
+    }
+    .note-editor textarea {
+      width: 100%; min-height: 60px;
+      padding: 8px 10px;
+      border: 2px solid var(--border); border-radius: 6px;
+      background: var(--bg-input); color: var(--text);
+      font-family: inherit; font-size: var(--text-sm);
+      resize: vertical;
+    }
+    .note-editor textarea:focus { outline: none; border-color: var(--accent); }
+    .note-editor-actions { display: flex; gap: 8px; }
+
+    /* Actions bar */
+    .req-actions {
+      margin-top: 10px;
+      display: flex; gap: 6px; flex-wrap: wrap;
+      padding-top: 10px; border-top: 1px solid var(--border-light);
+    }
+
+    /* Inline recheck spinner */
+    .req-rechecking {
+      pointer-events: none; opacity: 0.6;
+      position: relative;
+    }
+    .req-rechecking::after {
+      content: "Re-checking…"; display: inline-block;
+      font-size: var(--text-xs); color: var(--text-muted);
+      margin-left: 8px;
+    }
+
+    /* Alerts */
+    .alert {
+      display: flex; gap: 10px; align-items: center;
+      padding: 10px 14px; border-radius: 8px;
+      font-size: var(--text-sm); line-height: 1.5;
+      border: 1px solid transparent;
+      margin: 10px 0;
+    }
+    .alert-error { background: var(--danger-subtle); color: var(--danger-text); border-color: var(--danger); }
+    .alert-success { background: var(--success-subtle); color: var(--success-text); border-color: var(--success); }
+
+    /* Footer */
+    .report-footer {
+      text-align: center; padding: 24px 20px;
+      font-size: var(--text-xs); color: var(--text-muted); opacity: 0.7;
+    }
+
+    /* Mobile */
+    @media (max-width: 640px) {
+      .summary-main { flex-direction: row; align-items: flex-start; }
+      .summary-headline { font-size: var(--text-lg); }
+      .report-body { padding: 0 12px; }
+      .requirement { padding: 12px; }
+      .req-actions { gap: 6px; }
+      .req-actions .btn { flex: 1 1 calc(50% - 3px); min-width: calc(50% - 3px); }
+    }
+    </style>
+</head>
+<body>
+
+  <header class="report-topbar">
+    <a href="/"><span>&larr;</span> Back to Solclear</a>
+    <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle dark mode">
+      <svg id="themeIconSun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+      <svg id="themeIconMoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:none;"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
+  </header>
+
+  <div class="report-summary summary-fail">
+    <div class="summary-inner">
+      <div class="summary-main">
+        <svg class="summary-ring" width="52" height="52" viewBox="0 0 44 44">
+          <circle class="ring-bg" cx="22" cy="22" r="18"/>
+          <circle class="ring-fill" cx="22" cy="22" r="18"
+            stroke-dasharray="113.1"
+            stroke-dashoffset="33.9"/>
+          <text class="ring-text" x="22" y="22">70%</text>
+        </svg>
+        <div class="summary-text">
+          <div class="summary-headline">16 of 23 passed · ACTION REQUIRED</div>
+          <div class="summary-project">IND-5584 Freddy Ramos — 2943 N 42nd Ave, Phoenix, Arizona</div>
+          <div class="summary-chips"><span class="chip chip-pass">✓ 16 passed</span><span class="chip chip-fail">✗ 2 failed</span><span class="chip chip-missing">⊘ 4 missing</span><span class="chip chip-review">⟳ 1 review</span></div>
+        </div>
+      </div>
+      <div class="summary-ctas"><button class="btn btn-ghost" onclick="rerunFailed()">Re-run 7 failed items</button></div>
+    </div>
+  </div>
+
+  <nav class="report-tabs">
+    <button class="report-tab" data-tab="attention" onclick="filterTab('attention')">Needs attention <span class="count">7</span></button>
+    <button class="report-tab" data-tab="passed" onclick="filterTab('passed')">Passed <span class="count">16</span></button>
+    <button class="report-tab" data-tab="all" onclick="filterTab('all')">All <span class="count">23</span></button>
+  </nav>
+
+  <div class="report-body">
+    
+  <div class="section">
+    <div class="section-header">
+      <h2>Project Site</h2>
+      <span class="section-score score-issues">3/4</span>
+    </div>
+    
+    <div class="requirement req-missing" data-status="MISSING" data-id="PS1">
+      <div class="req-header">
+        <span class="badge badge-missing">MISSING</span>
+        <span class="req-id">PS1</span>
+        <span class="req-title">Inverter / Micro-inverter / Optimizer Label</span>
+        
+        
+      </div>
+      
+      <p class="reason">No matching photo found in CompanyCam</p>
+      
+      
+      <div class="req-actions">
+        
+        <button class="btn btn-sm btn-subtle" data-role="resolve-btn" onclick="event.stopPropagation();toggleResolved(this, 'PS1')">Mark resolved</button>
+        <button class="btn btn-sm btn-subtle" onclick="event.stopPropagation();openNoteEditor(this, 'PS1')">Add note</button>
+        <button class="btn btn-sm btn-primary" onclick="event.stopPropagation();recheckItem(this, 'PS1')">Re-check</button>
+      </div>
+    </div>
+    <div class="requirement req-pass collapsed" data-status="PASS" data-id="PS3" onclick="this.classList.toggle('collapsed')">
+      <div class="req-header">
+        <span class="badge badge-pass">PASS</span>
+        <span class="req-id">PS3</span>
+        <span class="req-title">MCI Location &amp; Photo (Tesla only)</span>
+        
+        
+      </div>
+      <a href="https://img.companycam.com/ukiBIAwlOrN41OhAgzEgEDkcnuCHBel6CSBOWhLHJts/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS9hZmJm/YWQzYS01NTI3LTQz/YjAtYWRmNC0wMGY3/MTkxMTA3YzkuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/ukiBIAwlOrN41OhAgzEgEDkcnuCHBel6CSBOWhLHJts/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS9hZmJm/YWQzYS01NTI3LTQz/YjAtYWRmNC0wMGY3/MTkxMTA3YzkuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      
+      
+    </div>
+    <div class="requirement req-pass collapsed" data-status="PASS" data-id="PS4" onclick="this.classList.toggle('collapsed')">
+      <div class="req-header">
+        <span class="badge badge-pass">PASS</span>
+        <span class="req-id">PS4</span>
+        <span class="req-title">Module Manufacturer Label</span>
+        
+        
+      </div>
+      <a href="https://img.companycam.com/HruLvA1Lhujz7MD1PMWYjOuDkcLMHO51_meeBE2gKOE/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS9hZWEy/NzQyZS0xOTY5LTRi/MTctYTQ3OC0wZmM1/ZjQzMDk0ODIuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/HruLvA1Lhujz7MD1PMWYjOuDkcLMHO51_meeBE2gKOE/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS9hZWEy/NzQyZS0xOTY5LTRi/MTctYTQ3OC0wZmM1/ZjQzMDk0ODIuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      
+      
+    </div>
+    <div class="requirement req-pass collapsed" data-status="PASS" data-id="PS5" onclick="this.classList.toggle('collapsed')">
+      <div class="req-header">
+        <span class="badge badge-pass">PASS</span>
+        <span class="req-id">PS5</span>
+        <span class="req-title">Module Serial Number</span>
+        
+        
+      </div>
+      <a href="https://img.companycam.com/0o47rbj4MrS0GwRbtHgJzZQYp-xxyM6RMEEN2rab4qY/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS81NDM4/NzEyZi1kZTFhLTQx/ZDgtOWQ1NS1kZGFm/MTU1MWJkOWYuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/0o47rbj4MrS0GwRbtHgJzZQYp-xxyM6RMEEN2rab4qY/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS81NDM4/NzEyZi1kZTFhLTQx/ZDgtOWQ1NS1kZGFm/MTU1MWJkOWYuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      
+      
+    </div>
+  </div>
+  <div class="section">
+    <div class="section-header">
+      <h2>Roof</h2>
+      <span class="section-score score-review">5/6</span>
+    </div>
+    
+    <div class="requirement req-needs_review" data-status="NEEDS_REVIEW" data-id="R6">
+      <div class="req-header">
+        <span class="badge badge-needs_review">NEEDS REVIEW</span>
+        <span class="req-id">R6</span>
+        <span class="req-title">Rooftop Junction Box (per junction box)</span>
+        
+        
+      </div>
+      <a href="https://img.companycam.com/c8Mp7Nx8p00a9r_U7hXXcJ3VkiNn1epWu88H1skeres/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS9mZmNl/OTE0NS1iN2M5LTQ4/NDEtOGMzZC1iYWM1/ZTg5ZGRhOGYuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/c8Mp7Nx8p00a9r_U7hXXcJ3VkiNn1epWu88H1skeres/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS9mZmNl/OTE0NS1iN2M5LTQ4/NDEtOGMzZC1iYWM1/ZTg5ZGRhOGYuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      <p class="reason reason-short">The junction box cover is removed and internal conductor terminations are visible, but a red conductor appears to make...</p>
+      <div class="reason-full" style="display:none"><p class="reason">The junction box cover is removed and internal conductor terminations are visible, but a red conductor appears to make an external loop of potentially more than 2 inches outside the enclosure before entering conduit or the array, warranting closer inspection to confirm whether exposed conductor length is within acceptable limits.</p></div>
+      <button class="expand-btn" onclick="toggleReason(this)">Show more <span class="arrow">&#9662;</span></button>
+      
+      
+      <div class="req-actions">
+        
+        <button class="btn btn-sm btn-subtle" data-role="resolve-btn" onclick="event.stopPropagation();toggleResolved(this, 'R6')">Mark resolved</button>
+        <button class="btn btn-sm btn-subtle" onclick="event.stopPropagation();openNoteEditor(this, 'R6')">Add note</button>
+        <button class="btn btn-sm btn-primary" onclick="event.stopPropagation();recheckItem(this, 'R6')">Re-check</button>
+      </div>
+    </div>
+    <div class="requirement req-pass collapsed" data-status="PASS" data-id="R1" onclick="this.classList.toggle('collapsed')">
+      <div class="req-header">
+        <span class="badge badge-pass">PASS</span>
+        <span class="req-id">R1</span>
+        <span class="req-title">Attachment Close-Up (Flashing &amp; Sealant)</span>
+        
+        
+      </div>
+      <a href="https://img.companycam.com/eftWuYBkVDZ4vCbRCuYbGMyiFU6LClSKoqJtwXUDsT8/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS9lNmVj/NTZkOC1jYWI4LTQ5/NjMtODZkOC04YjQy/MmZkYjZjMTcuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/eftWuYBkVDZ4vCbRCuYbGMyiFU6LClSKoqJtwXUDsT8/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS9lNmVj/NTZkOC1jYWI4LTQ5/NjMtODZkOC04YjQy/MmZkYjZjMTcuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      
+      
+    </div>
+    <div class="requirement req-pass collapsed" data-status="PASS" data-id="R2" onclick="this.classList.toggle('collapsed')">
+      <div class="req-header">
+        <span class="badge badge-pass">PASS</span>
+        <span class="req-id">R2</span>
+        <span class="req-title">Rail + EGC + Wire Management (per array)</span>
+        
+        
+      </div>
+      <a href="https://img.companycam.com/catldDRWVX1Z1WpMSuF8UGFFjGa7Plkjo7MruvfwgfI/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS8yMTFh/NDdhNy1kMGVlLTQw/YjYtYWM2Yi1jNjAw/Y2E0OTZkYTAuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/catldDRWVX1Z1WpMSuF8UGFFjGa7Plkjo7MruvfwgfI/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS8yMTFh/NDdhNy1kMGVlLTQw/YjYtYWM2Yi1jNjAw/Y2E0OTZkYTAuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      
+      
+    </div>
+    <div class="requirement req-pass collapsed" data-status="PASS" data-id="R3" onclick="this.classList.toggle('collapsed')">
+      <div class="req-header">
+        <span class="badge badge-pass">PASS</span>
+        <span class="req-id">R3</span>
+        <span class="req-title">Complete Array with Rail Trimmed (per array)</span>
+        
+        
+      </div>
+      <a href="https://img.companycam.com/fAKmhgwCrdIoe1ibXpLQyjwN70P0n9ZW0PKItg8lOuE/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS9jOGRm/YTNiNi05N2ZjLTRm/ZjUtYThmOS1mZjBl/Y2Q2ODk4OTIuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/fAKmhgwCrdIoe1ibXpLQyjwN70P0n9ZW0PKItg8lOuE/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS9jOGRm/YTNiNi05N2ZjLTRm/ZjUtYThmOS1mZjBl/Y2Q2ODk4OTIuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      
+      
+    </div>
+    <div class="requirement req-pass collapsed" data-status="PASS" data-id="R4" onclick="this.classList.toggle('collapsed')">
+      <div class="req-header">
+        <span class="badge badge-pass">PASS</span>
+        <span class="req-id">R4</span>
+        <span class="req-title">Under-Array Wire Management (per array)</span>
+        
+        
+      </div>
+      <a href="https://img.companycam.com/bex3fgZ8yB2m2qMQmAECuIuJDP5Dgw9nOfmGCJ9xNBU/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS8wMGE0/Njc0Mi0wZWM5LTQ2/MWItODM5ZC03ODdk/NDQyM2RmNDIuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/bex3fgZ8yB2m2qMQmAECuIuJDP5Dgw9nOfmGCJ9xNBU/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS8wMGE0/Njc0Mi0wZWM5LTQ2/MWItODM5ZC03ODdk/NDQyM2RmNDIuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      
+      
+    </div>
+    <div class="requirement req-pass collapsed" data-status="PASS" data-id="R5" onclick="this.classList.toggle('collapsed')">
+      <div class="req-header">
+        <span class="badge badge-pass">PASS</span>
+        <span class="req-id">R5</span>
+        <span class="req-title">Tilt Measurement (per unique pitch)</span>
+        
+        
+      </div>
+      <a href="https://img.companycam.com/wFiYzbWLQRqcAc-Urrn24DCYhdMV5tXSUta4Y5AesrQ/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS80OWI4/MmFjOC02YjE5LTQx/NzctODUyMy0wMGJi/Njc1MWU2M2MuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/wFiYzbWLQRqcAc-Urrn24DCYhdMV5tXSUta4Y5AesrQ/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS80OWI4/MmFjOC02YjE5LTQx/NzctODUyMy0wMGJi/Njc1MWU2M2MuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      
+      
+    </div>
+  </div>
+  <div class="section">
+    <div class="section-header">
+      <h2>Electrical</h2>
+      <span class="section-score score-issues">5/8</span>
+    </div>
+    
+    <div class="requirement req-missing" data-status="MISSING" data-id="E5">
+      <div class="req-header">
+        <span class="badge badge-missing">MISSING</span>
+        <span class="req-id">E5</span>
+        <span class="req-title">Balance of System Pullback</span>
+        
+        
+      </div>
+      
+      <p class="reason">No matching photo found in CompanyCam</p>
+      
+      
+      <div class="req-actions">
+        
+        <button class="btn btn-sm btn-subtle" data-role="resolve-btn" onclick="event.stopPropagation();toggleResolved(this, 'E5')">Mark resolved</button>
+        <button class="btn btn-sm btn-subtle" onclick="event.stopPropagation();openNoteEditor(this, 'E5')">Add note</button>
+        <button class="btn btn-sm btn-primary" onclick="event.stopPropagation();recheckItem(this, 'E5')">Re-check</button>
+      </div>
+    </div>
+    <div class="requirement req-missing" data-status="MISSING" data-id="E7">
+      <div class="req-header">
+        <span class="badge badge-missing">MISSING</span>
+        <span class="req-id">E7</span>
+        <span class="req-title">Consumption Metering (CTs)</span>
+        
+        
+      </div>
+      
+      <p class="reason">No matching photo found in CompanyCam</p>
+      
+      
+      <div class="req-actions">
+        
+        <button class="btn btn-sm btn-subtle" data-role="resolve-btn" onclick="event.stopPropagation();toggleResolved(this, 'E7')">Mark resolved</button>
+        <button class="btn btn-sm btn-subtle" onclick="event.stopPropagation();openNoteEditor(this, 'E7')">Add note</button>
+        <button class="btn btn-sm btn-primary" onclick="event.stopPropagation();recheckItem(this, 'E7')">Re-check</button>
+      </div>
+    </div>
+    <div class="requirement req-missing" data-status="MISSING" data-id="E9">
+      <div class="req-header">
+        <span class="badge badge-missing">MISSING</span>
+        <span class="req-id">E9</span>
+        <span class="req-title">Combiner Sub Panels</span>
+        
+        <span class="optional-tag">optional</span>
+      </div>
+      
+      <p class="reason">No matching photo found in CompanyCam</p>
+      
+      
+      <div class="req-actions">
+        
+        <button class="btn btn-sm btn-subtle" data-role="resolve-btn" onclick="event.stopPropagation();toggleResolved(this, 'E9')">Mark resolved</button>
+        <button class="btn btn-sm btn-subtle" onclick="event.stopPropagation();openNoteEditor(this, 'E9')">Add note</button>
+        <button class="btn btn-sm btn-primary" onclick="event.stopPropagation();recheckItem(this, 'E9')">Re-check</button>
+      </div>
+    </div>
+    <div class="requirement req-pass collapsed" data-status="PASS" data-id="E2" onclick="this.classList.toggle('collapsed')">
+      <div class="req-header">
+        <span class="badge badge-pass">PASS</span>
+        <span class="req-id">E2</span>
+        <span class="req-title">Main Breaker Rating</span>
+        
+        
+      </div>
+      <a href="https://img.companycam.com/e9363VNByekHyhSuj76UKCFFCEXWZlv_NSm-vIW8z5s/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS80ZjI1/ZDAwYy05NDNhLTQx/OTktYmYxMi03NGVm/MjNiYjkyM2QuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/e9363VNByekHyhSuj76UKCFFCEXWZlv_NSm-vIW8z5s/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS80ZjI1/ZDAwYy05NDNhLTQx/OTktYmYxMi03NGVm/MjNiYjkyM2QuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      
+      
+    </div>
+    <div class="requirement req-pass collapsed" data-status="PASS" data-id="E3" onclick="this.classList.toggle('collapsed')">
+      <div class="req-header">
+        <span class="badge badge-pass">PASS</span>
+        <span class="req-id">E3</span>
+        <span class="req-title">Main Panel Busbar Rating</span>
+        
+        
+      </div>
+      <a href="https://img.companycam.com/jv76A-6WkzGv87U-B_ZAEubAKF08C2RJYf-3rEEKwgo/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS8wZDQ0/NGFjNS0yNDI2LTQ1/NjItYmI3ZC00MGMy/MTc4ZWEzNjEuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/jv76A-6WkzGv87U-B_ZAEubAKF08C2RJYf-3rEEKwgo/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS8wZDQ0/NGFjNS0yNDI2LTQ1/NjItYmI3ZC00MGMy/MTc4ZWEzNjEuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      
+      
+    </div>
+    <div class="requirement req-pass collapsed" data-status="PASS" data-id="E4" onclick="this.classList.toggle('collapsed')">
+      <div class="req-header">
+        <span class="badge badge-pass">PASS</span>
+        <span class="req-id">E4</span>
+        <span class="req-title">Point of Interconnection (POI)</span>
+        
+        
+      </div>
+      <a href="https://img.companycam.com/VxGkKUd4HG6qi5gmCKrQ3FFL9-zVQ6RLoGiQstBhlMw/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS9hMzEz/ZTY2ZC1kMjcxLTRk/NWItOTg2Zi0xNzI1/NzBlMjFlMWEuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/VxGkKUd4HG6qi5gmCKrQ3FFL9-zVQ6RLoGiQstBhlMw/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS9hMzEz/ZTY2ZC1kMjcxLTRk/NWItOTg2Zi0xNzI1/NzBlMjFlMWEuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      
+      
+    </div>
+    <div class="requirement req-pass collapsed" data-status="PASS" data-id="E6" onclick="this.classList.toggle('collapsed')">
+      <div class="req-header">
+        <span class="badge badge-pass">PASS</span>
+        <span class="req-id">E6</span>
+        <span class="req-title">Production Meter or CTs</span>
+        
+        
+      </div>
+      <a href="https://img.companycam.com/VxGkKUd4HG6qi5gmCKrQ3FFL9-zVQ6RLoGiQstBhlMw/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS9hMzEz/ZTY2ZC1kMjcxLTRk/NWItOTg2Zi0xNzI1/NzBlMjFlMWEuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/VxGkKUd4HG6qi5gmCKrQ3FFL9-zVQ6RLoGiQstBhlMw/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS9hMzEz/ZTY2ZC1kMjcxLTRk/NWItOTg2Zi0xNzI1/NzBlMjFlMWEuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      
+      
+    </div>
+    <div class="requirement req-pass collapsed" data-status="PASS" data-id="E8" onclick="this.classList.toggle('collapsed')">
+      <div class="req-header">
+        <span class="badge badge-pass">PASS</span>
+        <span class="req-id">E8</span>
+        <span class="req-title">Fused AC Disconnects</span>
+        
+        <span class="optional-tag">optional</span>
+      </div>
+      <a href="https://img.companycam.com/DP2Yk-oKhPERauvsSASVJnAwtME-aNyv48UtU4EPeW8/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS85M2Ux/NDliZS05OTU5LTQy/MDMtYTIzMy1hNmNi/ODIxOWI2NDcuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/DP2Yk-oKhPERauvsSASVJnAwtME-aNyv48UtU4EPeW8/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS85M2Ux/NDliZS05OTU5LTQy/MDMtYTIzMy1hNmNi/ODIxOWI2NDcuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      
+      
+    </div>
+  </div>
+  <div class="section">
+    <div class="section-header">
+      <h2>Storage</h2>
+      <span class="section-score score-issues">4/6</span>
+    </div>
+    
+    <div class="requirement req-fail" data-status="FAIL" data-id="S2">
+      <div class="req-header">
+        <span class="badge badge-fail">FAIL</span>
+        <span class="req-id">S2</span>
+        <span class="req-title">Comms Cable &amp; Drain Wire</span>
+        
+        
+      </div>
+      <a href="https://img.companycam.com/y6248ziSGS4iau_W5_YqkdTwjc3m95vn2Scmw_jdTN8/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS8xYzUx/OWRjZS05ZTI0LTRm/ZmMtYjMyNS1mZjc3/M2E3MmM0MzQuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/y6248ziSGS4iau_W5_YqkdTwjc3m95vn2Scmw_jdTN8/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS8xYzUx/OWRjZS05ZTI0LTRm/ZmMtYjMyNS1mZjc3/M2E3MmM0MzQuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      <p class="reason reason-short">FAIL The comms cable terminations are not clearly visible in this photo, and the drain wire connection cannot be...</p>
+      <div class="reason-full" style="display:none"><p class="reason">FAIL The comms cable terminations are not clearly visible in this photo, and the drain wire connection cannot be adequately verified to confirm it is landed on only one end as required.</p></div>
+      <button class="expand-btn" onclick="toggleReason(this)">Show more <span class="arrow">&#9662;</span></button>
+      
+      
+      <div class="req-actions">
+        
+        <button class="btn btn-sm btn-subtle" data-role="resolve-btn" onclick="event.stopPropagation();toggleResolved(this, 'S2')">Mark resolved</button>
+        <button class="btn btn-sm btn-subtle" onclick="event.stopPropagation();openNoteEditor(this, 'S2')">Add note</button>
+        <button class="btn btn-sm btn-primary" onclick="event.stopPropagation();recheckItem(this, 'S2')">Re-check</button>
+      </div>
+    </div>
+    <div class="requirement req-missing" data-status="MISSING" data-id="S6">
+      <div class="req-header">
+        <span class="badge badge-missing">MISSING</span>
+        <span class="req-id">S6</span>
+        <span class="req-title">Gateway / Transfer Switch Label (Backup Battery)</span>
+        
+        
+      </div>
+      
+      <p class="reason">No matching photo found in CompanyCam</p>
+      
+      
+      <div class="req-actions">
+        
+        <button class="btn btn-sm btn-subtle" data-role="resolve-btn" onclick="event.stopPropagation();toggleResolved(this, 'S6')">Mark resolved</button>
+        <button class="btn btn-sm btn-subtle" onclick="event.stopPropagation();openNoteEditor(this, 'S6')">Add note</button>
+        <button class="btn btn-sm btn-primary" onclick="event.stopPropagation();recheckItem(this, 'S6')">Re-check</button>
+      </div>
+    </div>
+    <div class="requirement req-pass collapsed" data-status="PASS" data-id="S1" onclick="this.classList.toggle('collapsed')">
+      <div class="req-header">
+        <span class="badge badge-pass">PASS</span>
+        <span class="req-id">S1</span>
+        <span class="req-title">Battery Label</span>
+        
+        
+      </div>
+      <a href="https://img.companycam.com/Bd5812SZJSdJj78m1ZuTnbYEiu3BobodzXYX1HNDXo8/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS8yNWZh/NmU4MC04N2IwLTRm/MjgtOGU2Mi02M2Yy/OGU0ZDhkYzkuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/Bd5812SZJSdJj78m1ZuTnbYEiu3BobodzXYX1HNDXo8/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS8yNWZh/NmU4MC04N2IwLTRm/MjgtOGU2Mi02M2Yy/OGU0ZDhkYzkuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      
+      
+    </div>
+    <div class="requirement req-pass collapsed" data-status="PASS" data-id="S3" onclick="this.classList.toggle('collapsed')">
+      <div class="req-header">
+        <span class="badge badge-pass">PASS</span>
+        <span class="req-id">S3</span>
+        <span class="req-title">Battery CT</span>
+        
+        
+      </div>
+      <a href="https://img.companycam.com/hkvA6KUS7ndUS0PGpZz_X7IehjGU00os7UO63459LNY/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS8zZmU3/NzdlYi0zZTM1LTQ4/ZGItYmEyMy1jY2Ji/ZjQ4MWFhYWQuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/hkvA6KUS7ndUS0PGpZz_X7IehjGU00os7UO63459LNY/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS8zZmU3/NzdlYi0zZTM1LTQ4/ZGItYmEyMy1jY2Ji/ZjQ4MWFhYWQuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      
+      
+    </div>
+    <div class="requirement req-pass collapsed" data-status="PASS" data-id="S4" onclick="this.classList.toggle('collapsed')">
+      <div class="req-header">
+        <span class="badge badge-pass">PASS</span>
+        <span class="req-id">S4</span>
+        <span class="req-title">Battery BOS Pullback</span>
+        
+        
+      </div>
+      <a href="https://img.companycam.com/wi7V27VCAOCTH2P3-ewu7kTVD9umeY1HLmGIK-ixEAQ/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS80YzRh/OTc1Yi03NTEyLTQ2/ZGEtOTI1YS1iNjNl/NjlhMjZmZDAuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/wi7V27VCAOCTH2P3-ewu7kTVD9umeY1HLmGIK-ixEAQ/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS80YzRh/OTc1Yi03NTEyLTQ2/ZGEtOTI1YS1iNjNl/NjlhMjZmZDAuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      
+      
+    </div>
+    <div class="requirement req-pass collapsed" data-status="PASS" data-id="S5" onclick="this.classList.toggle('collapsed')">
+      <div class="req-header">
+        <span class="badge badge-pass">PASS</span>
+        <span class="req-id">S5</span>
+        <span class="req-title">Gateway / Transfer Switch Wiring (Backup Battery)</span>
+        
+        
+      </div>
+      <a href="https://img.companycam.com/wh-kQesoxh0HCT--oDk5YM3BAS2FRdmlW6CA2kB-iQw/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS82YWEy/ZmZmZC0zYzZlLTQx/NDMtYmE3Yi0wNzMz/NmYyYTY2YzQuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/wh-kQesoxh0HCT--oDk5YM3BAS2FRdmlW6CA2kB-iQw/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS82YWEy/ZmZmZC0zYzZlLTQx/NDMtYmE3Yi0wNzMz/NmYyYTY2YzQuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      
+      
+    </div>
+  </div>
+  <div class="section">
+    <div class="section-header">
+      <h2>Commissioning</h2>
+      <span class="section-score score-issues">0/1</span>
+    </div>
+    
+    <div class="requirement req-fail" data-status="FAIL" data-id="SC1">
+      <div class="req-header">
+        <span class="badge badge-fail">FAIL</span>
+        <span class="req-id">SC1</span>
+        <span class="req-title">Tesla Commissioning Screenshots</span>
+        
+        
+      </div>
+      <a href="https://img.companycam.com/3a1t6Wu_wObP3uHb5xqw_5ZUJCyTJxQuqg0id163W7Q/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS8yMTkz/ZjJmOS0wYzBiLTRl/MWItOWViNy00YTdh/MDMzZjU3ODYuanBn.jpg" target="_blank" class="req-photo-link"><img src="https://img.companycam.com/3a1t6Wu_wObP3uHb5xqw_5ZUJCyTJxQuqg0id163W7Q/rs:fit:4032:4032/q:80/aHR0cHM6Ly9jb21w/YW55Y2FtLXBlbmRp/bmcuczMuYW1hem9u/YXdzLmNvbS8yMTkz/ZjJmOS0wYzBiLTRl/MWItOWViNy00YTdh/MDMzZjU3ODYuanBn.jpg" alt="Evaluated photo" loading="lazy" class="req-photo"></a>
+      
+      <p class="reason reason-short">The cellular network connection is confirmed and PCS/panel current limit settings are present in the operation settings...</p>
+      <div class="reason-full" style="display:none"><p class="reason">The cellular network connection is confirmed and PCS/panel current limit settings are present in the operation settings summary, but there is no LightReach monitoring/service partner entry anywhere in the commissioning record, and the Backup Switch (current transformer device) is showing an active error alert indicating no grid voltage detected rather than a fully enabled, error-free state.</p></div>
+      <button class="expand-btn" onclick="toggleReason(this)">Show more <span class="arrow">&#9662;</span></button>
+      <div class="req-note">this is a test note</div>
+      
+      <div class="req-actions">
+        
+        <button class="btn btn-sm btn-subtle" data-role="resolve-btn" onclick="event.stopPropagation();toggleResolved(this, 'SC1')">Mark resolved</button>
+        <button class="btn btn-sm btn-subtle" onclick="event.stopPropagation();openNoteEditor(this, 'SC1')">Edit note</button>
+        <button class="btn btn-sm btn-primary" onclick="event.stopPropagation();recheckItem(this, 'SC1')">Re-check</button>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <div class="report-footer">
+    Solclear Compliance &middot; Palmetto LightReach M1 &middot; April 22, 2026 at 05:10 PM &middot; ID: 101296090
+  </div>
+
+  <script>
+    // ── Theme ──
+    (function() {
+      const saved = localStorage.getItem('solclear-theme');
+      if (saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+      updateThemeIcon();
+    })();
+    function toggleTheme() {
+      const html = document.documentElement;
+      const isDark = html.getAttribute('data-theme') === 'dark';
+      html.setAttribute('data-theme', isDark ? 'light' : 'dark');
+      localStorage.setItem('solclear-theme', isDark ? 'light' : 'dark');
+      updateThemeIcon();
+    }
+    function updateThemeIcon() {
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      const sun = document.getElementById('themeIconSun');
+      const moon = document.getElementById('themeIconMoon');
+      if (sun) sun.style.display = isDark ? 'block' : 'none';
+      if (moon) moon.style.display = isDark ? 'none' : 'block';
+    }
+
+    // ── Show-more/less for long reason text ──
+    function toggleReason(btn) {
+      const full = btn.previousElementSibling;
+      const short = full.previousElementSibling;
+      if (full.style.display === 'none') {
+        full.style.display = 'block';
+        short.style.display = 'none';
+        btn.innerHTML = 'Show less <span class="arrow">&#9652;</span>';
+      } else {
+        full.style.display = 'none';
+        short.style.display = 'block';
+        btn.innerHTML = 'Show more <span class="arrow">&#9662;</span>';
+      }
+    }
+
+    // ── Tabs ──
+    function filterTab(tab) {
+      document.querySelectorAll('.report-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+      document.querySelectorAll('.requirement').forEach(row => {
+        const status = row.dataset.status;
+        const resolved = row.dataset.resolved === '1';
+        // Attention tab includes hard failures AND items flagged for review.
+        const needsAttention = ['FAIL','MISSING','ERROR','NEEDS_REVIEW'].includes(status);
+        let show = false;
+        if (tab === 'all') show = true;
+        else if (tab === 'passed') show = status === 'PASS';
+        else /* attention */ show = needsAttention && !resolved;
+        row.style.display = show ? '' : 'none';
+      });
+      // Hide empty sections for clarity
+      document.querySelectorAll('.section').forEach(sec => {
+        const anyVisible = Array.from(sec.querySelectorAll('.requirement'))
+          .some(r => r.style.display !== 'none');
+        sec.style.display = anyVisible ? '' : 'none';
+      });
+    }
+
+    // Default tab: if any attention items exist, start there; otherwise show All.
+    (function() {
+      const anyAttention = Array.from(document.querySelectorAll('.requirement'))
+        .some(r => {
+          const s = r.dataset.status;
+          return ['FAIL','MISSING','ERROR','NEEDS_REVIEW'].includes(s) && r.dataset.resolved !== '1';
+        });
+      filterTab(anyAttention ? 'attention' : 'all');
+    })();
+
+    // ── Rerun failed items (non-interactive fallback: navigates to SPA) ──
+    const RERUN_PARAMS = {"project_id": "101296090", "checklist_id": "", "manufacturer": "Tesla", "project_state": "", "rerun_ids": "PS1,E5,E7,E9,S2,S6,SC1"};
+    function rerunFailed() {
+      if (!RERUN_PARAMS) return;
+      const qs = new URLSearchParams(RERUN_PARAMS);
+      window.location.href = "/?rerun=" + encodeURIComponent(qs.toString());
+    }
+
+    // ── Interactive report actions ──
+    const REPORT_ID = 1;
+    const IS_INTERACTIVE = true;
+
+    function _updateTabCounts() {
+      const counts = {attention: 0, passed: 0, all: 0};
+      document.querySelectorAll('.requirement').forEach(r => {
+        const s = r.dataset.status;
+        const needsAttention = ['FAIL','MISSING','ERROR','NEEDS_REVIEW'].includes(s);
+        const resolved = r.dataset.resolved === '1';
+        counts.all++;
+        if (s === 'PASS') counts.passed++;
+        if (needsAttention && !resolved) counts.attention++;
+      });
+      const set = (tab, n) => {
+        const el = document.querySelector('.report-tab[data-tab="' + tab + '"] .count');
+        if (el) el.textContent = n;
+      };
+      set('attention', counts.attention);
+      set('passed', counts.passed);
+      set('all', counts.all);
+    }
+
+    async function toggleResolved(btn, reqCode) {
+      if (!IS_INTERACTIVE || !REPORT_ID) return;
+      btn.disabled = true;
+      try {
+        const r = await fetch('/api/report/' + REPORT_ID + '/item/' + reqCode + '/resolve', {method: 'POST'});
+        const data = await r.json();
+        if (data.error) throw new Error(data.error);
+        const row = btn.closest('.requirement');
+        const nowResolved = !!data.resolved_at;
+        row.dataset.resolved = nowResolved ? '1' : '';
+        btn.textContent = nowResolved ? 'Undo resolve' : 'Mark resolved';
+        // Update/insert resolved chip in the header
+        let chip = row.querySelector('.resolved-chip');
+        if (nowResolved) {
+          if (!chip) {
+            chip = document.createElement('span');
+            chip.className = 'badge badge-success resolved-chip';
+            chip.textContent = 'Resolved';
+            row.querySelector('.req-header').appendChild(chip);
+          }
+          if (data.resolved_by_name) chip.title = 'Resolved by ' + data.resolved_by_name;
+        } else if (chip) {
+          chip.remove();
+        }
+        _updateTabCounts();
+        // If on 'attention' tab and the item just got resolved, hide it
+        const activeTab = document.querySelector('.report-tab.active')?.dataset.tab;
+        if (activeTab === 'attention' && nowResolved) { row.style.display = 'none'; }
+      } catch (e) {
+        alert('Could not update: ' + e.message);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function openNoteEditor(btn, reqCode) {
+      if (!IS_INTERACTIVE || !REPORT_ID) return;
+      const row = btn.closest('.requirement');
+      // If editor already open, close
+      const existing = row.querySelector('.note-editor');
+      if (existing) { existing.remove(); return; }
+      const currentNote = row.querySelector('.req-note');
+      const currentText = currentNote ? currentNote.textContent : '';
+      const editor = document.createElement('div');
+      editor.className = 'note-editor';
+      editor.innerHTML =
+        '<textarea placeholder="Add a note for the crew or reviewer…">' + (currentText ? currentText.replace(/</g, '&lt;') : '') + '</textarea>' +
+        '<div class="note-editor-actions">' +
+          '<button class="btn btn-sm btn-primary">Save note</button>' +
+          '<button class="btn btn-sm btn-subtle">Cancel</button>' +
+        '</div>';
+      const actions = row.querySelector('.req-actions');
+      row.insertBefore(editor, actions);
+      const ta = editor.querySelector('textarea');
+      ta.focus();
+      const [saveBtn, cancelBtn] = editor.querySelectorAll('button');
+      cancelBtn.onclick = () => editor.remove();
+      saveBtn.onclick = async () => {
+        saveBtn.disabled = true;
+        try {
+          const r = await fetch('/api/report/' + REPORT_ID + '/item/' + reqCode + '/note', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({note: ta.value})
+          });
+          const data = await r.json();
+          if (data.error) throw new Error(data.error);
+          // Update or insert note display
+          let noteEl = row.querySelector('.req-note');
+          if (data.notes) {
+            if (!noteEl) {
+              noteEl = document.createElement('div');
+              noteEl.className = 'req-note';
+              row.insertBefore(noteEl, actions);
+            }
+            noteEl.textContent = data.notes;
+          } else if (noteEl) {
+            noteEl.remove();
+          }
+          // Toggle button label
+          btn.textContent = data.notes ? 'Edit note' : 'Add note';
+          editor.remove();
+        } catch (e) {
+          alert('Could not save note: ' + e.message);
+          saveBtn.disabled = false;
+        }
+      };
+    }
+
+    async function recheckItem(btn, reqCode) {
+      if (!IS_INTERACTIVE || !REPORT_ID) return;
+      const row = btn.closest('.requirement');
+      row.classList.add('req-rechecking');
+      btn.disabled = true;
+      try {
+        const r = await fetch('/api/recheck/' + REPORT_ID + '/' + reqCode, {method: 'POST'});
+        const data = await r.json();
+        if (data.error) throw new Error(data.error);
+        // Update row visuals without a page reload
+        const newStatus = data.status || '';
+        row.dataset.status = newStatus;
+        row.className = 'requirement req-' + newStatus.toLowerCase();
+        // Update badge (class + display label)
+        const badge = row.querySelector('.badge');
+        if (badge) {
+          const cfg = {PASS:'pass', FAIL:'fail', MISSING:'missing', ERROR:'error', NEEDS_REVIEW:'needs_review'};
+          const labels = {PASS:'PASS', FAIL:'FAIL', MISSING:'MISSING', ERROR:'ERROR', NEEDS_REVIEW:'NEEDS REVIEW'};
+          const cls = cfg[newStatus] || 'na';
+          badge.className = 'badge badge-' + cls;
+          badge.textContent = labels[newStatus] || newStatus;
+        }
+        // Resolved state is cleared server-side on recheck
+        row.dataset.resolved = '';
+        const chip = row.querySelector('.resolved-chip');
+        if (chip) chip.remove();
+        const resolveBtn = row.querySelector('[data-role="resolve-btn"]');
+        if (resolveBtn) resolveBtn.textContent = 'Mark resolved';
+        _updateTabCounts();
+        // Refresh the view to apply new status vs. current tab filter
+        const activeTab = document.querySelector('.report-tab.active')?.dataset.tab;
+        if (activeTab) filterTab(activeTab);
+      } catch (e) {
+        alert('Could not re-check: ' + e.message);
+      } finally {
+        row.classList.remove('req-rechecking');
+        btn.disabled = false;
+      }
+    }
+    </script>
+
+</body>
+</html>
