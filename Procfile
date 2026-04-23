@@ -1,1 +1,1 @@
-web: python tools/live_server.py --port $PORT
+web: python -m tools.live_server --port $PORT
