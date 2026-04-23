@@ -16,6 +16,22 @@ from __future__ import annotations
 import os
 import pytest
 import requests
+from pathlib import Path
+
+# Auto-load tests/.env if it exists so you don't have to re-export env
+# vars every shell session. This file is gitignored — only test creds
+# for roles you've created in the dev environment should go in it.
+# It is separate from the repo-root .env (which holds production-style
+# credentials and is intentionally never touched by these tests).
+_TEST_ENV = Path(__file__).parent / ".env"
+if _TEST_ENV.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_TEST_ENV)
+    except ImportError:
+        # python-dotenv is a transitive dep via the main requirements;
+        # if it's missing, just skip silently — users can still export vars.
+        pass
 
 
 BASE_URL = os.environ.get("SOLCLEAR_BASE_URL", "http://localhost:8080")

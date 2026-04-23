@@ -22,30 +22,33 @@ don't spin one up.
 
 ## Test credentials
 
-Tests never read from `.env` — credentials come from environment
-variables so you can set them fresh per-shell without leaking into
-git. Only the roles you provide will run; the rest skip with a clear
-message.
+Two options — pick whichever fits your workflow:
+
+### Option 1 (recommended): `tests/.env` file
+
+Copy `tests/.env.example` to `tests/.env` and fill in the values. The
+file is gitignored, so passwords never reach the repo. `conftest.py`
+auto-loads it on every test run.
 
 ```bash
-# Minimum to run the login + public-page smoke tests
-export TEST_SUPERADMIN_EMAIL="bap.builds@gmail.com"
-export TEST_SUPERADMIN_PASSWORD="..."
-
-# Role-matrix tests (each is optional — missing creds skip, not fail)
-export TEST_ADMIN_EMAIL="micah@independentsolar.com"
-export TEST_ADMIN_PASSWORD="..."
-export TEST_REVIEWER_EMAIL="reviewer@example.com"
-export TEST_REVIEWER_PASSWORD="..."
-export TEST_CREW_EMAIL="jdoe@independentsolar.com"
-export TEST_CREW_PASSWORD="..."
-
-# Impersonation tests — the target user's id (check the users table)
-export TEST_ADMIN_USER_ID="1"
-
-# Override the base URL if your dev server runs elsewhere
-export SOLCLEAR_BASE_URL="http://localhost:8080"  # default
+cp tests/.env.example tests/.env
+# edit tests/.env with real values for the roles you want to test
 ```
+
+### Option 2: shell env vars (per-session)
+
+Export the values in your shell. Useful for CI or one-off runs.
+
+```bash
+export TEST_SUPERADMIN_EMAIL="you@example.com"
+export TEST_SUPERADMIN_PASSWORD="..."
+export TEST_ADMIN_EMAIL="..."
+export TEST_ADMIN_PASSWORD="..."
+# … etc. See tests/.env.example for the full list.
+```
+
+Only roles you populate will run; the rest skip with a clear message —
+so you can validate incrementally as you add users in your dev env.
 
 ## Running the tests
 

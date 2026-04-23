@@ -1,5 +1,6 @@
 # Secrets
 .env
+tests/.env
 credentials.json
 token.json
 
