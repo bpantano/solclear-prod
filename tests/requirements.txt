@@ -1,0 +1,6 @@
+# Test-only dependencies. Production does not need these.
+# Install once with:
+#     conda run pip install -r tests/requirements.txt
+#     conda run playwright install chromium
+playwright>=1.48
+pytest-playwright>=0.5
