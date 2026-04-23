@@ -2310,7 +2310,9 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           if (s.checklist_ids && s.checklist_ids.length) {
             ccLink = `<a class="cc-link" href="https://app.companycam.com/projects/${s.project_id}/todos/${s.checklist_ids[0]}" target="_blank">Open in CompanyCam</a>`;
           }
-          const reportLink = `<a class="cc-link" href="/report/${s.db_report_id || s.project_id}" style="background:#111827;">View Partial Report</a>`;
+          // color:#fff overrides .cc-link's var(--text-inverse), which is dark
+          // in dark mode and would otherwise be invisible against #111827.
+          const reportLink = `<a class="cc-link" href="/report/${s.db_report_id || s.project_id}" style="background:#111827;color:#fff;">View Partial Report</a>`;
           const reviewStat = nReview ? ` · ${nReview} to review` : '';
           const label = wasCancelled
             ? 'CANCELLED — PARTIAL RESULTS'
@@ -2621,6 +2623,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         const data = await r.json();
         summary.innerHTML = renderCostSummary(data.totals);
         body.innerHTML =
+          renderCostSection('Spend by purpose', renderByPurpose(data.by_purpose, data.totals)) +
           renderCostSection('Most expensive reports', renderTopReports(data.top_reports)) +
           renderCostSection('Most expensive requirements', renderTopRequirements(data.top_requirements)) +
           renderCostSection('Spend by day (last 30)', renderDailyTrend(data.daily_last_30)) +
@@ -2650,6 +2653,53 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       return '<div style="margin-top:20px;">' +
         '<div style="font-size:var(--text-xs);text-transform:uppercase;letter-spacing:0.1em;color:var(--text-muted);font-weight:600;padding:8px 0;border-bottom:2px solid var(--border);margin-bottom:10px;">' + esc(title) + '</div>' +
         inner + '</div>';
+    }
+
+    // Friendly labels + colors per purpose. Keep in sync with the
+    // `purpose` values written in tools/compliance_check.py and
+    // live_server.py recheck endpoint.
+    const _PURPOSE_META = {
+      vision:    {label: 'Full check (Sonnet)',    color: 'var(--accent)'},
+      prefilter: {label: 'Pre-filter (Haiku)',     color: 'var(--success)'},
+      recheck:   {label: 'Single-item re-check',   color: 'var(--warning)'},
+      unknown:   {label: 'Unknown / legacy',       color: 'var(--text-muted)'},
+    };
+
+    function renderByPurpose(rows, totals) {
+      if (!rows || !rows.length) {
+        return '<div style="color:var(--text-muted);font-size:var(--text-sm);">No cost data recorded yet.</div>';
+      }
+      const grandTotal = rows.reduce((s, r) => s + (r.total_cost || 0), 0) || 0.0001;
+      // Stacked bar at top so the proportion is visible at a glance, then
+      // a small table with the underlying numbers.
+      const bar = '<div style="display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--bg-subtle);margin-bottom:10px;">' +
+        rows.map(r => {
+          const meta = _PURPOSE_META[r.purpose] || _PURPOSE_META.unknown;
+          const pct = ((r.total_cost || 0) / grandTotal) * 100;
+          return '<div title="' + esc(meta.label) + ': ' + _fmtUSD(r.total_cost) + '" ' +
+            'style="width:' + pct.toFixed(2) + '%;background:' + meta.color + ';"></div>';
+        }).join('') + '</div>';
+      const table = '<div class="table-scroll"><table style="width:100%;border-collapse:collapse;font-size:var(--text-sm);">' +
+        '<thead><tr><th style="text-align:left;padding:6px;color:var(--text-muted);font-weight:600;">Purpose</th>' +
+        '<th style="text-align:right;padding:6px;color:var(--text-muted);font-weight:600;">Total</th>' +
+        '<th style="text-align:right;padding:6px;color:var(--text-muted);font-weight:600;">% of spend</th>' +
+        '<th style="text-align:right;padding:6px;color:var(--text-muted);font-weight:600;">Calls</th>' +
+        '<th style="text-align:right;padding:6px;color:var(--text-muted);font-weight:600;">Avg</th></tr></thead><tbody>' +
+        rows.map(r => {
+          const meta = _PURPOSE_META[r.purpose] || _PURPOSE_META.unknown;
+          const pct = ((r.total_cost || 0) / grandTotal) * 100;
+          return '<tr style="border-top:1px solid var(--border-light);">' +
+            '<td style="padding:6px;font-weight:600;">' +
+              '<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' + meta.color + ';margin-right:8px;vertical-align:middle;"></span>' +
+              esc(meta.label) +
+            '</td>' +
+            '<td style="padding:6px;text-align:right;font-weight:600;">' + _fmtUSD(r.total_cost) + '</td>' +
+            '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + pct.toFixed(1) + '%</td>' +
+            '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + r.call_count + '</td>' +
+            '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + _fmtUSD(r.avg_cost) + '</td>' +
+            '</tr>';
+        }).join('') + '</tbody></table></div>';
+      return bar + table;
     }
 
     function renderTopReports(rows) {

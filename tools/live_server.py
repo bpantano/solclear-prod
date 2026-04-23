@@ -283,13 +283,18 @@ def run_check_thread(cc_project_id, params, rerun_ids=None, session=None):
                 # 'cancelled' is a new TEXT status alongside 'complete'/'error'/'running'.
                 # Partial totals are recorded so the report detail page can still
                 # render the results we did collect before stopping.
+                # checklist_ids: persist the array discovered during the run so
+                # the report-detail page's rerun button doesn't have to refetch
+                # them from CompanyCam (avoids rate limiting under concurrent users).
                 final_status = "cancelled" if was_cancelled else "complete"
                 execute(
                     """UPDATE reports SET status = %s, completed_at = NOW(),
                        total_required = %s, total_passed = %s, total_failed = %s,
-                       total_missing = %s, total_needs_review = %s
+                       total_missing = %s, total_needs_review = %s,
+                       checklist_ids = %s
                        WHERE id = %s""",
-                    (final_status, len(required), n_pass, n_fail, n_missing, n_review, db_report_id)
+                    (final_status, len(required), n_pass, n_fail, n_missing, n_review,
+                     json.dumps(report.get("checklist_ids", [])), db_report_id)
                 )
             except Exception as e:
                 print(f"WARNING: Could not update report in DB: {e}", file=sys.stderr)
@@ -1828,6 +1833,23 @@ class LiveHandler(BaseHTTPRequestHandler):
                 {where_clause}
             """, params_t)
 
+            # Per-purpose breakdown so superadmin can see what fraction of
+            # spend is full vision runs vs cheap Haiku prefilter calls vs
+            # single-item rechecks. NULL purpose (legacy rows) lumped as
+            # 'unknown' so they're still surfaced.
+            by_purpose = fetch_all(f"""
+                SELECT COALESCE(a.purpose, 'unknown') AS purpose,
+                       COUNT(*) AS call_count,
+                       COALESCE(SUM(a.cost_usd), 0) AS total_cost,
+                       COALESCE(AVG(a.cost_usd), 0) AS avg_cost
+                FROM api_call_log a
+                LEFT JOIN reports r ON r.id = a.report_id
+                LEFT JOIN projects p ON p.id = r.project_id
+                {where_clause}
+                GROUP BY COALESCE(a.purpose, 'unknown')
+                ORDER BY total_cost DESC
+            """, params_t)
+
             top_reports = fetch_all(f"""
                 SELECT r.id AS report_id,
                        p.name AS project_name,
@@ -1913,9 +1935,11 @@ class LiveHandler(BaseHTTPRequestHandler):
             top_reqs = [_iso(r) for r in top_reqs]
             daily = [_iso(r, "day") for r in daily]
             recent = [_iso(r, "called_at") for r in recent]
+            by_purpose = [_iso(r) for r in by_purpose]
 
             self._send_json({
                 "totals": totals,
+                "by_purpose": by_purpose,
                 "top_reports": top_reports,
                 "top_requirements": top_reqs,
                 "daily_last_30": daily,
@@ -2053,7 +2077,9 @@ class LiveHandler(BaseHTTPRequestHandler):
                         "portal_access_granted": db_report.get("portal_access_granted"),
                     },
                     "requirements": [dict(r) for r in results],
-                    "checklist_ids": [],
+                    # checklist_ids is a JSONB array on the reports row
+                    # (migration 004). Pre-migration / pre-fix rows return [].
+                    "checklist_ids": db_report.get("checklist_ids") or [],
                     "db_report_id": int(report_id),
                 }
                 project_id = db_report["companycam_id"]

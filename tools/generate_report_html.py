@@ -473,16 +473,38 @@ def _report_style_block() -> str:
       padding-top: 10px; border-top: 1px solid var(--border-light);
     }
 
-    /* Inline recheck spinner */
-    .req-rechecking {
-      pointer-events: none; opacity: 0.6;
-      position: relative;
+    /* Re-checking state — fade the row but keep header crisp so the
+       running badge + button-spinner are unmissable. Block clicks so
+       the user can't fire a second recheck while one is in flight. */
+    .req-rechecking { pointer-events: none; }
+    .req-rechecking .req-photo,
+    .req-rechecking .req-reason,
+    .req-rechecking .req-actions { opacity: 0.5; }
+
+    /* Running badge: cyan with a pulsing dot. Replaces the status badge
+       in the row header for the duration of the recheck. */
+    .badge-running {
+      background: var(--review-subtle); color: var(--review-text);
+      display: inline-flex; align-items: center; gap: 6px;
     }
-    .req-rechecking::after {
-      content: "Re-checking…"; display: inline-block;
-      font-size: var(--text-xs); color: var(--text-muted);
-      margin-left: 8px;
+    .badge-running::before {
+      content: ""; width: 6px; height: 6px; border-radius: 50%;
+      background: var(--review-text);
+      animation: badge-pulse 1.1s ease-in-out infinite;
     }
+    @keyframes badge-pulse {
+      0%, 100% { opacity: 0.35; transform: scale(0.85); }
+      50%      { opacity: 1;    transform: scale(1.15); }
+    }
+
+    /* Inline button spinner used while the recheck request is in flight. */
+    .btn-spinner {
+      display: inline-block; width: 12px; height: 12px;
+      border: 2px solid currentColor; border-right-color: transparent;
+      border-radius: 50%; vertical-align: -2px; margin-right: 6px;
+      animation: btn-spin 0.7s linear infinite;
+    }
+    @keyframes btn-spin { to { transform: rotate(360deg); } }
 
     /* Alerts */
     .alert {
@@ -722,6 +744,18 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
       if (!IS_INTERACTIVE || !REPORT_ID) return;
       const row = btn.closest('.requirement');
       row.classList.add('req-rechecking');
+      // Swap the status badge to a "RUNNING" pill with a pulsing dot so
+      // the user sees the row state changed, not just a faded button.
+      const badge = row.querySelector('.badge');
+      const _origBadgeClass = badge ? badge.className : '';
+      const _origBadgeText  = badge ? badge.textContent : '';
+      if (badge) {{
+        badge.className = 'badge badge-running';
+        badge.textContent = 'RUNNING';
+      }}
+      // Spinner inside the button itself so the click target shows progress.
+      const _origBtnHTML = btn.innerHTML;
+      btn.innerHTML = '<span class="btn-spinner"></span>Re-checking…';
       btn.disabled = true;
       try {{
         const r = await fetch('/api/recheck/' + REPORT_ID + '/' + reqCode, {{method: 'POST'}});
@@ -752,8 +786,14 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
         if (activeTab) filterTab(activeTab);
       }} catch (e) {{
         alert('Could not re-check: ' + e.message);
+        // Restore the original badge so the row goes back to its prior state.
+        if (badge) {{
+          badge.className = _origBadgeClass;
+          badge.textContent = _origBadgeText;
+        }}
       }} finally {{
         row.classList.remove('req-rechecking');
+        btn.innerHTML = _origBtnHTML;
         btn.disabled = false;
       }}
     }}

@@ -746,12 +746,51 @@ def _log_api_call(model, input_tokens, output_tokens, duration_ms, req_id):
         print(f"WARNING: api_call_log insert failed: {e}", file=sys.stderr)
 
 
+_MAX_RETRIES = 5
+_BASE_BACKOFF_S = 5
+_MAX_BACKOFF_S = 60
+
+
+def _retry_after_seconds(resp) -> Optional[float]:
+    """Extract a sleep duration from Anthropic's rate-limit response headers.
+
+    Anthropic sends `retry-after` (seconds, integer) plus token-bucket
+    reset timestamps like `anthropic-ratelimit-input-tokens-reset` (ISO
+    8601). Prefer retry-after when present; otherwise compute the gap
+    until the input-tokens bucket refills. Returns None if neither is
+    usable — caller should fall back to exponential backoff."""
+    ra = resp.headers.get("retry-after")
+    if ra:
+        try:
+            return max(0.0, float(ra))
+        except ValueError:
+            pass
+    reset = resp.headers.get("anthropic-ratelimit-input-tokens-reset")
+    if reset:
+        try:
+            from datetime import datetime, timezone
+            # Anthropic returns ISO with trailing 'Z'; strip it for fromisoformat
+            reset_dt = datetime.fromisoformat(reset.replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            return max(0.0, (reset_dt - now).total_seconds())
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
 def _call_anthropic(payload: dict, req_id: str) -> Optional[str]:
-    """Make an Anthropic API call with up to 3 retries on 429.
+    """Make an Anthropic API call with bounded retries on 429.
     Returns response text or None. Logs usage to api_call_log when a
-    report context is active (see set_call_context)."""
+    report context is active (see set_call_context).
+
+    Retry policy: up to _MAX_RETRIES attempts. On 429, sleep the longer
+    of (server-provided retry-after) and (exponential backoff starting
+    at _BASE_BACKOFF_S, capped at _MAX_BACKOFF_S). The server hint is
+    almost always shorter than our blind 20s/40s/60s sequence — honoring
+    it both reduces total wait time and avoids burning all retries on
+    transient bursts."""
     import time
-    for attempt in range(3):
+    for attempt in range(_MAX_RETRIES):
         try:
             t0 = time.time()
             resp = requests.post(
@@ -762,8 +801,15 @@ def _call_anthropic(payload: dict, req_id: str) -> Optional[str]:
             )
             duration_ms = int((time.time() - t0) * 1000)
             if resp.status_code == 429:
-                wait = 20 * (attempt + 1)
-                print(f"  Rate limited on {req_id}, retrying in {wait}s...", file=sys.stderr)
+                # Prefer server hint; fall back to exponential. Always at
+                # least 1s to avoid hammering. Cap so a misconfigured
+                # server can't park us for hours.
+                server_wait = _retry_after_seconds(resp)
+                backoff = min(_BASE_BACKOFF_S * (2 ** attempt), _MAX_BACKOFF_S)
+                wait = max(1.0, server_wait if server_wait is not None else backoff)
+                wait = min(wait, _MAX_BACKOFF_S)
+                src = "server" if server_wait is not None else "backoff"
+                print(f"  Rate limited on {req_id}, retrying in {wait:.1f}s ({src})...", file=sys.stderr)
                 time.sleep(wait)
                 continue
             resp.raise_for_status()
@@ -778,7 +824,7 @@ def _call_anthropic(payload: dict, req_id: str) -> Optional[str]:
             )
             return body["content"][0]["text"]
         except Exception as e:
-            if attempt == 2:
+            if attempt == _MAX_RETRIES - 1:
                 return f"ERROR: {e}"
     return "ERROR: Max retries exceeded"
 
@@ -796,6 +842,98 @@ def _download_image(url: str) -> Optional[tuple]:
 
 
 VISION_MODEL = "claude-sonnet-4-6"
+PREFILTER_MODEL = "claude-haiku-4-5-20251001"
+
+# When a requirement has more than this many candidates, run a cheap Haiku
+# pre-filter on thumbnails to pick the best PREFILTER_KEEP photos, then send
+# only those (full-res) to Sonnet. Above ~25 photos the Anthropic API
+# returns 413/400 from base64 payload size; below ~10 the prefilter cost
+# isn't worth it. 5 is the same as keep — see threshold rationale in the
+# 2026-04-23 conversation: keeping K means filtering kicks in at K+1.
+PREFILTER_THRESHOLD = 5
+PREFILTER_KEEP = 5
+
+# For multi-criterion mode (SC1/SC2) we can't pre-filter — every photo is
+# evidence. Cap the number we send full-res to stay under the payload limit.
+# If a project genuinely has more screenshots than this, the most recent
+# ones are usually the relevant commissioning state.
+MULTI_CRITERION_MAX = 20
+
+
+def _haiku_prefilter(candidates: list, requirement: dict, keep: int = PREFILTER_KEEP) -> list:
+    """Cheap Haiku pass that ranks candidate photos by relevance to the
+    requirement and returns the top-`keep` (in original task order). Uses
+    thumbnails only, so payload stays small even at 30+ candidates.
+
+    Returns indices into `candidates` of the photos to keep. On any failure
+    falls back to the first `keep` candidates so the main vision call still
+    runs (degraded but not broken)."""
+    fallback = list(range(min(keep, len(candidates))))
+    if not ANTHROPIC_API_KEY:
+        return fallback
+
+    downloaded = []  # (orig_idx, data, media_type)
+    for i, photo in enumerate(candidates):
+        url = get_photo_thumbnail_url(photo)
+        if not url:
+            continue
+        result = _download_image(url)
+        if result is None:
+            continue
+        data, media_type = result
+        downloaded.append((i, data, media_type))
+
+    if not downloaded:
+        return fallback
+
+    selection_criteria = requirement.get("selection_criteria") or requirement["title"]
+    content = []
+    for label_idx, (_, data, media_type) in enumerate(downloaded, start=1):
+        content.append({"type": "text", "text": f"Photo {label_idx}:"})
+        content.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
+    content.append({"type": "text", "text": (
+        f"Pick the {keep} photos most likely to show: \"{selection_criteria}\".\n\n"
+        f"There are {len(downloaded)} candidates total. Reply with ONLY a comma-separated "
+        f"list of photo numbers, in order of best match first. Example:\n"
+        f"  PICKS: 3, 7, 1, 4, 9\n"
+        f"No other text — just the PICKS line."
+    )})
+
+    payload = {
+        "model": PREFILTER_MODEL,
+        "max_tokens": 80,
+        "messages": [{"role": "user", "content": content}],
+    }
+    # Tag this call as 'prefilter' so api_call_log distinguishes the cheap
+    # Haiku narrowing pass from the expensive Sonnet validation.
+    with set_call_context(purpose="prefilter"):
+        text = _call_anthropic(payload, requirement["id"])
+    if not text or text.startswith("ERROR"):
+        return fallback
+
+    m = re.search(r"PICKS\s*:\s*([\d,\s]+)", text, re.IGNORECASE)
+    if not m:
+        return fallback
+
+    label_indices = []
+    for tok in m.group(1).split(","):
+        tok = tok.strip()
+        if tok.isdigit():
+            label_indices.append(int(tok))
+
+    # Map model's 1-based labels back to original `candidates` indices.
+    orig_indices = []
+    for label in label_indices:
+        if 1 <= label <= len(downloaded):
+            orig_indices.append(downloaded[label - 1][0])
+        if len(orig_indices) >= keep:
+            break
+
+    if not orig_indices:
+        return fallback
+
+    # Restore original task order so downstream logic stays predictable.
+    return sorted(set(orig_indices))
 
 
 def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
@@ -814,6 +952,22 @@ def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
     """
     if not ANTHROPIC_API_KEY:
         return {"result": "SKIP", "reason": "ANTHROPIC_API_KEY not set"}
+
+    # Decide which candidates to send to Sonnet full-res.
+    # - Multi-criterion (SC1/SC2): can't pre-filter (every photo is evidence);
+    #   cap at MULTI_CRITERION_MAX most-recent to stay under the payload limit.
+    # - Single-winner mode with > PREFILTER_THRESHOLD candidates: run a Haiku
+    #   thumbnail pass first to narrow to PREFILTER_KEEP.
+    # - Otherwise (≤ threshold): send everything as-is.
+    if requirement.get("criteria"):
+        if len(candidates) > MULTI_CRITERION_MAX:
+            # Photos are in task order from CompanyCam; assume newest at the
+            # end (typical upload order). Take the tail.
+            candidates = candidates[-MULTI_CRITERION_MAX:]
+    elif len(candidates) > PREFILTER_THRESHOLD:
+        keep_indices = _haiku_prefilter(candidates, requirement)
+        if keep_indices:
+            candidates = [candidates[i] for i in keep_indices]
 
     # Download all candidates (full-res). Skip any that fail — the model can
     # still reason about the ones that succeeded. Photos keep their original
@@ -1094,16 +1248,23 @@ def get_photo_thumbnail_url(photo: dict) -> Optional[str]:
 
 def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
                          progress_callback=None, only_ids=None,
-                         should_cancel=None) -> dict:
+                         should_cancel=None, max_workers: int = 2) -> dict:
     """Run a full compliance check.
 
     `should_cancel`: optional callable returning True when the caller wants
-    to abort the run. It is polled at each requirement boundary — the
-    currently-executing vision call cannot be interrupted mid-flight, so
+    to abort the run. It is polled before each requirement is dispatched.
+    Already-in-flight vision calls cannot be interrupted mid-flight, so
     expect up to one requirement's worth of latency (~5-15s) between
     cancel request and the function returning. The returned report has
     a `cancelled: True` flag when cancellation was honored; results
     array contains only requirements processed before the cancel.
+
+    `max_workers`: how many requirements to vision-check in parallel.
+    Default 2 keeps the burst input-tokens-per-minute under Anthropic's
+    tier-2 ITPM limit (~80K) while still cutting wall time roughly in
+    half versus sequential. We tried 4 and consistently tripped 429s
+    once 2-3 long Sonnet calls overlapped — see report 3 logs from
+    2026-04-23. Set to 1 for deterministic sequential execution.
     """
     # Load photos
     photos_path = TMP_DIR / f"photos_{project_id}.json"
@@ -1143,22 +1304,17 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
         total_applicable = len(only_ids)
     else:
         total_applicable = sum(1 for r in REQUIREMENTS if r["condition"](params))
-    results = []
-    checked = 0
-    cancelled = False
-    for req in REQUIREMENTS:
-        # Cooperative cancellation check — poll before starting each
-        # requirement. The in-flight vision call (if any) already
-        # completed; we stop here without launching the next one.
-        if should_cancel and should_cancel():
-            cancelled = True
-            break
-        applies = req["condition"](params)
 
-        # If only_ids specified, skip requirements not in the set
+    results = []
+    cancelled = False
+
+    # Phase 1 (serial, fast): walk requirements, emit N/A and MISSING
+    # immediately, queue the rest as work for parallel vision checks.
+    vision_work = []  # (req, candidates) pairs for run_vision==True
+    for req in REQUIREMENTS:
+        applies = req["condition"](params)
         if only_ids and req["id"] not in only_ids:
             continue
-
         if not applies:
             results.append({
                 "id": req["id"],
@@ -1171,9 +1327,6 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
             continue
 
         candidates = find_candidate_photos(req, photos, checklist_tasks)
-
-        checked += 1
-
         if not candidates:
             result_entry = {
                 "id": req["id"],
@@ -1184,28 +1337,12 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
                 "optional": req.get("optional", False),
             }
             results.append(result_entry)
-            if progress_callback:
-                progress_callback(result_entry, checked, total_applicable)
+            # progress emitted in Phase 2 alongside vision results so the
+            # client sees a single consistent stream
+            vision_work.append(("__missing__", result_entry))
             continue
 
-        if run_vision:
-            # Single-pass: send all candidates, Haiku selects best and validates in one call
-            import time; time.sleep(1)  # ~19 calls/run — stay well under 240/min limit
-            vision_result = check_candidates_with_vision(candidates, req)
-            result_entry = {
-                "id": req["id"],
-                "title": req["title"],
-                "section": req["section"],
-                "status": vision_result["result"],
-                "reason": vision_result["reason"],
-                "candidates": len(candidates),
-                "photo_urls": vision_result.get("photo_urls", {}),
-                "optional": req.get("optional", False),
-            }
-            results.append(result_entry)
-            if progress_callback:
-                progress_callback(result_entry, checked, total_applicable)
-        else:
+        if not run_vision:
             result_entry = {
                 "id": req["id"],
                 "title": req["title"],
@@ -1216,8 +1353,92 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
                 "optional": req.get("optional", False),
             }
             results.append(result_entry)
-            if progress_callback:
-                progress_callback(result_entry, checked, total_applicable)
+            vision_work.append(("__skip__", result_entry))
+            continue
+
+        vision_work.append((req, candidates))
+
+    # Phase 2: parallel execution of vision checks (and emission of the
+    # already-decided MISSING / FOUND_NO_VISION results) so progress events
+    # arrive in one ordered stream and `checked` counts up cleanly.
+    parent_ctx = getattr(_call_ctx, "attrs", None)
+    progress_lock = _threading.Lock()
+    checked = [0]  # closure-mutable counter
+
+    def _emit(result_entry):
+        if not progress_callback:
+            return
+        with progress_lock:
+            checked[0] += 1
+            progress_callback(result_entry, checked[0], total_applicable)
+
+    def _worker(req, candidates):
+        # Re-bind parent's API-call attribution so api_call_log rows from
+        # this worker thread land against the right report_id.
+        prior = getattr(_call_ctx, "attrs", None)
+        if parent_ctx is not None:
+            _call_ctx.attrs = parent_ctx
+        try:
+            vision_result = check_candidates_with_vision(candidates, req)
+            return {
+                "id": req["id"],
+                "title": req["title"],
+                "section": req["section"],
+                "status": vision_result["result"],
+                "reason": vision_result["reason"],
+                "candidates": len(candidates),
+                "photo_urls": vision_result.get("photo_urls", {}),
+                "optional": req.get("optional", False),
+            }
+        finally:
+            _call_ctx.attrs = prior
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed, CancelledError
+
+    if vision_work:
+        with ThreadPoolExecutor(max_workers=max(1, max_workers)) as ex:
+            futures = {}
+            for marker, payload in vision_work:
+                # Honor cancel BEFORE submitting — already-in-flight workers
+                # will still run to completion, but we don't queue more.
+                if should_cancel and should_cancel():
+                    cancelled = True
+                    break
+                if marker == "__missing__" or marker == "__skip__":
+                    # Pre-decided result; fire its progress event in-line
+                    # so ordering roughly matches requirement order.
+                    _emit(payload)
+                    continue
+                req = marker
+                fut = ex.submit(_worker, req, payload)
+                futures[fut] = req
+
+            # As workers finish, emit progress and append to results. Workers
+            # may complete out of definition order — that's fine; the report
+            # detail page groups by section anyway.
+            for fut in as_completed(futures):
+                if should_cancel and should_cancel() and not cancelled:
+                    cancelled = True
+                    # Cancel any not-yet-started futures (in-flight ones run to
+                    # completion). Their result() will raise CancelledError.
+                    for f in futures:
+                        f.cancel()
+                try:
+                    result_entry = fut.result()
+                except CancelledError:
+                    continue
+                except Exception as e:
+                    req = futures[fut]
+                    result_entry = {
+                        "id": req["id"],
+                        "title": req["title"],
+                        "section": req["section"],
+                        "status": "ERROR",
+                        "reason": f"ERROR: {e}",
+                        "optional": req.get("optional", False),
+                    }
+                results.append(result_entry)
+                _emit(result_entry)
 
     return {
         "project_id": project_id,
