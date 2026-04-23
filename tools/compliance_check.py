@@ -1367,11 +1367,21 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
     once 2-3 long Sonnet calls overlapped — see report 3 logs from
     2026-04-23. Set to 1 for deterministic sequential execution.
     """
-    # Load photos
+    # Load photos. When invoked from the live server (always), the caller
+    # is responsible for fetching photos first. When invoked from the CLI
+    # the user runs companycam_get_project_photos.py beforehand. We raise
+    # FileNotFoundError instead of sys.exit so a server worker thread
+    # surfaces it as a normal exception (turned into an ERROR result row
+    # by run_check_thread) instead of triggering SystemExit + a 502 cascade
+    # from the http.server send_error path.
     photos_path = TMP_DIR / f"photos_{project_id}.json"
     if not photos_path.exists():
-        print(f"ERROR: {photos_path} not found. Run companycam_get_project_photos.py first.", file=sys.stderr)
-        sys.exit(1)
+        msg = (
+            f"{photos_path} not found. "
+            f"Run companycam_get_project_photos.py first."
+        )
+        print(f"ERROR: {msg}", file=sys.stderr)
+        raise FileNotFoundError(msg)
 
     with open(photos_path) as f:
         photos = json.load(f)

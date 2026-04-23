@@ -11,6 +11,21 @@ Usage:
 Crew connects via phone: http://<your-ip>:8080
 """
 
+import sys
+from pathlib import Path
+
+# CRITICAL: must run BEFORE any 'import html' (direct or transitive via
+# http.server). When this file is invoked as `python tools/live_server.py`,
+# Python sets sys.path[0] = tools/ — and our tools/html/ package then
+# shadows stdlib html. Strip the tools/ entry and put project root first
+# so `import html` finds Python's stdlib html (and html.escape) cleanly.
+# See memory: feedback_tools_html_shadowing.md (2026-04-23 prod outage).
+_THIS_DIR = str(Path(__file__).resolve().parent)
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+sys.path[:] = [p for p in sys.path if p != _THIS_DIR]
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 import argparse
 import csv
 import io
@@ -18,16 +33,11 @@ import json
 import os
 import queue
 import socket
-import sys
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from pathlib import Path
 from socketserver import ThreadingMixIn
 from urllib.parse import urlparse, parse_qs
-
-# Add project root to path so we can import tools
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
