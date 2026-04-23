@@ -795,7 +795,7 @@ def _log_api_call(model, input_tokens, output_tokens, duration_ms, req_id):
         print(f"WARNING: api_call_log insert failed: {e}", file=sys.stderr)
 
 
-_MAX_RETRIES = 5
+_MAX_RETRIES = 6       # total window ≈ 5+10+20+40+60+60 = ~195s per call
 _BASE_BACKOFF_S = 5
 _MAX_BACKOFF_S = 60
 
@@ -849,7 +849,13 @@ def _call_anthropic(payload: dict, req_id: str) -> Optional[str]:
                 timeout=60,
             )
             duration_ms = int((time.time() - t0) * 1000)
-            if resp.status_code == 429:
+            # Treat 429 (rate-limit) AND 5xx transient errors (500 internal,
+            # 502 bad gateway, 503 unavailable, 504 gateway timeout, 529
+            # overloaded) as retryable with the same retry-after-aware
+            # backoff. 529 in particular is Anthropic's "overloaded" signal
+            # — means their capacity is saturated and we should back off
+            # longer than a simple rate-limit retry.
+            if resp.status_code == 429 or resp.status_code in (500, 502, 503, 504, 529):
                 # Prefer server hint; fall back to exponential. Always at
                 # least 1s to avoid hammering. Cap so a misconfigured
                 # server can't park us for hours.
@@ -858,7 +864,8 @@ def _call_anthropic(payload: dict, req_id: str) -> Optional[str]:
                 wait = max(1.0, server_wait if server_wait is not None else backoff)
                 wait = min(wait, _MAX_BACKOFF_S)
                 src = "server" if server_wait is not None else "backoff"
-                print(f"  Rate limited on {req_id}, retrying in {wait:.1f}s ({src})...", file=sys.stderr)
+                kind = "Rate limited" if resp.status_code == 429 else f"HTTP {resp.status_code}"
+                print(f"  {kind} on {req_id}, retrying in {wait:.1f}s ({src})...", file=sys.stderr)
                 time.sleep(wait)
                 continue
             resp.raise_for_status()
