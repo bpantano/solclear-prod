@@ -536,16 +536,21 @@ def _report_style_block() -> str:
 
 
 def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, params,
-                         project_id, checklist_ids) -> str:
+                         project_id, checklist_ids, is_cancelled=False) -> str:
     """JavaScript for theme toggle, tabs, and (when interactive) resolve/note/recheck."""
+    # RERUN_PARAMS powers both the "Re-run N failed items" button (needs
+    # rerun_ids) and the "Run full check again" button on cancelled
+    # reports (strips rerun_ids client-side). Populate whenever we have
+    # enough data to kick off SOME rerun action — failed items exist OR
+    # the report was cancelled (so full-rerun is useful).
     rerun_params_js = "null"
-    if is_interactive and failed_ids:
+    if is_interactive and (failed_ids or is_cancelled):
         qs_params = {
             "project_id": project_id,
             "checklist_id": checklist_ids[0] if checklist_ids else "",
             "manufacturer": params.get("manufacturer", "SolarEdge") or "SolarEdge",
             "project_state": "",
-            "rerun_ids": ",".join(failed_ids),
+            "rerun_ids": ",".join(failed_ids) if failed_ids else "",
         }
         rerun_params_js = json.dumps(qs_params)
 
@@ -625,6 +630,17 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
     function rerunFailed() {{
       if (!RERUN_PARAMS) return;
       const qs = new URLSearchParams(RERUN_PARAMS);
+      window.location.href = "/?rerun=" + encodeURIComponent(qs.toString());
+    }}
+
+    // Full re-run for cancelled reports: same params but WITHOUT rerun_ids,
+    // so /start runs every applicable requirement from scratch. Button is
+    // only rendered on reports where status=='cancelled' (see CTAs block).
+    function rerunFull() {{
+      if (!RERUN_PARAMS) return;
+      if (!confirm('Run the full compliance check again from scratch? This will re-run every requirement, not just the failed ones.')) return;
+      const qs = new URLSearchParams(RERUN_PARAMS);
+      qs.delete('rerun_ids');
       window.location.href = "/?rerun=" + encodeURIComponent(qs.toString());
     }}
 
@@ -860,9 +876,17 @@ def generate_html(report: dict, project: dict) -> str:
     ]
 
     # CTAs
+    # Cancelled reports get an extra "Run full check again" button because
+    # "Re-run failed items" only covers the FAILURES from the partial set —
+    # it doesn't cover requirements that were never attempted due to the
+    # cancel. Completed reports don't need this (re-running a complete
+    # report from scratch is rare and wasteful).
+    is_cancelled = report.get("status") == "cancelled"
     ctas = []
     if cc_url:
         ctas.append(f'<a href="{_esc(cc_url)}" target="_blank" class="btn btn-primary">Open in CompanyCam ↗</a>')
+    if is_cancelled and is_interactive:
+        ctas.append('<button class="btn btn-ghost" onclick="rerunFull()">Run full check again</button>')
     if failed_ids:
         ctas.append(f'<button class="btn btn-ghost" onclick="rerunFailed()">Re-run {len(failed_ids)} failed item{"s" if len(failed_ids) != 1 else ""}</button>')
     ctas_html = "".join(ctas)
@@ -881,7 +905,7 @@ def generate_html(report: dict, project: dict) -> str:
 
     style = DESIGN_TOKENS_CSS + _report_style_block()
     script = _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, params,
-                                  project_id, checklist_ids)
+                                  project_id, checklist_ids, is_cancelled=is_cancelled)
 
     return f"""<!DOCTYPE html>
 <html lang="en">

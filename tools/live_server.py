@@ -2165,6 +2165,11 @@ class LiveHandler(BaseHTTPRequestHandler):
                     # checklist_ids is a JSONB array on the reports row
                     # (migration 004). Pre-migration / pre-fix rows return [].
                     "checklist_ids": db_report.get("checklist_ids") or [],
+                    # status: 'complete' | 'cancelled' (from reports.status).
+                    # Used by the report renderer to show a "Run full check
+                    # again" CTA only on cancelled reports — completed ones
+                    # don't need it (Re-run failed items is the right UX).
+                    "status": db_report.get("status"),
                     "db_report_id": int(report_id),
                 }
                 project_id = db_report["companycam_id"]
