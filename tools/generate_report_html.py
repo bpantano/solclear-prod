@@ -209,9 +209,12 @@ def render_requirement(req: dict, is_interactive: bool, checklist_id: str, proje
             _render_note(n) for n in notes_thread
         ) + '</div>'
 
-    # Actions (only for interactive reports, only on failures).
+    # Actions — available on every interactive non-N/A row, including
+    # PASS rows. Reviewers need to be able to flag a PASS that looks
+    # wrong (note + dev note) or challenge it (re-check). "Mark resolved"
+    # is the only failure-only action since a PASS has nothing to resolve.
     actions_html = ""
-    if is_interactive and is_failure:
+    if is_interactive and status != "N/A":
         # Deep-link to the CompanyCam checklist (no direct task-level URL,
         # so we link to the checklist for the project).
         cc_task_url = (
@@ -222,12 +225,25 @@ def render_requirement(req: dict, is_interactive: bool, checklist_id: str, proje
             f'<a href="{cc_task_url}" target="_blank" class="btn btn-sm btn-ghost" onclick="event.stopPropagation()">Open in CompanyCam ↗</a>'
             if cc_task_url else ""
         )
-        resolve_label = "Undo resolve" if is_resolved else "Mark resolved"
+        # Resolve button only makes sense when something needs resolving.
+        resolve_btn = ""
+        if is_failure:
+            resolve_label = "Undo resolve" if is_resolved else "Mark resolved"
+            resolve_btn = (
+                f'<button class="btn btn-sm btn-subtle" data-role="resolve-btn" '
+                f'onclick="event.stopPropagation();toggleResolved(this, \'{_esc(code)}\')">{resolve_label}</button>'
+            )
+        # Dev note button is gated to reviewer/admin/superadmin via the
+        # .reviewer-plus class — same pattern used elsewhere. Crew never
+        # sees this button server-rendered (we'd ideally check role here)
+        # but the report HTML is currently role-agnostic, so we use the
+        # CSS class which is hidden by default + revealed by loadMe().
         actions_html = f'''
       <div class="req-actions">
         {cc_btn}
-        <button class="btn btn-sm btn-subtle" data-role="resolve-btn" onclick="event.stopPropagation();toggleResolved(this, '{_esc(code)}')">{resolve_label}</button>
-        <button class="btn btn-sm btn-subtle" onclick="event.stopPropagation();openNoteEditor(this, '{_esc(code)}')">Add note</button>
+        {resolve_btn}
+        <button class="btn btn-sm btn-subtle" onclick="event.stopPropagation();openNoteEditor(this, '{_esc(code)}', 'public')">Add note</button>
+        <button class="btn btn-sm btn-subtle reviewer-plus" style="display:none;" onclick="event.stopPropagation();openNoteEditor(this, '{_esc(code)}', 'dev')">Flag bug</button>
         <button class="btn btn-sm btn-primary" onclick="event.stopPropagation();recheckItem(this, '{_esc(code)}')">Re-check</button>
       </div>'''
 
@@ -371,7 +387,20 @@ def _report_style_block() -> str:
     .btn-ghost:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-strong); }
     .btn-subtle { background: var(--bg-subtle); color: var(--text); border: none; }
     .btn-subtle:hover:not(:disabled) { background: var(--bg-hover); }
+    /* btn-warning reserved for dev-note / bug-flagging actions — amber
+       to signal "this is a diagnostic / internal channel" separate from
+       the primary (accent) and ghost styles. */
+    .btn-warning { background: var(--warning); color: var(--text-inverse); }
+    .btn-warning:hover:not(:disabled) { filter: brightness(0.92); }
     .btn-sm { min-height: 32px; padding: 6px 12px; font-size: var(--text-xs); }
+
+    /* Dev-note editor: warning-toned border so the author knows this
+       note won't be shown to crew. Helps prevent accidentally filing
+       a bug note in the wrong channel. */
+    .note-editor-dev textarea {
+      border-color: var(--warning) !important;
+      background: var(--warning-subtle);
+    }
 
     /* Tabs */
     .report-tabs {
@@ -640,6 +669,28 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
       }}
       updateThemeIcon();
     }})();
+
+    // ── Role-based visibility ──
+    // The report page is standalone (not part of the SPA) so it needs
+    // its own /api/me fetch to reveal reviewer-plus / admin-write /
+    // superadmin-only elements. Mirrors the SPA's _applyRoleVisibility.
+    // Without this, the "Flag bug" dev-note button would be forever
+    // hidden even for reviewers/admins/superadmins.
+    (async function() {{
+      try {{
+        const r = await fetch('/api/me');
+        if (!r.ok) return;
+        const me = await r.json();
+        const role = me && me.role;
+        const visible = [];
+        if (role === 'superadmin') visible.push('.superadmin-only', '.admin-write', '.reviewer-plus');
+        else if (role === 'admin') visible.push('.admin-write', '.reviewer-plus');
+        else if (role === 'reviewer') visible.push('.reviewer-plus');
+        visible.forEach(sel => {{
+          document.querySelectorAll(sel).forEach(el => {{ el.style.display = ''; }});
+        }});
+      }} catch (e) {{ /* non-critical */ }}
+    }})();
     function toggleTheme() {{
       const html = document.documentElement;
       const isDark = html.getAttribute('data-theme') === 'dark';
@@ -784,17 +835,28 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
     // note → server returns the full refreshed thread → we replace the
     // thread DOM with the new one. Each author gets their own row; no
     // edit-in-place, no delete. Follow-ups are just another Save click.
-    function openNoteEditor(btn, reqCode) {{
+    //
+    // `visibility` is 'public' (crew + reviewer + admin all see it) or
+    // 'dev' (reviewer+ only — bug ticket against Solclear itself).
+    // Dev notes have amber styling and a triage pill to distinguish from
+    // public notes.
+    function openNoteEditor(btn, reqCode, visibility) {{
       if (!IS_INTERACTIVE || !REPORT_ID) return;
+      visibility = visibility || 'public';
       const row = btn.closest('.requirement');
       const existing = row.querySelector('.note-editor');
       if (existing) {{ existing.remove(); return; }}
+      const isDev = visibility === 'dev';
+      const placeholder = isDev
+        ? 'Describe the Solclear issue — wrong verdict, bad photo pick, confusing UI, etc. Only you and the dev team see this.'
+        : 'Add a note for the crew or reviewer…';
+      const submitLabel = isDev ? 'Flag bug' : 'Post note';
       const editor = document.createElement('div');
-      editor.className = 'note-editor';
+      editor.className = 'note-editor' + (isDev ? ' note-editor-dev' : '');
       editor.innerHTML =
-        '<textarea placeholder="Add a note for the crew or reviewer…"></textarea>' +
+        '<textarea placeholder="' + placeholder + '"></textarea>' +
         '<div class="note-editor-actions">' +
-          '<button class="btn btn-sm btn-primary">Post note</button>' +
+          '<button class="btn btn-sm ' + (isDev ? 'btn-warning' : 'btn-primary') + '">' + submitLabel + '</button>' +
           '<button class="btn btn-sm btn-subtle">Cancel</button>' +
         '</div>';
       const actions = row.querySelector('.req-actions');
@@ -810,7 +872,7 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
           const r = await fetch('/api/report/' + REPORT_ID + '/item/' + reqCode + '/note', {{
             method: 'POST',
             headers: {{'Content-Type': 'application/json'}},
-            body: JSON.stringify({{note: ta.value, visibility: 'public'}})
+            body: JSON.stringify({{note: ta.value, visibility: visibility}})
           }});
           const data = await r.json();
           if (data.error) throw new Error(data.error);
