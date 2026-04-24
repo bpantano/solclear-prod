@@ -740,6 +740,14 @@ EMBEDDED_HTML = """<!DOCTYPE html>
          a "ADMIN" header that doesn't quite fit. The .reviewer-plus
          class still keeps it hidden from crew. -->
     <div id="sidebarRoleLabel" class="sidebar-section-label reviewer-plus" style="display:none;">Admin</div>
+    <!-- Notifications first under the role section — most-frequently-
+         used surface for reviewer/admin/superadmin during dry runs and
+         once crews go live. Same toggleBellPanel as the mobile bell. -->
+    <button class="nav-item" id="sidebarBellBtn" onclick="toggleBellPanel(event)" title="Notifications">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      <span style="flex:1;">Notifications</span>
+      <span id="sidebarBellBadge" style="display:none;background:var(--danger);color:#fff;font-size:10px;font-weight:700;min-width:18px;height:18px;padding:0 5px;border-radius:9px;align-items:center;justify-content:center;line-height:1;">0</span>
+    </button>
     <button class="nav-item reviewer-plus" data-nav="orgs" onclick="navigate('orgs')" style="display:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1"/><path d="M9 8h1M9 12h1M9 16h1M14 8h1M14 12h1M14 16h1M3 21h18"/></svg>
       Organizations
@@ -751,16 +759,6 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <button class="nav-item superadmin-only" data-nav="costs" onclick="navigate('costs')" style="display:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
       Costs
-    </button>
-
-    <!-- Notifications nav item — sidebar equivalent of the mobile bell.
-         Same dropdown panel is reused; toggleBellPanel positions it
-         relative to whichever element triggered it. Shows the unread
-         count inline as part of the label. -->
-    <button class="nav-item" id="sidebarBellBtn" onclick="toggleBellPanel(event)" title="Notifications">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-      <span style="flex:1;">Notifications</span>
-      <span id="sidebarBellBadge" style="display:none;background:var(--danger);color:#fff;font-size:10px;font-weight:700;min-width:18px;height:18px;padding:0 5px;border-radius:9px;align-items:center;justify-content:center;line-height:1;">0</span>
     </button>
 
     <div class="sidebar-footer">
