@@ -601,6 +601,8 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._api_me(session)
         elif path == "/api/platform_status":
             self._api_platform_status(session)
+        elif path == "/api/my_active_check":
+            self._api_my_active_check(session)
         elif path == "/api/admin/cost/summary":
             if not self._require_role(session, ("superadmin",)):
                 return
@@ -1755,6 +1757,79 @@ class LiveHandler(BaseHTTPRequestHandler):
             return
         with _anthropic_status_lock:
             self._send_json(dict(_anthropic_status))
+
+    def _api_my_active_check(self, session):
+        """Return the logged-in user's active check state so the home
+        page can show a 'your check is still running / just completed'
+        banner even after they disconnected and came back later.
+
+        Returns:
+          - running: most recent report for this user with status='running',
+            or null if none. Lets us show 'view progress →' on home.
+          - recently_completed: most recent report with status in
+            ('complete', 'cancelled') whose completed_at is within the
+            last 30 min, or null. Gives us the 'view report →' banner
+            for checks that finished while they were offline. Frontend
+            stores dismissed report_ids in localStorage so the banner
+            doesn't re-nag after the user has seen it once.
+
+        No-op for unauthenticated; returns 401. Designed to be cheap
+        enough to call on every home page load."""
+        if not session:
+            self._send_json({"error": "Not authenticated"}, 401)
+            return
+        user_id = session.get("user_id")
+        if not user_id:
+            self._send_json({"running": None, "recently_completed": None})
+            return
+        try:
+            running = fetch_one("""
+                SELECT r.id AS db_report_id,
+                       p.companycam_id AS project_id,
+                       p.name AS project_name,
+                       r.started_at,
+                       r.total_required
+                FROM reports r
+                JOIN projects p ON p.id = r.project_id
+                WHERE r.run_by = %s AND r.status = 'running'
+                ORDER BY r.started_at DESC
+                LIMIT 1
+            """, (user_id,))
+
+            recent = fetch_one("""
+                SELECT r.id AS db_report_id,
+                       p.companycam_id AS project_id,
+                       p.name AS project_name,
+                       r.status,
+                       r.completed_at,
+                       r.total_passed, r.total_failed,
+                       r.total_missing, r.total_needs_review, r.total_required
+                FROM reports r
+                JOIN projects p ON p.id = r.project_id
+                WHERE r.run_by = %s
+                  AND r.status IN ('complete', 'cancelled')
+                  AND r.completed_at > NOW() - INTERVAL '30 minutes'
+                ORDER BY r.completed_at DESC
+                LIMIT 1
+            """, (user_id,))
+
+            def _iso(row, *keys):
+                if not row:
+                    return row
+                for k in keys:
+                    if row.get(k) and hasattr(row[k], "isoformat"):
+                        row[k] = row[k].isoformat()
+                return row
+
+            self._send_json({
+                "running": _iso(running, "started_at"),
+                "recently_completed": _iso(recent, "completed_at"),
+            })
+        except Exception as e:
+            # Non-critical endpoint — on any DB hiccup return empty
+            # state rather than a 500. The banner is just nice-to-have.
+            print(f"my_active_check failed: {e}", file=sys.stderr)
+            self._send_json({"running": None, "recently_completed": None})
 
     # ── Impersonation ────────────────────────────────────────────────────────
 

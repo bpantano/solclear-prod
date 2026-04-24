@@ -778,6 +778,31 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 
   <!-- Landing page -->
   <div id="homePage" class="step active" style="display:block;">
+    <!-- Active-check banner — only shown when the logged-in user has a
+         check currently running or recently completed. Driven by
+         /api/my_active_check + localStorage dismissal (see applyActiveCheckBanners
+         in the script block). Hidden by default; fetchActiveChecks fills
+         in the href/text and reveals it. -->
+    <a id="runningCheckBanner" href="#" style="display:none;align-items:center;gap:12px;padding:12px 16px;background:var(--accent-subtle);color:var(--accent-text);border:1px solid var(--accent);border-radius:10px;text-decoration:none;margin-bottom:14px;font-size:var(--text-sm);font-weight:500;">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      <div style="flex:1;min-width:0;line-height:1.35;">
+        <strong>Your check is still running</strong>
+        <div id="runningCheckDetail" style="opacity:0.85;font-weight:400;"></div>
+      </div>
+      <span style="font-weight:600;white-space:nowrap;">View progress →</span>
+    </a>
+
+    <div id="completedCheckBanner" style="display:none;align-items:center;gap:12px;padding:12px 16px;background:var(--success-subtle);color:var(--success-text);border:1px solid var(--success);border-radius:10px;margin-bottom:14px;font-size:var(--text-sm);font-weight:500;">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+      <a id="completedCheckLink" href="#" style="flex:1;min-width:0;line-height:1.35;color:inherit;text-decoration:none;">
+        <strong>Your check just completed</strong>
+        <div id="completedCheckDetail" style="opacity:0.85;font-weight:400;"></div>
+      </a>
+      <button onclick="dismissCompletedCheckBanner(event)" aria-label="Dismiss" style="background:none;border:none;color:inherit;cursor:pointer;padding:4px;opacity:0.6;flex-shrink:0;" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.6">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+
     <div style="padding:4px 0 20px;">
       <div style="font-size:15px;font-weight:600;color:var(--text);">Welcome to Solclear</div>
       <div style="font-size:12px;color:var(--text-muted);">Solar compliance, simplified.</div>
@@ -2576,6 +2601,76 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       } catch (e) { /* silently ignore — non-critical */ }
     }
     loadMe();
+    fetchActiveChecks();  // populate running / recently-completed banners
+
+    // Home page banners: "your check is still running" / "your check
+    // completed" — both driven by /api/my_active_check. Keeps a user who
+    // disconnected mid-check from thinking their work was lost.
+    //
+    // Dismissal for the completed banner uses localStorage so it doesn't
+    // re-nag after the user has seen it once. Running banner is not
+    // dismissible — it's load-bearing info.
+    async function fetchActiveChecks() {
+      try {
+        const r = await fetch('/api/my_active_check');
+        if (!r.ok) return;
+        const data = await r.json();
+        _applyActiveCheckBanners(data);
+      } catch (e) { /* silently ignore */ }
+    }
+
+    function _applyActiveCheckBanners(data) {
+      const running = data && data.running;
+      const rb = document.getElementById('runningCheckBanner');
+      if (running && rb) {
+        rb.href = '/report/' + running.db_report_id;
+        const detail = document.getElementById('runningCheckDetail');
+        if (detail) {
+          const name = running.project_name || ('Project ' + running.project_id);
+          detail.textContent = name + ' — click to see current progress';
+        }
+        rb.style.display = 'flex';
+      } else if (rb) {
+        rb.style.display = 'none';
+      }
+
+      const completed = data && data.recently_completed;
+      const cb = document.getElementById('completedCheckBanner');
+      if (completed && cb) {
+        const dismissKey = 'dismissed_completed_' + completed.db_report_id;
+        if (localStorage.getItem(dismissKey)) {
+          cb.style.display = 'none';
+          return;
+        }
+        const link = document.getElementById('completedCheckLink');
+        if (link) link.href = '/report/' + completed.db_report_id;
+        const detail = document.getElementById('completedCheckDetail');
+        if (detail) {
+          const name = completed.project_name || ('Project ' + completed.project_id);
+          const cancelled = completed.status === 'cancelled';
+          const passed = completed.total_passed || 0;
+          const total = completed.total_required || 0;
+          const result = cancelled
+            ? `${name} — cancelled with ${passed}/${total} completed`
+            : `${name} — ${passed}/${total} passed`;
+          detail.textContent = result;
+        }
+        cb.dataset.reportId = completed.db_report_id;
+        cb.style.display = 'flex';
+      } else if (cb) {
+        cb.style.display = 'none';
+      }
+    }
+
+    function dismissCompletedCheckBanner(ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const cb = document.getElementById('completedCheckBanner');
+      if (!cb) return;
+      const id = cb.dataset.reportId;
+      if (id) localStorage.setItem('dismissed_completed_' + id, '1');
+      cb.style.display = 'none';
+    }
 
     // Refresh Anthropic platform status every 60s so the banner appears/
     // disappears in near real-time without a page reload. Errors are

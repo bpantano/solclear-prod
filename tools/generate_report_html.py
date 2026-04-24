@@ -844,8 +844,15 @@ def generate_html(report: dict, project: dict) -> str:
     # "Ready for submission" only when there's nothing left needing a human.
     # The summary-fail rail covers both hard failures and review items —
     # they both block ready state, though only hard failures are red.
+    # Running reports take precedence over the usual labels — no point
+    # telling a user their check is "ready for submission" when half
+    # the requirements haven't run yet.
+    is_running_status = report.get("status") == "running"
     summary_class = "summary-pass" if n_attention == 0 else "summary-fail"
-    if n_fail + n_missing + n_error > 0:
+    if is_running_status:
+        summary_label = "CHECK IN PROGRESS"
+        summary_class = "summary-fail"  # gray/amber rail feels right while running
+    elif n_fail + n_missing + n_error > 0:
         summary_label = "ACTION REQUIRED"
     elif n_review > 0:
         summary_label = "REVIEW REQUIRED"
@@ -907,11 +914,20 @@ def generate_html(report: dict, project: dict) -> str:
     script = _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, params,
                                   project_id, checklist_ids, is_cancelled=is_cancelled)
 
+    # Auto-refresh while a check is still running so a user who reconnected
+    # mid-run sees partial results accumulate without manual reloads. 10s
+    # balances "catches new requirements quickly" against "doesn't hammer
+    # the server." Stops once status flips to complete/cancelled — no
+    # refresh needed on a frozen report.
+    is_running = report.get("status") == "running"
+    refresh_meta = '<meta http-equiv="refresh" content="10">' if is_running else ""
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  {refresh_meta}
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>M1 Compliance — {_esc(name)}</title>
   <style>{style}</style>
@@ -937,7 +953,7 @@ def generate_html(report: dict, project: dict) -> str:
           <text class="ring-text" x="22" y="22">{pct}%</text>
         </svg>
         <div class="summary-text">
-          <div class="summary-headline">{n_pass} of {n_total} passed · {summary_label}</div>
+          <div class="summary-headline">{(f"{n_pass} passed so far · " + summary_label + " · auto-refreshing") if is_running_status else (f"{n_pass} of {n_total} passed · " + summary_label)}</div>
           <div class="summary-project">{_esc(name)}{(' — ' + _esc(addr_str)) if addr_str else ''}</div>
           <div class="summary-chips">{chips_html}</div>
         </div>
