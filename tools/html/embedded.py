@@ -1518,6 +1518,11 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       if (n === 'home') {
         document.getElementById('homePage').style.display = 'block';
         loadHomeReports();
+        // Refresh "your check is still running / just completed" banners
+        // every time the user lands on home — otherwise a user who
+        // started a check then navigated away wouldn't see the banner
+        // until the next page load. Cheap (~one DB query, no fan-out).
+        fetchActiveChecks();
         return;
       }
       if (n === 'reports') {
