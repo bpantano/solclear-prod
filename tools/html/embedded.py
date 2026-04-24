@@ -796,19 +796,21 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       </button>
     </div>
 
-    <!-- Bell dropdown panel — populated by refreshBellPanel(). Hidden
-         by default; toggleBellPanel() flips display + closes on outside
-         click. Positioned absolute under the bell. -->
-    <div id="bellPanel" style="display:none;position:absolute;top:54px;right:8px;width:360px;max-width:calc(100vw - 16px);max-height:480px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-lg);z-index:50;overflow:hidden;">
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border);">
-        <strong style="font-size:var(--text-sm);">Notifications</strong>
-        <button onclick="markAllNotificationsRead()" id="bellMarkAll" style="background:none;border:none;color:var(--accent);font-size:var(--text-xs);font-weight:600;cursor:pointer;padding:4px 6px;font-family:inherit;">Mark all read</button>
-      </div>
-      <div id="bellList" style="overflow-y:auto;max-height:420px;">
-        <div style="padding:24px 16px;text-align:center;color:var(--text-muted);font-size:var(--text-sm);">Loading…</div>
-      </div>
-    </div>
   </header>
+
+  <!-- Bell dropdown panel — body-level so it's never trapped in any
+       ancestor's stacking context. position:fixed anchors it to the
+       viewport. toggleBellPanel() flips display + repositions relative
+       to whichever bell button (sidebar or top-bar) was clicked. -->
+  <div id="bellPanel" style="display:none;position:fixed;top:60px;right:12px;width:360px;max-width:calc(100vw - 24px);max-height:480px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-lg);z-index:200;overflow:hidden;flex-direction:column;">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border);">
+      <strong style="font-size:var(--text-sm);">Notifications</strong>
+      <button onclick="markAllNotificationsRead()" id="bellMarkAll" style="background:none;border:none;color:var(--accent);font-size:var(--text-xs);font-weight:600;cursor:pointer;padding:4px 6px;font-family:inherit;">Mark all read</button>
+    </div>
+    <div id="bellList" style="overflow-y:auto;max-height:420px;">
+      <div style="padding:24px 16px;text-align:center;color:var(--text-muted);font-size:var(--text-sm);">Loading…</div>
+    </div>
+  </div>
 
   <main class="main-content">
 
