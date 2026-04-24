@@ -749,6 +749,16 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       Costs
     </button>
 
+    <!-- Notifications nav item — sidebar equivalent of the mobile bell.
+         Same dropdown panel is reused; toggleBellPanel positions it
+         relative to whichever element triggered it. Shows the unread
+         count inline as part of the label. -->
+    <button class="nav-item" id="sidebarBellBtn" onclick="toggleBellPanel(event)" title="Notifications">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      <span style="flex:1;">Notifications</span>
+      <span id="sidebarBellBadge" style="display:none;background:var(--danger);color:#fff;font-size:10px;font-weight:700;min-width:18px;height:18px;padding:0 5px;border-radius:9px;align-items:center;justify-content:center;line-height:1;">0</span>
+    </button>
+
     <div class="sidebar-footer">
       <button class="nav-item" onclick="toggleTheme()" id="sidebarThemeBtn">
         <svg id="sidebarThemeIconSun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
@@ -2677,14 +2687,20 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     setInterval(refreshBellBadge, 60000);
 
     function _setBellBadge(n) {
-      const badge = document.getElementById('bellBadge');
-      if (!badge) return;
-      if (!n || n <= 0) {
-        badge.style.display = 'none';
-      } else {
-        badge.textContent = n > 99 ? '99+' : String(n);
-        badge.style.display = 'inline-flex';
-      }
+      // Two bell entry points (mobile top bar + desktop sidebar nav) so
+      // sync both badges. Either may be hidden by the responsive layout
+      // — that's fine, we update text either way.
+      const text = n > 99 ? '99+' : String(n || 0);
+      ['bellBadge', 'sidebarBellBadge'].forEach(id => {
+        const badge = document.getElementById(id);
+        if (!badge) return;
+        if (!n || n <= 0) {
+          badge.style.display = 'none';
+        } else {
+          badge.textContent = text;
+          badge.style.display = 'inline-flex';
+        }
+      });
     }
 
     async function toggleBellPanel(ev) {
@@ -2695,18 +2711,49 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       panel.style.display = opening ? 'flex' : 'none';
       panel.style.flexDirection = 'column';
       if (opening) {
+        // Position the panel near whichever button was clicked. On
+        // desktop that's the sidebar nav button; on mobile it's the
+        // top-bar bell. Falls back to fixed top-right if we can't find
+        // a click target (e.g. programmatic open).
+        _positionBellPanel(panel, ev && ev.currentTarget);
         await refreshBellPanel();
-        // Click-outside to close — installed only while open
+        // Click-outside to close — installed only while open. Also
+        // ignores clicks on either bell button so toggling works.
         setTimeout(() => {
           const handler = (e) => {
-            if (!panel.contains(e.target) && e.target.id !== 'bellBtn' &&
-                !document.getElementById('bellBtn').contains(e.target)) {
+            const sidebarBtn = document.getElementById('sidebarBellBtn');
+            const topbarBtn = document.getElementById('bellBtn');
+            const onBell = (sidebarBtn && sidebarBtn.contains(e.target)) ||
+                           (topbarBtn && topbarBtn.contains(e.target));
+            if (!panel.contains(e.target) && !onBell) {
               panel.style.display = 'none';
               document.removeEventListener('click', handler);
             }
           };
           document.addEventListener('click', handler);
         }, 0);
+      }
+    }
+
+    function _positionBellPanel(panel, btn) {
+      // Reset any prior positioning
+      panel.style.position = 'fixed';
+      panel.style.top = '54px';
+      panel.style.right = '8px';
+      panel.style.left = 'auto';
+      if (!btn) return;
+      const rect = btn.getBoundingClientRect();
+      // If the button is in the desktop sidebar (left side of viewport),
+      // open the panel to the right of it. Otherwise (mobile top bar),
+      // anchor to top-right under the bell.
+      if (rect.right < window.innerWidth / 2) {
+        panel.style.left = (rect.right + 8) + 'px';
+        panel.style.right = 'auto';
+        panel.style.top = Math.max(8, rect.top) + 'px';
+      } else {
+        panel.style.top = (rect.bottom + 6) + 'px';
+        panel.style.right = Math.max(8, window.innerWidth - rect.right) + 'px';
+        panel.style.left = 'auto';
       }
     }
 
