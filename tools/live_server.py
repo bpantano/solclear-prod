@@ -669,7 +669,7 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._api_org_detail(oid)
         elif path.startswith("/report/"):
             pid = path.split("/")[2]
-            self._serve_report(pid)
+            self._serve_report(pid, session)
         elif path == "/start":
             self._start_check(qs, session)
         elif path == "/stream":
@@ -2212,11 +2212,16 @@ class LiveHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 
-    def _serve_report(self, report_id):
-        """Generate and serve a static HTML report from Postgres or .tmp/ fallback."""
+    def _serve_report(self, report_id, session=None):
+        """Generate and serve a static HTML report from Postgres or .tmp/ fallback.
+
+        `session` is needed to filter dev notes — reviewers and above see
+        the whole thread; crew only sees public notes. When falling back
+        to the .tmp/ legacy path (no DB), notes aren't available anyway."""
         report = None
         project = {}
         project_id = report_id  # May be DB report ID or CC project ID
+        viewer_role = (session or {}).get("role") or "crew"
 
         # Try loading from Postgres first (report_id could be a DB ID)
         try:
@@ -2228,7 +2233,8 @@ class LiveHandler(BaseHTTPRequestHandler):
                 # Load requirement results (including interactive fields).
                 # LEFT JOIN on users so resolver name comes along when present.
                 results = fetch_all("""
-                    SELECT rr.status, rr.reason, rr.photo_urls, rr.candidates,
+                    SELECT rr.id AS req_result_id,
+                           rr.status, rr.reason, rr.photo_urls, rr.candidates,
                            rr.resolved_at, rr.resolved_by, rr.notes,
                            u.full_name AS resolved_by_name,
                            req.code as id, req.title, req.section, req.is_optional as optional
@@ -2241,6 +2247,21 @@ class LiveHandler(BaseHTTPRequestHandler):
                 for r in results:
                     if r.get("resolved_at"):
                         r["resolved_at"] = r["resolved_at"].isoformat()
+                # Attach the notes thread for each requirement result.
+                # list_notes_for_req_result filters dev notes by viewer role
+                # (so crew never sees them), returns oldest-first.
+                from tools.notes_db import list_notes_for_req_result
+                for r in results:
+                    rr_id = r.get("req_result_id")
+                    if rr_id:
+                        thread = list_notes_for_req_result(rr_id, viewer_role)
+                        for n in thread:
+                            for k in ("created_at", "resolved_at"):
+                                if n.get(k) and hasattr(n[k], "isoformat"):
+                                    n[k] = n[k].isoformat()
+                        r["notes_thread"] = thread
+                    else:
+                        r["notes_thread"] = []
                 report = {
                     "project_id": db_report["companycam_id"],
                     "params": {
@@ -2373,20 +2394,58 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._send_json({"error": str(e)}, 500)
 
     def _api_report_item_note(self, report_id, req_code, body, session):
-        """Save a free-text note on a report item."""
+        """Append a note to a report item's comment thread.
+
+        Notes are immutable once posted (comment-thread style, not edit-
+        in-place). Callers POST {note: "text", visibility: "public"|"dev"}.
+        Visibility defaults to 'public'. Dev notes require the caller's
+        role to be reviewer/admin/superadmin (can_file_dev_note).
+
+        Returns the created note + the full refreshed thread so the UI
+        can re-render without a second fetch."""
         row, err = self._load_report_item(report_id, req_code, session)
         if err:
             status = 404 if err == "Report item not found" else (403 if err == "Forbidden" else 500)
             self._send_json({"error": err}, status)
             return
         try:
-            data = json.loads(body) if body else {}
-            note = (data.get("note") or "").strip() or None
-            updated = execute_returning(
-                "UPDATE requirement_results SET notes = %s WHERE id = %s RETURNING notes",
-                (note, row["id"]),
+            from tools.notes_db import (
+                add_note, list_notes_for_req_result,
+                can_file_dev_note,
             )
-            self._send_json(updated or {})
+            data = json.loads(body) if body else {}
+            note_body = (data.get("note") or "").strip()
+            if not note_body:
+                self._send_json({"error": "Note body is empty"}, 400)
+                return
+            visibility = data.get("visibility") or "public"
+            if visibility not in ("public", "dev"):
+                self._send_json({"error": "Invalid visibility"}, 400)
+                return
+            role = session.get("role") or ""
+            if visibility == "dev" and not can_file_dev_note(role):
+                self._send_json({"error": "Forbidden"}, 403)
+                return
+
+            created = add_note(
+                report_id=int(report_id),
+                requirement_result_id=row["id"],
+                author_user_id=session.get("user_id"),
+                visibility=visibility,
+                body=note_body,
+            )
+            thread = list_notes_for_req_result(row["id"], role)
+            # Serialize timestamps for JSON
+            def _iso(n):
+                for k in ("created_at", "resolved_at"):
+                    if n.get(k) and hasattr(n[k], "isoformat"):
+                        n[k] = n[k].isoformat()
+                return n
+            self._send_json({
+                "ok": True,
+                "created": _iso(dict(created)),
+                "notes": [_iso(dict(n)) for n in thread],
+            })
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 
@@ -2453,6 +2512,11 @@ class LiveHandler(BaseHTTPRequestHandler):
                     row["id"],
                 ),
             )
+            # Clear public notes — they were written about the prior
+            # verdict and may no longer apply. Dev notes (bug reports
+            # about Solclear itself) persist across rechecks.
+            from tools.notes_db import clear_public_notes_for_req_result
+            clear_public_notes_for_req_result(row["id"])
             # Recompute the report summary so totals stay correct
             self._recompute_report_summary(report_id)
             self._send_json(updated or {})

@@ -114,6 +114,49 @@ def _esc(s) -> str:
             .replace('"', "&quot;").replace("'", "&#39;"))
 
 
+def _format_note_timestamp(iso_ts: str) -> str:
+    """Turn an ISO timestamp into a friendly 'Apr 24, 2:15 PM' format.
+    Falls back to the raw string if parsing fails — never explodes,
+    since this runs during HTML render and shouldn't break a report."""
+    if not iso_ts:
+        return ""
+    try:
+        from datetime import datetime
+        dt = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+        return dt.strftime("%b %-d, %-I:%M %p")
+    except Exception:
+        return iso_ts
+
+
+def _render_note(note: dict) -> str:
+    """Render one note row in the comment thread. Notes are immutable, so
+    there's no edit/delete UI — just author, timestamp, and body.
+
+    Dev-visibility notes get the `note-dev` modifier class so reviewers
+    can distinguish their bug-tracker comments from public crew notes.
+    A pill shows the dev-status ('open', 'acknowledged', 'corrected')
+    when present."""
+    author = note.get("author_name") or note.get("author_email") or "Unknown author"
+    when = _format_note_timestamp(note.get("created_at", ""))
+    body = _esc(note.get("body", ""))
+    visibility = note.get("visibility") or "public"
+    visibility_cls = "note-dev" if visibility == "dev" else "note-public"
+    dev_pill = ""
+    if visibility == "dev":
+        status = note.get("dev_status") or "open"
+        dev_pill = f'<span class="note-dev-pill note-dev-{_esc(status)}">{_esc(status.upper())}</span>'
+    return (
+        f'<div class="req-note {visibility_cls}">'
+        f'<div class="req-note-meta">'
+        f'<span class="req-note-author">{_esc(author)}</span>'
+        f'<span class="req-note-time">{_esc(when)}</span>'
+        f'{dev_pill}'
+        f'</div>'
+        f'<div class="req-note-body">{body}</div>'
+        f'</div>'
+    )
+
+
 def render_requirement(req: dict, is_interactive: bool, checklist_id: str, project_id: str) -> str:
     status = req.get("status", "")
     code = req.get("id", "")
@@ -153,11 +196,18 @@ def render_requirement(req: dict, is_interactive: bool, checklist_id: str, proje
         by = _esc(req.get("resolved_by_name") or "Unknown")
         resolved_chip = f'<span class="badge badge-success resolved-chip" title="Resolved by {by}">Resolved</span>'
 
-    # Note display (only if a note exists)
-    note_text = req.get("notes") or ""
+    # Notes thread — comment-thread style, oldest-first, immutable.
+    # `notes_thread` is populated by live_server._serve_report from the
+    # new notes table (migration 005). Legacy reports prior to the table
+    # surface as empty threads. Each note renders author + timestamp +
+    # body; dev-visibility notes (filtered server-side by viewer role)
+    # get a slightly different style to distinguish from public ones.
+    notes_thread = req.get("notes_thread") or []
     note_html = ""
-    if note_text:
-        note_html = f'<div class="req-note">{_esc(note_text)}</div>'
+    if notes_thread:
+        note_html = '<div class="req-notes-thread">' + "".join(
+            _render_note(n) for n in notes_thread
+        ) + '</div>'
 
     # Actions (only for interactive reports, only on failures).
     actions_html = ""
@@ -177,12 +227,14 @@ def render_requirement(req: dict, is_interactive: bool, checklist_id: str, proje
       <div class="req-actions">
         {cc_btn}
         <button class="btn btn-sm btn-subtle" data-role="resolve-btn" onclick="event.stopPropagation();toggleResolved(this, '{_esc(code)}')">{resolve_label}</button>
-        <button class="btn btn-sm btn-subtle" onclick="event.stopPropagation();openNoteEditor(this, '{_esc(code)}')">{'Edit note' if note_text else 'Add note'}</button>
+        <button class="btn btn-sm btn-subtle" onclick="event.stopPropagation();openNoteEditor(this, '{_esc(code)}')">Add note</button>
         <button class="btn btn-sm btn-primary" onclick="event.stopPropagation();recheckItem(this, '{_esc(code)}')">Re-check</button>
       </div>'''
 
     # PASS rows start collapsed so the page leads with failures
-    collapsed_class = " collapsed" if status == "PASS" and not note_text else ""
+    # PASS rows start collapsed by default — but if the thread has any
+    # notes, keep it expanded so conversation is visible at a glance.
+    collapsed_class = " collapsed" if status == "PASS" and not notes_thread else ""
     click_handler = ' onclick="this.classList.toggle(\'collapsed\')"' if status == "PASS" else ""
 
     resolved_data = ' data-resolved="1"' if is_resolved else ""
@@ -444,14 +496,39 @@ def _report_style_block() -> str:
     .expand-btn:hover { text-decoration: underline; }
     .expand-btn .arrow { font-size: 10px; margin-left: 2px; }
 
-    /* Note display */
+    /* Notes thread (comment-thread style, oldest-first). Each note is
+       immutable; follow-ups are their own rows. Public notes have an
+       accent rail; dev-visibility notes have a different rail + a
+       status pill so they're visually distinct for reviewer eyes. */
+    .req-notes-thread {
+      margin-top: 10px; display: flex; flex-direction: column; gap: 8px;
+    }
     .req-note {
-      margin-top: 10px; padding: 10px 12px;
+      padding: 10px 12px;
       background: var(--bg-subtle); border-radius: 6px;
       font-size: var(--text-sm); color: var(--text);
-      line-height: 1.5; white-space: pre-wrap;
+      line-height: 1.5;
       border-left: 3px solid var(--accent);
     }
+    .req-note.note-dev {
+      border-left-color: var(--warning);
+      background: var(--warning-subtle);
+    }
+    .req-note-meta {
+      display: flex; gap: 8px; align-items: center;
+      font-size: var(--text-xs); color: var(--text-muted);
+      margin-bottom: 4px; flex-wrap: wrap;
+    }
+    .req-note-author { font-weight: 600; color: var(--text); }
+    .req-note-time { opacity: 0.8; }
+    .req-note-body { white-space: pre-wrap; }
+    .note-dev-pill {
+      display: inline-block; padding: 1px 6px; border-radius: 10px;
+      font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+      background: var(--warning); color: var(--text-inverse);
+    }
+    .note-dev-acknowledged { background: var(--accent); }
+    .note-dev-corrected { background: var(--success); }
     .note-editor {
       margin-top: 10px; display: flex; flex-direction: column; gap: 8px;
     }
@@ -702,20 +779,22 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
       }}
     }}
 
+    // Notes are immutable comment-thread style (see project_demo_backlog_ind_solar.md).
+    // Add-note flow: click button → textarea appears → Save posts a new
+    // note → server returns the full refreshed thread → we replace the
+    // thread DOM with the new one. Each author gets their own row; no
+    // edit-in-place, no delete. Follow-ups are just another Save click.
     function openNoteEditor(btn, reqCode) {{
       if (!IS_INTERACTIVE || !REPORT_ID) return;
       const row = btn.closest('.requirement');
-      // If editor already open, close
       const existing = row.querySelector('.note-editor');
       if (existing) {{ existing.remove(); return; }}
-      const currentNote = row.querySelector('.req-note');
-      const currentText = currentNote ? currentNote.textContent : '';
       const editor = document.createElement('div');
       editor.className = 'note-editor';
       editor.innerHTML =
-        '<textarea placeholder="Add a note for the crew or reviewer…">' + (currentText ? currentText.replace(/</g, '&lt;') : '') + '</textarea>' +
+        '<textarea placeholder="Add a note for the crew or reviewer…"></textarea>' +
         '<div class="note-editor-actions">' +
-          '<button class="btn btn-sm btn-primary">Save note</button>' +
+          '<button class="btn btn-sm btn-primary">Post note</button>' +
           '<button class="btn btn-sm btn-subtle">Cancel</button>' +
         '</div>';
       const actions = row.querySelector('.req-actions');
@@ -725,35 +804,76 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
       const [saveBtn, cancelBtn] = editor.querySelectorAll('button');
       cancelBtn.onclick = () => editor.remove();
       saveBtn.onclick = async () => {{
+        if (!ta.value.trim()) {{ ta.focus(); return; }}
         saveBtn.disabled = true;
         try {{
           const r = await fetch('/api/report/' + REPORT_ID + '/item/' + reqCode + '/note', {{
             method: 'POST',
             headers: {{'Content-Type': 'application/json'}},
-            body: JSON.stringify({{note: ta.value}})
+            body: JSON.stringify({{note: ta.value, visibility: 'public'}})
           }});
           const data = await r.json();
           if (data.error) throw new Error(data.error);
-          // Update or insert note display
-          let noteEl = row.querySelector('.req-note');
-          if (data.notes) {{
-            if (!noteEl) {{
-              noteEl = document.createElement('div');
-              noteEl.className = 'req-note';
-              row.insertBefore(noteEl, actions);
-            }}
-            noteEl.textContent = data.notes;
-          }} else if (noteEl) {{
-            noteEl.remove();
-          }}
-          // Toggle button label
-          btn.textContent = data.notes ? 'Edit note' : 'Add note';
+          // Replace the entire thread with the refreshed version from
+          // server. Includes the new note + any others added concurrently
+          // by other users since the page loaded.
+          _replaceNotesThread(row, data.notes || []);
           editor.remove();
         }} catch (e) {{
-          alert('Could not save note: ' + e.message);
+          alert('Could not post note: ' + e.message);
           saveBtn.disabled = false;
         }}
       }};
+    }}
+
+    function _replaceNotesThread(row, notes) {{
+      let thread = row.querySelector('.req-notes-thread');
+      if (!thread) {{
+        thread = document.createElement('div');
+        thread.className = 'req-notes-thread';
+        const actions = row.querySelector('.req-actions');
+        row.insertBefore(thread, actions);
+      }}
+      thread.innerHTML = notes.map(_renderNoteEl).join('');
+      if (!notes.length) thread.remove();
+    }}
+
+    function _renderNoteEl(n) {{
+      const author = _esc(n.author_name || n.author_email || 'Unknown author');
+      const when = _esc(_fmtNoteTime(n.created_at || ''));
+      const body = _esc(n.body || '');
+      const isDev = n.visibility === 'dev';
+      const visCls = isDev ? 'note-dev' : 'note-public';
+      let devPill = '';
+      if (isDev) {{
+        const s = (n.dev_status || 'open').toLowerCase();
+        devPill = '<span class="note-dev-pill note-dev-' + _esc(s) + '">' + _esc(s.toUpperCase()) + '</span>';
+      }}
+      return (
+        '<div class="req-note ' + visCls + '">' +
+          '<div class="req-note-meta">' +
+            '<span class="req-note-author">' + author + '</span>' +
+            '<span class="req-note-time">' + when + '</span>' +
+            devPill +
+          '</div>' +
+          '<div class="req-note-body">' + body + '</div>' +
+        '</div>'
+      );
+    }}
+
+    function _fmtNoteTime(iso) {{
+      if (!iso) return '';
+      try {{
+        const d = new Date(iso);
+        return d.toLocaleDateString('en-US', {{month:'short', day:'numeric'}}) +
+               ', ' + d.toLocaleTimeString('en-US', {{hour:'numeric', minute:'2-digit'}});
+      }} catch (e) {{ return iso; }}
+    }}
+
+    function _esc(s) {{
+      const div = document.createElement('div');
+      div.textContent = s == null ? '' : String(s);
+      return div.innerHTML;
     }}
 
     async function recheckItem(btn, reqCode) {{
