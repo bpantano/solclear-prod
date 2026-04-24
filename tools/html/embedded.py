@@ -2735,7 +2735,11 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       const isUnread = !n.read_at;
       const cls = 'bell-row' + (isUnread ? ' bell-unread' : '');
       const href = n.link_url || '#';
-      const body = n.body ? '<div class="bell-row-body">' + esc(n.body).replace(/\n/g, '<br>') + '</div>' : '';
+      // Note: \\n here so Python's triple-quoted string outputs a literal
+      // \\n into the JS regex. Bare \\n would be turned into an actual
+      // newline in the source, splitting the regex across two lines and
+      // breaking the parser ("Invalid regular expression: missing /").
+      const body = n.body ? '<div class="bell-row-body">' + esc(n.body).replace(/\\n/g, '<br>') + '</div>' : '';
       const iso = n.created_at || '';
       const time = iso
         ? '<time class="ts-relative bell-row-time" datetime="' + esc(iso) + '"></time>'
