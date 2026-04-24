@@ -114,22 +114,22 @@ def _esc(s) -> str:
             .replace('"', "&quot;").replace("'", "&#39;"))
 
 
-def _format_note_timestamp(iso_ts: str) -> str:
-    """Turn an ISO timestamp into a friendly 'Apr 24, 2:15 PM' format,
-    rendered in Mountain Time (America/Denver, which auto-handles MST
-    ↔ MDT transitions). Independent Solar is in the mountain zone; we
-    pin to their tz so every viewer sees the same wall-clock regardless
-    of where they're reading the report. Falls back to the raw string
-    if parsing fails — never explodes, since this runs during HTML
-    render and shouldn't break a report."""
+def _format_note_timestamp_utc_fallback(iso_ts: str) -> str:
+    """Server-side fallback for the <time datetime> element's text content.
+    The client's localizeTimestamps() runs on load and replaces this with
+    the user's local-tz relative-or-absolute display, so this only shows
+    on JS-disabled browsers or in the brief flash before JS runs.
+
+    Format: 'Apr 24, 18:00 UTC' — explicit tz tag so a JS-disabled reader
+    isn't confused about which tz they're seeing. UTC is honest, since
+    we don't know the reader's tz at server-render time."""
     if not iso_ts:
         return ""
     try:
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
+        from datetime import datetime, timezone
         dt = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
-        dt_mt = dt.astimezone(ZoneInfo("America/Denver"))
-        return dt_mt.strftime("%b %-d, %-I:%M %p")
+        dt_utc = dt.astimezone(timezone.utc)
+        return dt_utc.strftime("%b %-d, %H:%M UTC")
     except Exception:
         return iso_ts
 
@@ -138,12 +138,18 @@ def _render_note(note: dict) -> str:
     """Render one note row in the comment thread. Notes are immutable, so
     there's no edit/delete UI — just author, timestamp, and body.
 
+    Timestamp is wrapped in <time datetime="UTC_ISO" class="ts-relative">
+    with a UTC fallback as text content. The client-side localizeTimestamps()
+    rewrites it to the user's local timezone with relative-or-absolute
+    formatting on page load (and after any DOM mutation that adds notes).
+
     Dev-visibility notes get the `note-dev` modifier class so reviewers
     can distinguish their bug-tracker comments from public crew notes.
     A pill shows the dev-status ('open', 'acknowledged', 'corrected')
     when present."""
     author = note.get("author_name") or note.get("author_email") or "Unknown author"
-    when = _format_note_timestamp(note.get("created_at", ""))
+    iso = note.get("created_at", "") or ""
+    fallback = _format_note_timestamp_utc_fallback(iso)
     body = _esc(note.get("body", ""))
     visibility = note.get("visibility") or "public"
     visibility_cls = "note-dev" if visibility == "dev" else "note-public"
@@ -151,11 +157,15 @@ def _render_note(note: dict) -> str:
     if visibility == "dev":
         status = note.get("dev_status") or "open"
         dev_pill = f'<span class="note-dev-pill note-dev-{_esc(status)}">{_esc(status.upper())}</span>'
+    time_html = (
+        f'<time class="ts-relative req-note-time" datetime="{_esc(iso)}">{_esc(fallback)}</time>'
+        if iso else ""
+    )
     return (
         f'<div class="req-note {visibility_cls}">'
         f'<div class="req-note-meta">'
         f'<span class="req-note-author">{_esc(author)}</span>'
-        f'<span class="req-note-time">{_esc(when)}</span>'
+        f'{time_html}'
         f'{dev_pill}'
         f'</div>'
         f'<div class="req-note-body">{body}</div>'
@@ -903,12 +913,21 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
         row.insertBefore(thread, actions);
       }}
       thread.innerHTML = notes.map(_renderNoteEl).join('');
+      // Localize fresh DOM so tooltips/relative format are correct
+      // immediately rather than waiting for the next 60s tick.
+      localizeTimestamps(thread);
       if (!notes.length) thread.remove();
     }}
 
     function _renderNoteEl(n) {{
       const author = _esc(n.author_name || n.author_email || 'Unknown author');
-      const when = _esc(_fmtNoteTime(n.created_at || ''));
+      const iso = n.created_at || '';
+      // Emit <time class="ts-relative"> so the periodic localizeTimestamps()
+      // tick keeps the relative age fresh ("just now" → "1 min ago" → ...)
+      // for as long as the user has the page open.
+      const timeHtml = iso
+        ? '<time class="ts-relative req-note-time" datetime="' + _esc(iso) + '">' + _esc(formatTimestamp(iso)) + '</time>'
+        : '';
       const body = _esc(n.body || '');
       const isDev = n.visibility === 'dev';
       const visCls = isDev ? 'note-dev' : 'note-public';
@@ -921,7 +940,7 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
         '<div class="req-note ' + visCls + '">' +
           '<div class="req-note-meta">' +
             '<span class="req-note-author">' + author + '</span>' +
-            '<span class="req-note-time">' + when + '</span>' +
+            timeHtml +
             devPill +
           '</div>' +
           '<div class="req-note-body">' + body + '</div>' +
@@ -929,19 +948,70 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
       );
     }}
 
-    // Mirror _format_note_timestamp on the server — pin display to
-    // America/Denver so a crew in CO/UT/AZ and a reviewer in CT both
-    // see the same wall-clock on every note. Data in the DB stays UTC.
-    function _fmtNoteTime(iso) {{
-      if (!iso) return '';
-      try {{
-        const d = new Date(iso);
-        const opts = {{timeZone: 'America/Denver'}};
-        const date = d.toLocaleDateString('en-US', {{...opts, month:'short', day:'numeric'}});
-        const time = d.toLocaleTimeString('en-US', {{...opts, hour:'numeric', minute:'2-digit'}});
-        return date + ', ' + time;
-      }} catch (e) {{ return iso; }}
+    // ── Timestamp localization ──
+    // Renders a UTC timestamp in the viewer's local tz, with a relative
+    // form ("5 min ago") for recent values and an absolute form
+    // ("Apr 17, 2:15 PM") for older. Browser's tz is auto-detected via
+    // Intl — no user setup required.
+    //
+    // Server-rendered timestamps use <time class="ts-relative" datetime="UTC_ISO">
+    // with a UTC fallback as text. localizeTimestamps() walks the DOM,
+    // rewrites textContent + sets a tooltip with the full absolute. Runs
+    // on load + after DOM mutations + every 60s so relative ages stay fresh.
+    function formatTimestamp(input, opts) {{
+      if (!input) return '';
+      opts = opts || {{}};
+      const d = _toDate(input);
+      if (!d || isNaN(d.getTime())) return String(input);
+      const ageMs = Date.now() - d.getTime();
+      const sec = Math.round(ageMs / 1000);
+      const min = Math.round(sec / 60);
+      const hr = Math.round(min / 60);
+      const day = Math.round(hr / 24);
+      if (opts.absolute) return _absoluteString(d, ageMs);
+      if (sec < 30 && sec > -30) return 'just now';
+      if (Math.abs(min) < 60) return min + ' min ago';
+      if (Math.abs(hr) < 24) return hr + ' hr ago';
+      if (Math.abs(day) < 7) return day + (Math.abs(day) === 1 ? ' day ago' : ' days ago');
+      return _absoluteString(d, ageMs);
     }}
+    function formatTimestampAbsolute(input) {{
+      return formatTimestamp(input, {{absolute: true}});
+    }}
+    function _absoluteString(d, ageMs) {{
+      const opts = {{month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}};
+      // Include year only when it's an old timestamp — keeps recent
+      // notes scannable while disambiguating archival ones.
+      if (ageMs > 365 * 24 * 60 * 60 * 1000) opts.year = 'numeric';
+      return d.toLocaleString('en-US', opts);
+    }}
+    function _toDate(input) {{
+      if (input == null) return null;
+      if (input instanceof Date) return input;
+      if (typeof input === 'number') {{
+        // Heuristic: < 1e11 => epoch seconds (year ≤ ~5138), else ms
+        return new Date(input < 1e11 ? input * 1000 : input);
+      }}
+      return new Date(input);
+    }}
+    function localizeTimestamps(root) {{
+      root = root || document;
+      root.querySelectorAll('time.ts-relative').forEach(function(el) {{
+        const iso = el.getAttribute('datetime');
+        if (!iso) return;
+        el.textContent = formatTimestamp(iso);
+        el.title = formatTimestampAbsolute(iso);
+      }});
+    }}
+    document.addEventListener('DOMContentLoaded', function() {{ localizeTimestamps(); }});
+    // Refresh relative ages every 60s so "5 min ago" doesn't go stale
+    // while a user has the page open. Cheap — pure DOM walk, no network.
+    setInterval(function() {{ localizeTimestamps(); }}, 60000);
+
+    // Legacy alias — used by _renderNoteEl below. Returns a relative-or-
+    // absolute string in the viewer's local tz, same as <time> elements
+    // render once localizeTimestamps runs.
+    function _fmtNoteTime(iso) {{ return formatTimestamp(iso); }}
 
     function _esc(s) {{
       const div = document.createElement('div');
@@ -1023,7 +1093,15 @@ def generate_html(report: dict, project: dict) -> str:
         address.get("city"),
         address.get("state"),
     ]))
-    generated = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+    # Render-time timestamp wrapped in <time> so the client localizes
+    # to the user's tz. Server fallback is UTC for clarity if JS doesn't
+    # run. Use timezone-aware UTC datetime so the ISO string includes
+    # offset and the client knows the source tz.
+    from datetime import datetime, timezone
+    _gen_dt = datetime.now(timezone.utc)
+    generated_iso = _gen_dt.isoformat()
+    generated_fallback = _gen_dt.strftime("%B %-d, %Y at %H:%M UTC")
+    generated = f'<time class="ts-relative" datetime="{_esc(generated_iso)}">{_esc(generated_fallback)}</time>'
 
     required = [r for r in reqs if r["status"] != "N/A" and not r.get("optional")]
     n_pass    = sum(1 for r in required if r["status"] == "PASS")

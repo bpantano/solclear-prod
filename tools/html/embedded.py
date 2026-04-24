@@ -1600,8 +1600,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         // Status info
         const info = document.getElementById('userStatusInfo');
         let statusHtml = '<strong>Status:</strong> ' + (u.is_active ? '<span style="color:#10b981;">Active</span>' : '<span style="color:#ef4444;">Inactive</span>');
-        if (u.deactivated_at) statusHtml += ' · Deactivated: ' + new Date(u.deactivated_at).toLocaleDateString();
-        if (u.created_at) statusHtml += ' · Created: ' + new Date(u.created_at).toLocaleDateString();
+        if (u.deactivated_at) statusHtml += ' · Deactivated: ' + formatTimestamp(u.deactivated_at);
+        if (u.created_at) statusHtml += ' · Created: ' + formatTimestamp(u.created_at);
         info.innerHTML = statusHtml;
       } catch (e) { alert('Error loading user: ' + e.message); }
     }
@@ -1721,7 +1721,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         if (data.status === 'no_baseline') {
           el.innerHTML = 'No baseline saved yet. Click "Check Now" to create one.';
         } else {
-          const date = new Date(data.saved_at).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric', hour:'numeric', minute:'2-digit'});
+          const date = formatTimestamp(data.saved_at);
           el.innerHTML = `Last checked: ${date} · Hash: ${data.hash}...`;
         }
       } catch (e) {
@@ -1884,7 +1884,9 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         else if (hasFailures) railColor = 'var(--danger)';
         else if (nReview > 0) railColor = 'var(--review)';
         const reviewHint = nReview ? ` · ${nReview} to review` : '';
-        const date = new Date(rpt.timestamp * 1000).toLocaleDateString('en-US', {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
+        // formatTimestamp accepts an epoch-seconds number directly,
+        // converts to local tz, returns relative-or-absolute.
+        const date = formatTimestamp(rpt.timestamp);
         const img = rpt.featured_image
           ? `<img class="project-card-img" src="${rpt.featured_image}" alt="" loading="lazy">`
           : `<div class="project-card-img"></div>`;
@@ -2766,14 +2768,66 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       if (n >= 0.01) return '$' + n.toFixed(3);
       return '$' + n.toFixed(4);
     }
+    // ── Timestamp localization ──
+    // Renders a UTC timestamp in the viewer's local tz, with relative
+    // ("5 min ago") for recent and absolute ("Apr 17, 2:15 PM") for older.
+    // Browser tz detected automatically via Intl. _fmtDate kept as a thin
+    // alias for backward compat — same behavior.
+    // (This block is duplicated in tools/generate_report_html.py — keep
+    // them in sync. Worth extracting to a shared static asset eventually.)
+    function formatTimestamp(input, opts) {
+      if (!input) return '';
+      opts = opts || {};
+      const d = _toDate(input);
+      if (!d || isNaN(d.getTime())) return String(input);
+      const ageMs = Date.now() - d.getTime();
+      const sec = Math.round(ageMs / 1000);
+      const min = Math.round(sec / 60);
+      const hr = Math.round(min / 60);
+      const day = Math.round(hr / 24);
+      if (opts.absolute) return _absoluteString(d, ageMs);
+      if (sec < 30 && sec > -30) return 'just now';
+      if (Math.abs(min) < 60) return min + ' min ago';
+      if (Math.abs(hr) < 24) return hr + ' hr ago';
+      if (Math.abs(day) < 7) return day + (Math.abs(day) === 1 ? ' day ago' : ' days ago');
+      return _absoluteString(d, ageMs);
+    }
+    function formatTimestampAbsolute(input) {
+      return formatTimestamp(input, {absolute: true});
+    }
+    function _absoluteString(d, ageMs) {
+      const opts = {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'};
+      if (ageMs > 365 * 24 * 60 * 60 * 1000) opts.year = 'numeric';
+      return d.toLocaleString('en-US', opts);
+    }
+    function _toDate(input) {
+      if (input == null) return null;
+      if (input instanceof Date) return input;
+      if (typeof input === 'number') {
+        return new Date(input < 1e11 ? input * 1000 : input);
+      }
+      return new Date(input);
+    }
+    function localizeTimestamps(root) {
+      root = root || document;
+      root.querySelectorAll('time.ts-relative').forEach(function(el) {
+        const iso = el.getAttribute('datetime');
+        if (!iso) return;
+        el.textContent = formatTimestamp(iso);
+        el.title = formatTimestampAbsolute(iso);
+      });
+    }
+    document.addEventListener('DOMContentLoaded', function() { localizeTimestamps(); });
+    setInterval(function() { localizeTimestamps(); }, 60000);
+
     function _fmtDate(iso) {
       if (!iso) return '—';
-      const d = new Date(iso);
-      return d.toLocaleDateString('en-US', {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
+      return formatTimestamp(iso);
     }
     function _fmtDay(iso) {
       if (!iso) return '—';
-      const d = new Date(iso);
+      const d = _toDate(iso);
+      if (!d || isNaN(d.getTime())) return '—';
       return d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
     }
 
