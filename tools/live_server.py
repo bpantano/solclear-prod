@@ -632,6 +632,10 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._api_notifications_list(session, qs)
         elif path == "/api/notifications/unread_count":
             self._api_notifications_unread_count(session)
+        elif path == "/api/dev_notes":
+            if not self._require_role(session, ("superadmin",)):
+                return
+            self._api_dev_notes_list(session, qs)
         elif path == "/api/admin/cost/summary":
             if not self._require_role(session, ("superadmin",)):
                 return
@@ -747,6 +751,25 @@ class LiveHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Invalid notification id"}, 400)
                 return
             self._api_notifications_mark_read(nid, session)
+        # Dev-notes triage actions — superadmin only.
+        # /api/dev_notes/{id}/status   → transition triage state
+        # /api/dev_notes/{id}/reply    → append a reply to the thread
+        elif path.startswith("/api/dev_notes/"):
+            if not self._require_role(session, ("superadmin",)):
+                return
+            parts = path.split("/")
+            try:
+                note_id = int(parts[3])
+            except (IndexError, ValueError):
+                self._send_json({"error": "Invalid note id"}, 400)
+                return
+            action = parts[4] if len(parts) > 4 else ""
+            if action == "status":
+                self._api_dev_note_set_status(note_id, body, session)
+            elif action == "reply":
+                self._api_dev_note_reply(note_id, body, session)
+            else:
+                self._send_json({"error": "Unknown action"}, 404)
         # ── Impersonation (superadmin starts, any impersonating user stops) ──
         elif path == "/api/admin/impersonate":
             self._api_impersonate(body, session)
@@ -1930,6 +1953,126 @@ class LiveHandler(BaseHTTPRequestHandler):
             from tools.notifications import mark_all_read
             n = mark_all_read(session.get("user_id"))
             self._send_json({"ok": True, "marked": n, "unread_count": 0})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    # ── Dev Notes triage (superadmin only) ──────────────────────────────────
+
+    def _api_dev_notes_list(self, session, qs):
+        """List top-level dev notes for the triage tab. Each row includes
+        author + project + requirement context + the inline reply
+        thread. Optional ?status=open|acknowledged|corrected filter.
+
+        Auth: caller must be superadmin (gated upstream in the route
+        dispatcher). No org scoping — superadmin sees all orgs."""
+        try:
+            from tools.notes_db import list_dev_notes, list_replies_for_note, dev_notes_counts_by_status
+            status_filter = (qs.get("status", [""])[0] or None) if qs else None
+            if status_filter not in (None, "open", "acknowledged", "corrected"):
+                self._send_json({"error": "Invalid status filter"}, 400)
+                return
+            notes = list_dev_notes(status_filter=status_filter, limit=200)
+            # Attach reply thread for each. N+1 query pattern, fine for
+            # the triage volume we expect (dozens of open notes max);
+            # revisit if list grows.
+            for n in notes:
+                replies = list_replies_for_note(n["id"])
+                for r in replies:
+                    if r.get("created_at") and hasattr(r["created_at"], "isoformat"):
+                        r["created_at"] = r["created_at"].isoformat()
+                n["replies"] = replies
+                for k in ("created_at", "resolved_at"):
+                    if n.get(k) and hasattr(n[k], "isoformat"):
+                        n[k] = n[k].isoformat()
+            self._send_json({
+                "notes": notes,
+                "counts": dev_notes_counts_by_status(),
+            })
+        except Exception as e:
+            print(f"dev_notes_list failed: {e}", file=sys.stderr)
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_dev_note_set_status(self, note_id, body, session):
+        """Transition a dev note's triage state (open → acknowledged →
+        corrected, or back to open). Notifies the original author."""
+        try:
+            from tools.notes_db import get_note, set_dev_note_status
+            from tools.notifications import notify_dev_note_status_changed
+            data = json.loads(body) if body else {}
+            new_status = data.get("status")
+            if new_status not in ("open", "acknowledged", "corrected"):
+                self._send_json({"error": "Invalid status"}, 400)
+                return
+            note = get_note(note_id)
+            if not note or note.get("visibility") != "dev" or note.get("parent_note_id"):
+                # Refuse to triage replies or non-dev notes
+                self._send_json({"error": "Note not found"}, 404)
+                return
+            updated = set_dev_note_status(note_id, new_status, session.get("user_id"))
+            # Fire notification to original author (handler swallows
+            # any errors — never fails the status transition)
+            try:
+                actor = fetch_one(
+                    "SELECT full_name, email FROM users WHERE id = %s",
+                    (session.get("user_id"),),
+                ) or {}
+                notify_dev_note_status_changed(
+                    note,
+                    new_status,
+                    by_user_name=actor.get("full_name") or actor.get("email"),
+                )
+            except Exception as e:
+                print(f"notify_dev_note_status_changed failed: {e}", file=sys.stderr)
+            # Serialize timestamps
+            for k in ("created_at", "resolved_at"):
+                if updated and updated.get(k) and hasattr(updated[k], "isoformat"):
+                    updated[k] = updated[k].isoformat()
+            self._send_json({"ok": True, "note": updated})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_dev_note_reply(self, note_id, body, session):
+        """Post a reply to a top-level dev note. Reply inherits visibility
+        from the parent. Notifies everyone in the thread except the
+        replier."""
+        try:
+            from tools.notes_db import get_note, add_note
+            from tools.notifications import notify_dev_note_reply
+            data = json.loads(body) if body else {}
+            reply_body = (data.get("body") or "").strip()
+            if not reply_body:
+                self._send_json({"error": "Reply body is empty"}, 400)
+                return
+            parent = get_note(note_id)
+            if not parent or parent.get("visibility") != "dev" or parent.get("parent_note_id"):
+                # Only allow replies on top-level dev notes
+                self._send_json({"error": "Note not found"}, 404)
+                return
+            reply = add_note(
+                report_id=parent["report_id"],
+                requirement_result_id=parent.get("requirement_result_id"),
+                author_user_id=session.get("user_id"),
+                visibility="dev",
+                body=reply_body,
+                parent_note_id=note_id,
+            )
+            # Fire bell notifications to thread participants
+            try:
+                actor = fetch_one(
+                    "SELECT full_name, email FROM users WHERE id = %s",
+                    (session.get("user_id"),),
+                ) or {}
+                notify_dev_note_reply(
+                    parent,
+                    reply,
+                    replier_name=actor.get("full_name") or actor.get("email"),
+                )
+            except Exception as e:
+                print(f"notify_dev_note_reply failed: {e}", file=sys.stderr)
+            # Serialize timestamps
+            if reply.get("created_at") and hasattr(reply["created_at"], "isoformat"):
+                reply["created_at"] = reply["created_at"].isoformat()
+            self._send_json({"ok": True, "reply": dict(reply)})
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 

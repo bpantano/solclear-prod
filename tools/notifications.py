@@ -206,6 +206,37 @@ def notify_dev_note_status_changed(note: dict, new_status: str, by_user_name: Op
     )
 
 
+def notify_dev_note_reply(
+    parent_note: dict,
+    reply: dict,
+    replier_name: Optional[str] = None,
+) -> None:
+    """A reply was posted on a dev note. Notify everyone in the thread
+    (parent author + previous repliers) except the replier themself.
+    Bell only — replies fly back and forth during triage and email-per-
+    reply would be too much."""
+    parent_id = parent_note.get("id")
+    if not parent_id:
+        return
+    from tools.notes_db import list_thread_participant_user_ids
+    replier_id = reply.get("author_user_id")
+    recipients = list_thread_participant_user_ids(parent_id, exclude_user_id=replier_id)
+    if not recipients:
+        return
+    snippet = (reply.get("body") or "").strip()
+    if len(snippet) > 200:
+        snippet = snippet[:197] + "..."
+    title = f"{replier_name} replied to a dev note" if replier_name else "New reply on your dev note"
+    link = f"/report/{parent_note['report_id']}" if parent_note.get("report_id") else None
+    metadata = {
+        "parent_note_id": parent_id,
+        "reply_id": reply.get("id"),
+        "report_id": parent_note.get("report_id"),
+    }
+    for uid in recipients:
+        notify(uid, "dev_note_reply", title, snippet, link, metadata, send_email=False)
+
+
 def notify_check_completed(
     report_summary: dict,
     runner_user_id: Optional[int],

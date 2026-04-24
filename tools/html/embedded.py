@@ -315,6 +315,73 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     .bell-row-body { font-size: var(--text-xs); color: var(--text-muted); line-height: 1.4; }
     .bell-row-time { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
 
+    /* Dev Notes triage tabs + cards */
+    .dev-notes-tab {
+      background: none; border: none; cursor: pointer;
+      padding: 10px 16px;
+      font-size: var(--text-sm); font-weight: 500; color: var(--text-secondary);
+      border-bottom: 2px solid transparent;
+      font-family: inherit;
+    }
+    .dev-notes-tab:hover { color: var(--text); }
+    .dev-notes-tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+    .dn-tab-count {
+      display: inline-block; margin-left: 6px;
+      background: var(--bg-subtle); color: var(--text-muted);
+      font-size: 10px; font-weight: 600;
+      padding: 1px 6px; border-radius: 9px;
+    }
+    .dev-notes-tab.active .dn-tab-count { background: var(--accent-subtle); color: var(--accent-text); }
+    .dev-note-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-left: 3px solid var(--warning);
+      border-radius: 10px; padding: 14px 16px; margin-bottom: 12px;
+      box-shadow: var(--shadow-sm);
+    }
+    .dev-note-card.dn-acknowledged { border-left-color: var(--accent); }
+    .dev-note-card.dn-corrected { border-left-color: var(--success); }
+    .dn-meta {
+      display: flex; gap: 8px; flex-wrap: wrap;
+      font-size: var(--text-xs); color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+    .dn-meta-author { color: var(--text); font-weight: 600; }
+    .dn-meta a { color: var(--accent); text-decoration: none; font-weight: 600; }
+    .dn-meta a:hover { text-decoration: underline; }
+    .dn-body {
+      font-size: var(--text-sm); color: var(--text);
+      white-space: pre-wrap; line-height: 1.5;
+      margin-bottom: 12px;
+    }
+    .dn-replies {
+      border-top: 1px solid var(--border-light);
+      padding-top: 10px; margin-top: 10px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .dn-reply {
+      background: var(--bg-subtle); border-radius: 6px;
+      padding: 8px 12px; font-size: var(--text-sm);
+    }
+    .dn-reply-meta {
+      display: flex; gap: 8px; align-items: baseline;
+      font-size: var(--text-xs); color: var(--text-muted);
+      margin-bottom: 2px;
+    }
+    .dn-reply-author { font-weight: 600; color: var(--text); }
+    .dn-reply-body { white-space: pre-wrap; line-height: 1.4; }
+    .dn-actions {
+      display: flex; gap: 6px; flex-wrap: wrap;
+      margin-top: 10px;
+    }
+    .dn-reply-editor textarea {
+      width: 100%; min-height: 60px; padding: 8px 10px;
+      border: 1px solid var(--border); border-radius: 6px;
+      background: var(--bg-card); color: var(--text);
+      font-family: inherit; font-size: var(--text-sm);
+      resize: vertical;
+    }
+    .dn-reply-editor-actions { display: flex; gap: 6px; margin-top: 6px; }
+
     /* Steps */
     .step { display: none; padding: 20px; max-width: 960px; margin: 0 auto; }
     .step.active { display: block; }
@@ -759,6 +826,14 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <button class="nav-item superadmin-only" data-nav="costs" onclick="navigate('costs')" style="display:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
       Costs
+    </button>
+    <!-- Dev Notes triage tab — superadmin only. The badge shows the
+         count of open (awaiting triage) dev notes, refreshed alongside
+         the bell. -->
+    <button class="nav-item superadmin-only" data-nav="devnotes" onclick="navigate('devnotes')" style="display:none;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 13h6M9 17h4"/></svg>
+      <span style="flex:1;">Dev Notes</span>
+      <span id="sidebarDevNotesBadge" style="display:none;background:var(--warning);color:var(--text-inverse);font-size:10px;font-weight:700;min-width:18px;height:18px;padding:0 5px;border-radius:9px;align-items:center;justify-content:center;line-height:1;">0</span>
     </button>
 
     <div class="sidebar-footer">
@@ -1276,6 +1351,30 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <div id="costBody" style="margin-top:16px;"></div>
   </div>
 
+  <!-- Dev Notes triage page (superadmin only — gated by route handler).
+       Three tabs: Awaiting Triage / In Progress / Resolved. Each row
+       shows the original dev note + its reply thread + action buttons. -->
+  <div id="adminDevNotes" class="step">
+    <button class="back-btn" onclick="showStep('home')">&larr; Back to home</button>
+    <div class="step-label">Dev Notes</div>
+
+    <nav class="dev-notes-tabs" style="display:flex;gap:0;border-bottom:1px solid var(--border);margin:8px 0 16px;">
+      <button class="dev-notes-tab active" data-dn-tab="open" onclick="filterDevNotesTab('open')">
+        Awaiting Triage <span class="dn-tab-count" id="dnCountOpen">0</span>
+      </button>
+      <button class="dev-notes-tab" data-dn-tab="acknowledged" onclick="filterDevNotesTab('acknowledged')">
+        In Progress <span class="dn-tab-count" id="dnCountAcknowledged">0</span>
+      </button>
+      <button class="dev-notes-tab" data-dn-tab="corrected" onclick="filterDevNotesTab('corrected')">
+        Resolved <span class="dn-tab-count" id="dnCountCorrected">0</span>
+      </button>
+    </nav>
+
+    <div id="devNotesList">
+      <div style="padding:24px 16px;text-align:center;color:var(--text-muted);font-size:var(--text-sm);">Loading…</div>
+    </div>
+  </div>
+
   </main>
 
   <!-- Mobile bottom tab bar (<1024px) -->
@@ -1390,8 +1489,9 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       'orgs': 'orgs', 'orgCreate': 'orgs', 'orgDetail': 'orgs', 'userDetail': 'orgs',
       'reqs': 'reqs', 'reqDetail': 'reqs',
       'costs': 'costs',
+      'devnotes': 'devnotes',
     };
-    const NAV_TO_TAB = { home: 'home', check: 'check', reports: 'reports', orgs: 'account', reqs: 'account', costs: 'account' };
+    const NAV_TO_TAB = { home: 'home', check: 'check', reports: 'reports', orgs: 'account', reqs: 'account', costs: 'account', devnotes: 'account' };
 
     function setActiveTab(navKey) {
       document.querySelectorAll('.nav-item[data-nav]').forEach(el =>
@@ -1455,6 +1555,11 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       if (n === 'costs') {
         document.getElementById('adminCosts').classList.add('active');
         loadCosts();
+        return;
+      }
+      if (n === 'devnotes') {
+        document.getElementById('adminDevNotes').classList.add('active');
+        loadDevNotes();
         return;
       }
       document.getElementById('step' + n).classList.add('active');
@@ -2843,6 +2948,191 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         _setBellBadge(data.unread_count || 0);
         await refreshBellPanel();
       } catch (e) { /* silently ignore */ }
+    }
+
+    // ── Dev Notes triage tab ──
+    // Three sub-tabs by status (open / acknowledged / corrected).
+    // _devNotesAll holds the currently-loaded set; filterDevNotesTab
+    // re-renders + persists active tab in _devNotesActiveStatus.
+    let _devNotesAll = [];
+    let _devNotesActiveStatus = 'open';
+
+    async function loadDevNotes() {
+      const list = document.getElementById('devNotesList');
+      try {
+        // Always pull all 3 statuses so the count badges + tab counts
+        // are accurate without needing 3 fetches.
+        const r = await fetch('/api/dev_notes');
+        if (!r.ok) throw new Error('Could not load dev notes');
+        const data = await r.json();
+        _devNotesAll = data.notes || [];
+        _updateDevNoteCounts(data.counts || {});
+        _renderDevNotes();
+      } catch (e) {
+        list.innerHTML = errorAlert('Could not load dev notes: ' + e.message);
+      }
+    }
+
+    function _updateDevNoteCounts(counts) {
+      ['open', 'acknowledged', 'corrected'].forEach(s => {
+        const el = document.getElementById('dnCount' + s.charAt(0).toUpperCase() + s.slice(1));
+        if (el) el.textContent = counts[s] || 0;
+      });
+      // Sidebar badge: unread = open count, since that's what the
+      // superadmin actually needs to act on.
+      const badge = document.getElementById('sidebarDevNotesBadge');
+      const open = counts.open || 0;
+      if (badge) {
+        if (open > 0) {
+          badge.textContent = open > 99 ? '99+' : String(open);
+          badge.style.display = 'inline-flex';
+        } else {
+          badge.style.display = 'none';
+        }
+      }
+    }
+
+    function filterDevNotesTab(status) {
+      _devNotesActiveStatus = status;
+      document.querySelectorAll('.dev-notes-tab').forEach(t =>
+        t.classList.toggle('active', t.dataset.dnTab === status));
+      _renderDevNotes();
+    }
+
+    function _renderDevNotes() {
+      const list = document.getElementById('devNotesList');
+      const filtered = _devNotesAll.filter(n => (n.dev_status || 'open') === _devNotesActiveStatus);
+      if (!filtered.length) {
+        const empty = {
+          open: 'No dev notes awaiting triage. 🎉',
+          acknowledged: 'Nothing in progress.',
+          corrected: 'No resolved notes yet.',
+        }[_devNotesActiveStatus];
+        list.innerHTML = '<div style="padding:32px 16px;text-align:center;color:var(--text-muted);font-size:var(--text-sm);">' + esc(empty) + '</div>';
+        return;
+      }
+      list.innerHTML = filtered.map(_renderDevNoteCard).join('');
+      if (typeof localizeTimestamps === 'function') localizeTimestamps(list);
+    }
+
+    function _renderDevNoteCard(n) {
+      const status = n.dev_status || 'open';
+      const cls = 'dev-note-card dn-' + status;
+      const author = esc(n.author_name || n.author_email || 'Unknown');
+      const reqLine = n.requirement_code
+        ? esc(n.requirement_code) + ' — ' + esc(n.requirement_title || '')
+        : '';
+      const project = n.project_name ? esc(n.project_name) : ('Project ' + esc(n.project_cc_id || ''));
+      const reportLink = n.report_id ? '<a href="/report/' + n.report_id + '">Open report</a>' : '';
+      const orgLine = n.org_name ? ' · ' + esc(n.org_name) : '';
+      const time = n.created_at
+        ? '<time class="ts-relative" datetime="' + esc(n.created_at) + '"></time>'
+        : '';
+      const repliesHtml = (n.replies && n.replies.length)
+        ? '<div class="dn-replies">' + n.replies.map(_renderDevNoteReply).join('') + '</div>'
+        : '';
+      // Action buttons depend on current status. Cancel reply button
+      // is hidden unless the editor is open.
+      let actions = '';
+      if (status === 'open') {
+        actions += '<button class="btn btn-sm btn-primary" onclick="setDevNoteStatus(' + n.id + ', \\'acknowledged\\')">Acknowledge</button>';
+        actions += '<button class="btn btn-sm btn-subtle" onclick="setDevNoteStatus(' + n.id + ', \\'corrected\\')">Mark corrected</button>';
+      } else if (status === 'acknowledged') {
+        actions += '<button class="btn btn-sm btn-primary" onclick="setDevNoteStatus(' + n.id + ', \\'corrected\\')">Mark corrected</button>';
+        actions += '<button class="btn btn-sm btn-subtle" onclick="setDevNoteStatus(' + n.id + ', \\'open\\')">Reopen</button>';
+      } else {
+        actions += '<button class="btn btn-sm btn-subtle" onclick="setDevNoteStatus(' + n.id + ', \\'open\\')">Reopen</button>';
+      }
+      actions += '<button class="btn btn-sm btn-ghost" onclick="openDevNoteReply(' + n.id + ', this)">Reply</button>';
+
+      return (
+        '<div class="dev-note-card ' + cls + '" id="devNote-' + n.id + '">' +
+          '<div class="dn-meta">' +
+            '<span class="dn-meta-author">' + author + '</span>' +
+            time +
+            (orgLine ? '<span>' + orgLine + '</span>' : '') +
+            (reqLine ? '<span>· ' + reqLine + '</span>' : '') +
+            '<span style="margin-left:auto;">' + reportLink + '</span>' +
+          '</div>' +
+          '<div class="dn-body">' + esc(n.body || '').replace(/\\n/g, '<br>') + '</div>' +
+          repliesHtml +
+          '<div class="dn-actions">' + actions + '</div>' +
+        '</div>'
+      );
+    }
+
+    function _renderDevNoteReply(r) {
+      const author = esc(r.author_name || r.author_email || 'Unknown');
+      const time = r.created_at
+        ? '<time class="ts-relative" datetime="' + esc(r.created_at) + '"></time>'
+        : '';
+      return (
+        '<div class="dn-reply">' +
+          '<div class="dn-reply-meta">' +
+            '<span class="dn-reply-author">' + author + '</span>' +
+            time +
+          '</div>' +
+          '<div class="dn-reply-body">' + esc(r.body || '').replace(/\\n/g, '<br>') + '</div>' +
+        '</div>'
+      );
+    }
+
+    async function setDevNoteStatus(noteId, newStatus) {
+      try {
+        const r = await fetch('/api/dev_notes/' + noteId + '/status', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({status: newStatus}),
+        });
+        const data = await r.json();
+        if (data.error) throw new Error(data.error);
+        // Easiest correct path: refetch the whole list (counts +
+        // ordering may have shifted).
+        await loadDevNotes();
+      } catch (e) {
+        alert('Could not update status: ' + e.message);
+      }
+    }
+
+    function openDevNoteReply(noteId, btn) {
+      const card = document.getElementById('devNote-' + noteId);
+      if (!card) return;
+      const existing = card.querySelector('.dn-reply-editor');
+      if (existing) { existing.remove(); return; }
+      const editor = document.createElement('div');
+      editor.className = 'dn-reply-editor';
+      editor.style.marginTop = '10px';
+      editor.innerHTML =
+        '<textarea placeholder="Reply to this dev note…"></textarea>' +
+        '<div class="dn-reply-editor-actions">' +
+          '<button class="btn btn-sm btn-primary">Post reply</button>' +
+          '<button class="btn btn-sm btn-subtle">Cancel</button>' +
+        '</div>';
+      card.querySelector('.dn-actions').insertAdjacentElement('beforebegin', editor);
+      const ta = editor.querySelector('textarea');
+      ta.focus();
+      const [saveBtn, cancelBtn] = editor.querySelectorAll('button');
+      cancelBtn.onclick = () => editor.remove();
+      saveBtn.onclick = async () => {
+        if (!ta.value.trim()) { ta.focus(); return; }
+        saveBtn.disabled = true;
+        try {
+          const r = await fetch('/api/dev_notes/' + noteId + '/reply', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({body: ta.value}),
+          });
+          const data = await r.json();
+          if (data.error) throw new Error(data.error);
+          editor.remove();
+          // Refresh the full list — keeps replies in chronological
+          // order without needing partial DOM updates.
+          await loadDevNotes();
+        } catch (e) {
+          alert('Could not post reply: ' + e.message);
+          saveBtn.disabled = false;
+        }
+      };
     }
 
     // Home page banners: "your check is still running" / "your check

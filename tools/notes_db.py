@@ -51,32 +51,89 @@ def add_note(
     author_user_id: Optional[int],
     visibility: str,
     body: str,
+    parent_note_id: Optional[int] = None,
 ) -> dict:
     """Insert a new note. Returns the full row as a dict (including the
     server-assigned id + created_at).
 
-    For dev notes, auto-initializes dev_status='open'. Callers that want
-    a different initial state must update it separately."""
+    For top-level dev notes, auto-initializes dev_status='open'. Replies
+    (parent_note_id != None) never get a dev_status — only the top-level
+    note carries triage state.
+
+    Visibility on a reply should match its parent (caller is responsible
+    — usually fetched + passed in)."""
     if visibility not in ("public", "dev"):
         raise ValueError(f"invalid visibility: {visibility!r}")
     body = (body or "").strip()
     if not body:
         raise ValueError("note body cannot be empty")
 
-    dev_status = "open" if visibility == "dev" else None
+    # Replies inherit triage scope from their parent — they don't get
+    # their own dev_status. Top-level dev notes start as 'open'.
+    dev_status = None if parent_note_id else ("open" if visibility == "dev" else None)
     row = execute_returning(
         """
         INSERT INTO notes (
             report_id, requirement_result_id, author_user_id,
-            visibility, body, dev_status
-        ) VALUES (%s, %s, %s, %s, %s, %s)
+            visibility, body, dev_status, parent_note_id
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         RETURNING id, report_id, requirement_result_id, author_user_id,
                   visibility, body, dev_status, resolved_at, resolved_by_user_id,
-                  created_at
+                  parent_note_id, created_at
         """,
-        (report_id, requirement_result_id, author_user_id, visibility, body, dev_status),
+        (report_id, requirement_result_id, author_user_id, visibility,
+         body, dev_status, parent_note_id),
     )
     return row or {}
+
+
+def get_note(note_id: int) -> Optional[dict]:
+    """Single note fetch by id. Used by endpoints that need the
+    parent record to validate operations (e.g. reply, status
+    transition)."""
+    return fetch_one(
+        """SELECT id, report_id, requirement_result_id, author_user_id,
+                  visibility, body, dev_status, resolved_at, resolved_by_user_id,
+                  parent_note_id, created_at
+           FROM notes WHERE id = %s""",
+        (note_id,),
+    )
+
+
+def list_replies_for_note(parent_note_id: int) -> list:
+    """Reply thread for a top-level note, oldest-first. Includes author
+    info for display. Used by the dev-notes triage tab to render an
+    expandable reply thread under each top-level dev note."""
+    return fetch_all(
+        """
+        SELECT n.id, n.body, n.author_user_id, n.created_at,
+               u.full_name AS author_name, u.email AS author_email
+        FROM notes n
+        LEFT JOIN users u ON u.id = n.author_user_id
+        WHERE n.parent_note_id = %s
+        ORDER BY n.created_at ASC
+        """,
+        (parent_note_id,),
+    )
+
+
+def list_thread_participant_user_ids(parent_note_id: int, exclude_user_id: Optional[int] = None) -> list:
+    """All distinct user_ids who have authored either the parent note
+    or any reply in its thread. Used to fan out reply notifications.
+    Excludes the user who just replied so they don't ping themselves."""
+    rows = fetch_all(
+        """
+        SELECT DISTINCT author_user_id
+        FROM notes
+        WHERE (id = %s OR parent_note_id = %s)
+          AND author_user_id IS NOT NULL
+        """,
+        (parent_note_id, parent_note_id),
+    )
+    ids = [r["author_user_id"] for r in rows if r.get("author_user_id")]
+    if exclude_user_id is not None:
+        ids = [i for i in ids if i != exclude_user_id]
+    return list(set(ids))
 
 
 def list_notes_for_req_result(
@@ -192,8 +249,12 @@ def list_dev_notes(
 
     `status_filter` narrows to one of 'open' | 'acknowledged' |
     'corrected'; None returns all. `limit` caps each query; the triage
-    UI paginates the 'corrected' (archived) panel separately."""
-    where = "n.visibility = 'dev'"
+    UI paginates the 'corrected' (archived) panel separately.
+
+    Only TOP-LEVEL dev notes are returned (parent_note_id IS NULL).
+    Replies are loaded inline per-note via list_replies_for_note() —
+    they don't have triage state of their own."""
+    where = "n.visibility = 'dev' AND n.parent_note_id IS NULL"
     params: tuple = ()
     if status_filter:
         where += " AND n.dev_status = %s"
@@ -225,13 +286,15 @@ def list_dev_notes(
 
 
 def dev_notes_counts_by_status() -> dict:
-    """Returns counts per dev-note status — powers the badge counts on
-    the superadmin Dev Notes nav item and the tab headers."""
+    """Returns counts per dev-note status (top-level only). Powers
+    badge counts on the superadmin Dev Notes nav item and tab
+    headers. Replies are excluded — they're conversational, not
+    triage units."""
     rows = fetch_all(
         """
         SELECT COALESCE(dev_status, 'unknown') AS status, COUNT(*) AS n
         FROM notes
-        WHERE visibility = 'dev'
+        WHERE visibility = 'dev' AND parent_note_id IS NULL
         GROUP BY COALESCE(dev_status, 'unknown')
         """
     )
