@@ -278,6 +278,43 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     .theme-toggle svg { width: 20px; height: 20px; }
     .mobile-top-bar .theme-toggle { color: var(--text-inverse); }
 
+    /* Header actions cluster (bell + theme toggle, etc.) */
+    .header-actions { display: flex; align-items: center; gap: 4px; }
+    .header-btn {
+      background: none; border: none; color: inherit; cursor: pointer;
+      width: 44px; height: 44px;
+      display: flex; align-items: center; justify-content: center;
+      padding: 0; border-radius: 8px;
+      -webkit-tap-highlight-color: transparent;
+      position: relative;
+    }
+    .header-btn:hover { background: rgba(255,255,255,0.08); }
+    .header-btn svg { width: 20px; height: 20px; }
+    /* Unread count badge — small red pill in the upper right of the bell */
+    .header-badge {
+      position: absolute; top: 4px; right: 4px;
+      background: var(--danger); color: #fff;
+      font-size: 10px; font-weight: 700;
+      min-width: 18px; height: 18px;
+      padding: 0 4px; border-radius: 9px;
+      display: inline-flex; align-items: center; justify-content: center;
+      line-height: 1;
+    }
+
+    /* Bell dropdown rows */
+    .bell-row {
+      display: block; padding: 12px 16px;
+      border-bottom: 1px solid var(--border-light);
+      text-decoration: none; color: var(--text);
+      transition: background 0.1s;
+    }
+    .bell-row:hover { background: var(--bg-hover); }
+    .bell-row.bell-unread { background: var(--accent-subtle); }
+    .bell-row.bell-unread:hover { background: var(--bg-hover); }
+    .bell-row-title { font-size: var(--text-sm); font-weight: 600; margin-bottom: 2px; }
+    .bell-row-body { font-size: var(--text-xs); color: var(--text-muted); line-height: 1.4; }
+    .bell-row-time { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
     /* Steps */
     .step { display: none; padding: 20px; max-width: 960px; margin: 0 auto; }
     .step.active { display: block; }
@@ -738,10 +775,29 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         <text x="116" y="104" font-family="Inter,Helvetica,Arial,sans-serif" font-weight="600" font-size="80" fill="#ffffff" letter-spacing="-2.5">solclear</text>
       </svg>
     </div>
-    <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn" title="Toggle dark mode" aria-label="Toggle dark mode">
-      <svg id="themeIconSun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
-      <svg id="themeIconMoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:none;"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-    </button>
+    <div class="header-actions">
+      <button class="header-btn" id="bellBtn" onclick="toggleBellPanel(event)" title="Notifications" aria-label="Notifications">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        <span id="bellBadge" class="header-badge" style="display:none;">0</span>
+      </button>
+      <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn" title="Toggle dark mode" aria-label="Toggle dark mode">
+        <svg id="themeIconSun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        <svg id="themeIconMoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:none;"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </div>
+
+    <!-- Bell dropdown panel — populated by refreshBellPanel(). Hidden
+         by default; toggleBellPanel() flips display + closes on outside
+         click. Positioned absolute under the bell. -->
+    <div id="bellPanel" style="display:none;position:absolute;top:54px;right:8px;width:360px;max-width:calc(100vw - 16px);max-height:480px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-lg);z-index:50;overflow:hidden;">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border);">
+        <strong style="font-size:var(--text-sm);">Notifications</strong>
+        <button onclick="markAllNotificationsRead()" id="bellMarkAll" style="background:none;border:none;color:var(--accent);font-size:var(--text-xs);font-weight:600;cursor:pointer;padding:4px 6px;font-family:inherit;">Mark all read</button>
+      </div>
+      <div id="bellList" style="overflow-y:auto;max-height:420px;">
+        <div style="padding:24px 16px;text-align:center;color:var(--text-muted);font-size:var(--text-sm);">Loading…</div>
+      </div>
+    </div>
   </header>
 
   <main class="main-content">
@@ -2604,6 +2660,120 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     }
     loadMe();
     fetchActiveChecks();  // populate running / recently-completed banners
+    refreshBellBadge();   // initial unread count for the top-bar bell
+
+    // ── Top-bar bell (notifications) ──
+    // Polls /api/notifications/unread_count every 60s for the badge.
+    // The full list is only fetched when the user opens the dropdown
+    // (toggleBellPanel) — saves a chunk of bandwidth on idle pages.
+    async function refreshBellBadge() {
+      try {
+        const r = await fetch('/api/notifications/unread_count');
+        if (!r.ok) return;
+        const data = await r.json();
+        _setBellBadge(data.unread_count || 0);
+      } catch (e) { /* silently ignore */ }
+    }
+    setInterval(refreshBellBadge, 60000);
+
+    function _setBellBadge(n) {
+      const badge = document.getElementById('bellBadge');
+      if (!badge) return;
+      if (!n || n <= 0) {
+        badge.style.display = 'none';
+      } else {
+        badge.textContent = n > 99 ? '99+' : String(n);
+        badge.style.display = 'inline-flex';
+      }
+    }
+
+    async function toggleBellPanel(ev) {
+      ev && ev.stopPropagation();
+      const panel = document.getElementById('bellPanel');
+      if (!panel) return;
+      const opening = panel.style.display !== 'flex';
+      panel.style.display = opening ? 'flex' : 'none';
+      panel.style.flexDirection = 'column';
+      if (opening) {
+        await refreshBellPanel();
+        // Click-outside to close — installed only while open
+        setTimeout(() => {
+          const handler = (e) => {
+            if (!panel.contains(e.target) && e.target.id !== 'bellBtn' &&
+                !document.getElementById('bellBtn').contains(e.target)) {
+              panel.style.display = 'none';
+              document.removeEventListener('click', handler);
+            }
+          };
+          document.addEventListener('click', handler);
+        }, 0);
+      }
+    }
+
+    async function refreshBellPanel() {
+      const list = document.getElementById('bellList');
+      if (!list) return;
+      try {
+        const r = await fetch('/api/notifications');
+        if (!r.ok) throw new Error('Could not load notifications');
+        const data = await r.json();
+        _setBellBadge(data.unread_count || 0);
+        const rows = data.notifications || [];
+        if (!rows.length) {
+          list.innerHTML = '<div style="padding:24px 16px;text-align:center;color:var(--text-muted);font-size:var(--text-sm);">No notifications yet.</div>';
+          return;
+        }
+        list.innerHTML = rows.map(_renderBellRow).join('');
+        // Localize the timestamps we just injected
+        if (typeof localizeTimestamps === 'function') localizeTimestamps(list);
+      } catch (e) {
+        list.innerHTML = '<div style="padding:24px 16px;text-align:center;color:var(--danger);font-size:var(--text-sm);">' + esc(e.message) + '</div>';
+      }
+    }
+
+    function _renderBellRow(n) {
+      const isUnread = !n.read_at;
+      const cls = 'bell-row' + (isUnread ? ' bell-unread' : '');
+      const href = n.link_url || '#';
+      const body = n.body ? '<div class="bell-row-body">' + esc(n.body).replace(/\n/g, '<br>') + '</div>' : '';
+      const iso = n.created_at || '';
+      const time = iso
+        ? '<time class="ts-relative bell-row-time" datetime="' + esc(iso) + '"></time>'
+        : '';
+      return (
+        '<a class="' + cls + '" href="' + esc(href) + '" data-notification-id="' + esc(n.id) + '" ' +
+        'onclick="_onBellRowClick(event, ' + n.id + ')">' +
+          '<div class="bell-row-title">' + esc(n.title || '') + '</div>' +
+          body + time +
+        '</a>'
+      );
+    }
+
+    async function _onBellRowClick(ev, notificationId) {
+      // Mark read in the background — don't block the navigation
+      fetch('/api/notifications/' + notificationId + '/read', {method: 'POST'})
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (data && data.unread_count != null) _setBellBadge(data.unread_count);
+        })
+        .catch(() => {});
+      // Let the <a> navigation proceed naturally; if href is '#' close panel
+      const link = ev.currentTarget;
+      if (link.getAttribute('href') === '#') {
+        ev.preventDefault();
+        document.getElementById('bellPanel').style.display = 'none';
+      }
+    }
+
+    async function markAllNotificationsRead() {
+      try {
+        const r = await fetch('/api/notifications/read-all', {method: 'POST'});
+        if (!r.ok) return;
+        const data = await r.json();
+        _setBellBadge(data.unread_count || 0);
+        await refreshBellPanel();
+      } catch (e) { /* silently ignore */ }
+    }
 
     // Home page banners: "your check is still running" / "your check
     // completed" — both driven by /api/my_active_check. Keeps a user who

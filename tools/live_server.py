@@ -359,20 +359,45 @@ def run_check_thread(cc_project_id, params, rerun_ids=None, session=None):
             except Exception as e:
                 print(f"WARNING: Could not update report in DB: {e}", file=sys.stderr)
 
+        summary_payload = {
+            "passed": n_pass,
+            "failed": n_fail,
+            "missing": n_missing,
+            "needs_review": n_review,
+            "total": len(required),
+            "project_id": cc_project_id,
+            "db_report_id": db_report_id,
+            "checklist_ids": report.get("checklist_ids", []),
+            "cancelled": was_cancelled,
+        }
         _result_queue.put(json.dumps({
             "type": "cancelled" if was_cancelled else "done",
-            "summary": {
-                "passed": n_pass,
-                "failed": n_fail,
-                "missing": n_missing,
-                "needs_review": n_review,
-                "total": len(required),
-                "project_id": cc_project_id,
-                "db_report_id": db_report_id,
-                "checklist_ids": report.get("checklist_ids", []),
-                "cancelled": was_cancelled,
-            }
+            "summary": summary_payload,
         }))
+
+        # Fire bell notifications. Checks completing with attention items
+        # ping the org's reviewers; cancelled checks ping the runner.
+        # Wrapped in try/except so notification failures never affect
+        # the check itself or the SSE stream the user is watching.
+        try:
+            from tools.notifications import notify_check_completed, notify_check_cancelled
+            # Enrich summary with project name for the notification copy.
+            project_name = None
+            if db_project_id:
+                try:
+                    p = fetch_one("SELECT name FROM projects WHERE id = %s", (db_project_id,))
+                    project_name = (p or {}).get("name")
+                except Exception:
+                    pass
+            summary_for_notify = {**summary_payload, "project_name": project_name}
+            runner_user_id = (session or {}).get("user_id")
+            org_id = (session or {}).get("org_id")
+            if was_cancelled:
+                notify_check_cancelled(summary_for_notify, runner_user_id)
+            elif org_id:
+                notify_check_completed(summary_for_notify, runner_user_id, org_id)
+        except Exception as e:
+            print(f"check-completion notify failed: {e}", file=sys.stderr)
     except Exception as e:
         _result_queue.put(json.dumps({"type": "error", "message": str(e)}))
         if db_report_id:
@@ -603,6 +628,10 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._api_platform_status(session)
         elif path == "/api/my_active_check":
             self._api_my_active_check(session)
+        elif path == "/api/notifications":
+            self._api_notifications_list(session, qs)
+        elif path == "/api/notifications/unread_count":
+            self._api_notifications_unread_count(session)
         elif path == "/api/admin/cost/summary":
             if not self._require_role(session, ("superadmin",)):
                 return
@@ -708,6 +737,16 @@ class LiveHandler(BaseHTTPRequestHandler):
         # user can request it — there's only ever one running at a time.
         elif path == "/api/cancel":
             self._api_cancel_check()
+        elif path == "/api/notifications/read-all":
+            self._api_notifications_mark_all_read(session)
+        elif path.startswith("/api/notifications/") and path.endswith("/read"):
+            # /api/notifications/{id}/read
+            try:
+                nid = int(path.split("/")[3])
+            except (IndexError, ValueError):
+                self._send_json({"error": "Invalid notification id"}, 400)
+                return
+            self._api_notifications_mark_read(nid, session)
         # ── Impersonation (superadmin starts, any impersonating user stops) ──
         elif path == "/api/admin/impersonate":
             self._api_impersonate(body, session)
@@ -1831,6 +1870,69 @@ class LiveHandler(BaseHTTPRequestHandler):
             print(f"my_active_check failed: {e}", file=sys.stderr)
             self._send_json({"running": None, "recently_completed": None})
 
+    # ── Notifications (top-bar bell) ─────────────────────────────────────────
+
+    def _api_notifications_list(self, session, qs):
+        """List notifications for the logged-in user. Newest first.
+        Optional ?unread_only=1. Capped at 50 — the bell dropdown
+        only shows recent activity, not the full history."""
+        if not session:
+            self._send_json({"error": "Not authenticated"}, 401)
+            return
+        try:
+            from tools.notifications import list_for_user, unread_count
+            unread_only = (qs.get("unread_only", [""])[0] == "1")
+            rows = list_for_user(session.get("user_id"), unread_only=unread_only, limit=50)
+            for r in rows:
+                for k in ("created_at", "read_at"):
+                    if r.get(k) and hasattr(r[k], "isoformat"):
+                        r[k] = r[k].isoformat()
+            self._send_json({
+                "notifications": rows,
+                "unread_count": unread_count(session.get("user_id")),
+            })
+        except Exception as e:
+            print(f"notifications_list failed: {e}", file=sys.stderr)
+            self._send_json({"notifications": [], "unread_count": 0})
+
+    def _api_notifications_unread_count(self, session):
+        """Lightweight badge endpoint — polled every 60s by the bell.
+        Just the int count, no row data, so the poll is cheap."""
+        if not session:
+            self._send_json({"error": "Not authenticated"}, 401)
+            return
+        try:
+            from tools.notifications import unread_count
+            self._send_json({"unread_count": unread_count(session.get("user_id"))})
+        except Exception as e:
+            print(f"unread_count failed: {e}", file=sys.stderr)
+            self._send_json({"unread_count": 0})
+
+    def _api_notifications_mark_read(self, notification_id, session):
+        """Mark one notification as read. Scoped by user_id in the
+        helper so users can't flip each other's state."""
+        if not session:
+            self._send_json({"error": "Not authenticated"}, 401)
+            return
+        try:
+            from tools.notifications import mark_read, unread_count
+            mark_read(notification_id, session.get("user_id"))
+            self._send_json({"ok": True, "unread_count": unread_count(session.get("user_id"))})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_notifications_mark_all_read(self, session):
+        """Bulk-mark every unread notification for the user."""
+        if not session:
+            self._send_json({"error": "Not authenticated"}, 401)
+            return
+        try:
+            from tools.notifications import mark_all_read
+            n = mark_all_read(session.get("user_id"))
+            self._send_json({"ok": True, "marked": n, "unread_count": 0})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
     # ── Impersonation ────────────────────────────────────────────────────────
 
     def _api_impersonate(self, body, session):
@@ -2434,6 +2536,29 @@ class LiveHandler(BaseHTTPRequestHandler):
                 visibility=visibility,
                 body=note_body,
             )
+            # Notify superadmins on dev-note filings (in-app + email).
+            # Public notes don't fire notifications today — they're already
+            # visible inline on the report; pinging on every crew comment
+            # would be too noisy. May add per-user opt-in later.
+            if visibility == "dev":
+                try:
+                    from tools.notifications import notify_dev_note_filed
+                    # Session only carries user_id; look up name for the
+                    # "From: Javier" line in Brandon's email.
+                    filer = fetch_one(
+                        "SELECT full_name, email FROM users WHERE id = %s",
+                        (session.get("user_id"),),
+                    ) or {}
+                    note_for_notification = dict(created)
+                    note_for_notification["req_code"] = req_code
+                    notify_dev_note_filed(
+                        note_for_notification,
+                        filer_name=filer.get("full_name") or filer.get("email"),
+                    )
+                except Exception as e:
+                    # Notification failure must NEVER break note creation
+                    print(f"notify_dev_note_filed failed: {e}", file=sys.stderr)
+
             thread = list_notes_for_req_result(row["id"], role)
             # Serialize timestamps for JSON
             def _iso(n):
