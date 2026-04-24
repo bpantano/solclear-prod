@@ -115,15 +115,21 @@ def _esc(s) -> str:
 
 
 def _format_note_timestamp(iso_ts: str) -> str:
-    """Turn an ISO timestamp into a friendly 'Apr 24, 2:15 PM' format.
-    Falls back to the raw string if parsing fails — never explodes,
-    since this runs during HTML render and shouldn't break a report."""
+    """Turn an ISO timestamp into a friendly 'Apr 24, 2:15 PM' format,
+    rendered in Mountain Time (America/Denver, which auto-handles MST
+    ↔ MDT transitions). Independent Solar is in the mountain zone; we
+    pin to their tz so every viewer sees the same wall-clock regardless
+    of where they're reading the report. Falls back to the raw string
+    if parsing fails — never explodes, since this runs during HTML
+    render and shouldn't break a report."""
     if not iso_ts:
         return ""
     try:
         from datetime import datetime
+        from zoneinfo import ZoneInfo
         dt = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
-        return dt.strftime("%b %-d, %-I:%M %p")
+        dt_mt = dt.astimezone(ZoneInfo("America/Denver"))
+        return dt_mt.strftime("%b %-d, %-I:%M %p")
     except Exception:
         return iso_ts
 
@@ -923,12 +929,17 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
       );
     }}
 
+    // Mirror _format_note_timestamp on the server — pin display to
+    // America/Denver so a crew in CO/UT/AZ and a reviewer in CT both
+    // see the same wall-clock on every note. Data in the DB stays UTC.
     function _fmtNoteTime(iso) {{
       if (!iso) return '';
       try {{
         const d = new Date(iso);
-        return d.toLocaleDateString('en-US', {{month:'short', day:'numeric'}}) +
-               ', ' + d.toLocaleTimeString('en-US', {{hour:'numeric', minute:'2-digit'}});
+        const opts = {{timeZone: 'America/Denver'}};
+        const date = d.toLocaleDateString('en-US', {{...opts, month:'short', day:'numeric'}});
+        const time = d.toLocaleTimeString('en-US', {{...opts, hour:'numeric', minute:'2-digit'}});
+        return date + ', ' + time;
       }} catch (e) {{ return iso; }}
     }}
 
