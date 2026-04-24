@@ -2846,6 +2846,51 @@ def get_local_ip():
         return "localhost"
 
 
+def _mark_running_checks_cancelled_on_shutdown():
+    """Best-effort: mark every report stuck in status='running' as
+    'cancelled' before this process exits, and recompute totals from
+    requirement_results so the partial report shows useful counts.
+
+    Without this, a Railway redeploy (SIGTERM) leaves the report
+    zombified — the worker thread is killed mid-call, never updates
+    status, and the user sees a permanently 'still running' banner.
+
+    Runs from the SIGTERM handler with ~10s of grace before SIGKILL.
+    Wrapped in try/except since the DB might be unreachable during
+    shutdown — we'd rather exit cleanly than block."""
+    try:
+        from tools.db import execute, fetch_all
+        rows = fetch_all("SELECT id FROM reports WHERE status = 'running'")
+        if not rows:
+            return
+        for r in rows:
+            counts = fetch_all(
+                """SELECT
+                     COUNT(*) FILTER (WHERE rr.status != 'N/A') AS total,
+                     COUNT(*) FILTER (WHERE rr.status = 'PASS') AS passed,
+                     COUNT(*) FILTER (WHERE rr.status = 'FAIL') AS failed,
+                     COUNT(*) FILTER (WHERE rr.status = 'MISSING') AS missing,
+                     COUNT(*) FILTER (WHERE rr.status = 'NEEDS_REVIEW') AS needs_review
+                   FROM requirement_results rr
+                   JOIN requirements req ON req.id = rr.requirement_id
+                   WHERE rr.report_id = %s AND req.is_optional = FALSE""",
+                (r["id"],),
+            )
+            c = counts[0] if counts else {}
+            execute(
+                """UPDATE reports
+                   SET status = 'cancelled', completed_at = NOW(),
+                       total_required = %s, total_passed = %s, total_failed = %s,
+                       total_missing = %s, total_needs_review = %s
+                   WHERE id = %s AND status = 'running'""",
+                (c.get("total", 0), c.get("passed", 0), c.get("failed", 0),
+                 c.get("missing", 0), c.get("needs_review", 0), r["id"]),
+            )
+        print(f"[shutdown] marked {len(rows)} running report(s) as cancelled", file=sys.stderr)
+    except Exception as e:
+        print(f"[shutdown] cleanup failed: {e}", file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Live compliance check server")
     parser.add_argument("--port", type=int, default=8080)
@@ -2860,6 +2905,25 @@ def main():
     threading.Thread(target=_poll_anthropic_status, daemon=True,
                      name="anthropic-status-poller").start()
 
+    # Graceful shutdown: when Railway redeploys (or any platform sends
+    # SIGTERM), mark in-flight reports as cancelled before exit so the
+    # UI doesn't show them as eternally "still running". Railway gives
+    # ~10s between SIGTERM and SIGKILL — plenty for this small DB write.
+    # Server-restart durability (resuming the actual check) is a bigger
+    # change tracked in project_multi_user_readiness.md; this just stops
+    # the zombie-report symptom.
+    import signal
+    def _on_term(signum, frame):
+        print(f"[shutdown] signal {signum} received, cleaning up…", file=sys.stderr)
+        _mark_running_checks_cancelled_on_shutdown()
+        try:
+            server.shutdown()
+        except Exception:
+            pass
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, _on_term)
+    signal.signal(signal.SIGINT, _on_term)
+
     print(f"\n  Solclear Live Compliance Server")
     print(f"  ────────────────────────────────")
     print(f"  Local:   http://localhost:{args.port}")
@@ -2869,6 +2933,9 @@ def main():
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        # SIGINT is also handled above, but keep this fallback in case
+        # a non-default handler is somehow active during shutdown.
+        _mark_running_checks_cancelled_on_shutdown()
         print("\nShutting down.")
         server.shutdown()
 
