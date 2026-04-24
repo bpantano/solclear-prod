@@ -735,7 +735,11 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       Reports
     </button>
 
-    <div class="sidebar-section-label reviewer-plus" style="display:none;">Admin</div>
+    <!-- Section label gets set by loadMe() to the user's actual role
+         (Reviewer / Admin / Superadmin) so a Superadmin doesn't see
+         a "ADMIN" header that doesn't quite fit. The .reviewer-plus
+         class still keeps it hidden from crew. -->
+    <div id="sidebarRoleLabel" class="sidebar-section-label reviewer-plus" style="display:none;">Admin</div>
     <button class="nav-item reviewer-plus" data-nav="orgs" onclick="navigate('orgs')" style="display:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1"/><path d="M9 8h1M9 12h1M9 16h1M14 8h1M14 12h1M14 16h1M3 21h18"/></svg>
       Organizations
@@ -1300,7 +1304,10 @@ EMBEDDED_HTML = """<!DOCTYPE html>
   <div class="sheet-overlay" id="sheetOverlay" onclick="closeAccountSheet()"></div>
   <aside class="account-sheet" id="accountSheet">
     <div class="sheet-handle"></div>
-    <div class="sidebar-section-label reviewer-plus" style="display:none;">Admin</div>
+    <!-- Mobile account sheet's role label — same dynamic label as the
+         desktop sidebar (set by loadMe). Different id so we can target
+         both. -->
+    <div id="accountSheetRoleLabel" class="sidebar-section-label reviewer-plus" style="display:none;">Admin</div>
     <button class="nav-item reviewer-plus" onclick="closeAccountSheet();navigate('orgs')" style="display:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1"/><path d="M9 8h1M9 12h1M9 16h1M14 8h1M14 12h1M14 16h1M3 21h18"/></svg>
       Organizations
@@ -2658,6 +2665,18 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       // crew: no gated classes revealed
       visible.forEach(sel => {
         document.querySelectorAll(sel).forEach(el => { el.style.display = ''; });
+      });
+      // Section header text reflects the user's actual role instead of
+      // the static "Admin" — a Superadmin doesn't have to wonder why
+      // their tools are under an "Admin" heading.
+      const labelText = {
+        superadmin: 'Superadmin',
+        admin: 'Admin',
+        reviewer: 'Reviewer',
+      }[role] || '';
+      ['sidebarRoleLabel', 'accountSheetRoleLabel'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el && labelText) el.textContent = labelText;
       });
     }
     async function loadMe() {
