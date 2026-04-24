@@ -572,6 +572,21 @@ class LiveHandler(BaseHTTPRequestHandler):
             self.send_header("Set-Cookie", clear_session_cookie_header())
             self.end_headers()
             return
+        if path == "/healthz":
+            # Lightweight liveness probe for Railway's healthcheck. Returns
+            # 200 as soon as the HTTP server can respond — deliberately does
+            # NOT hit the DB or any external API, since those failures
+            # shouldn't gate a zero-downtime deploy cutover. Railway polls
+            # this during deploys; traffic only shifts to the new container
+            # once /healthz returns 200. No auth required.
+            body = b'{"ok":true}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return
 
         # All other routes require auth
         session = self._require_auth()
