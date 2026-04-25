@@ -202,13 +202,40 @@ INCENTIVE_STATES = {"CA", "California", "NY", "New York", "NJ", "New Jersey", "M
                     "RI", "Rhode Island", "NM", "New Mexico", "CO", "Colorado"}
 
 
-def cc_headers():
-    return {"Authorization": f"Bearer {CC_TOKEN}", "Content-Type": "application/json"}
+def _session_org_id(handler):
+    """Pull org_id from the cached session on a handler instance. Returns
+    None if not set — callers fall back to the env-var CC_TOKEN."""
+    s = getattr(handler, "_session", None) or {}
+    return s.get("org_id")
 
 
-def derive_params_from_checklist(project_id, checklist_id, manufacturer, project_state=""):
+def cc_headers(org_id=None):
+    """Build CompanyCam auth headers. Prefers the org's stored (encrypted)
+    key when org_id is supplied; falls back to the CC_TOKEN env var so
+    existing callers that don't yet pass an org_id keep working.
+
+    This enables per-org CompanyCam key isolation: Independent Solar's
+    key lives in their org row, not in a shared env var."""
+    key = CC_TOKEN  # env-var fallback — used in dev + legacy callers
+    if org_id:
+        try:
+            org = fetch_one(
+                "SELECT companycam_api_key FROM organizations WHERE id = %s",
+                (org_id,),
+            )
+            stored = (org or {}).get("companycam_api_key")
+            if stored:
+                key = decrypt(stored)  # no-op if ENCRYPTION_KEY not set
+        except Exception as e:
+            print(f"WARNING: could not load org {org_id} CC key, using env fallback: {e}",
+                  file=sys.stderr)
+    return {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+
+
+def derive_params_from_checklist(project_id, checklist_id, manufacturer,
+                                  project_state="", org_id=None):
     """Auto-derive job parameters from checklist data and project address."""
-    headers = cc_headers()
+    headers = cc_headers(org_id)
     has_battery = False
     is_backup = False
     portal_access = False
@@ -269,7 +296,7 @@ def _upsert_project(cc_project_id, session):
         return existing["id"]
     # Fetch project details from CompanyCam
     try:
-        r = http_requests.get(f"{API_BASE}/projects/{cc_project_id}", headers=cc_headers(), timeout=10)
+        r = http_requests.get(f"{API_BASE}/projects/{cc_project_id}", headers=cc_headers(org_id), timeout=10)
         r.raise_for_status()
         p = r.json()
         proj = execute_returning(
@@ -685,6 +712,9 @@ class LiveHandler(BaseHTTPRequestHandler):
         session = self._require_auth()
         if not session:
             return
+        # Cache on self so handler methods can access org_id without
+        # needing session threaded through every signature.
+        self._session = session
 
         if path == "/":
             self._serve_html()
@@ -802,6 +832,7 @@ class LiveHandler(BaseHTTPRequestHandler):
         session = self._require_auth()
         if not session:
             return
+        self._session = session
 
         if path == "/api/change-password":
             self._api_change_password(body, session)
@@ -928,7 +959,7 @@ class LiveHandler(BaseHTTPRequestHandler):
         if query:
             api_params["query"] = query
         try:
-            r = http_requests.get(f"{API_BASE}/projects", headers=cc_headers(), params=api_params, timeout=10)
+            r = http_requests.get(f"{API_BASE}/projects", headers=cc_headers(_session_org_id(self)), params=api_params, timeout=10)
             r.raise_for_status()
             projects = r.json()
             slim = []
@@ -962,7 +993,7 @@ class LiveHandler(BaseHTTPRequestHandler):
         try:
             r = http_requests.get(
                 f"{API_BASE}/projects/{project_id}/photos",
-                headers=cc_headers(), params={"per_page": 1}, timeout=10
+                headers=cc_headers(_session_org_id(self)), params={"per_page": 1}, timeout=10
             )
             r.raise_for_status()
             photos = r.json()
@@ -978,7 +1009,7 @@ class LiveHandler(BaseHTTPRequestHandler):
 
     def _api_checklists(self, project_id):
         try:
-            r = http_requests.get(f"{API_BASE}/projects/{project_id}/checklists", headers=cc_headers(), timeout=10)
+            r = http_requests.get(f"{API_BASE}/projects/{project_id}/checklists", headers=cc_headers(_session_org_id(self)), timeout=10)
             r.raise_for_status()
             checklists = r.json()
             slim = []
@@ -1030,7 +1061,8 @@ class LiveHandler(BaseHTTPRequestHandler):
 
         # 1. Derive params (fast ~200ms checklist fetch + address lookup).
         #    Must happen before the INSERT so we have all non-null columns.
-        params = derive_params_from_checklist(project_id, checklist_id, manufacturer, project_state)
+        params = derive_params_from_checklist(project_id, checklist_id, manufacturer, project_state,
+                                              org_id=session.get("org_id"))
 
         # 2. Insert the report row with full params → get run_id.
         run_id = None
@@ -2567,7 +2599,7 @@ class LiveHandler(BaseHTTPRequestHandler):
                 thumb_url = None
                 try:
                     resp = http_requests.get(f"{API_BASE}/projects/{row['companycam_id']}",
-                                             headers=cc_headers(), timeout=5)
+                                             headers=cc_headers(_session_org_id(self)), timeout=5)
                     if resp.status_code == 200:
                         proj = resp.json()
                         for fi in (proj.get("feature_image") or []):
@@ -2690,7 +2722,7 @@ class LiveHandler(BaseHTTPRequestHandler):
         if not project.get("name"):
             try:
                 r = http_requests.get(f"{API_BASE}/projects/{project_id}",
-                                      headers=cc_headers(), timeout=5)
+                                      headers=cc_headers(_session_org_id(self)), timeout=5)
                 if r.status_code == 200:
                     project = r.json()
             except Exception:
