@@ -1003,7 +1003,13 @@ class LiveHandler(BaseHTTPRequestHandler):
     def _start_check(self, qs, session=None):
         """Start a compliance check. No longer limited to one per server —
         each run gets its own queue + cancel_event keyed by db_report_id.
-        Returns run_id so the client can connect the right SSE stream."""
+        Returns run_id so the client can connect the right SSE stream.
+
+        Order: derive params first (blocking, ~200ms) so we have all
+        column values for a clean INSERT. Insert the report row to get
+        run_id. Register the run. Spawn thread. Return run_id to client.
+        The thread skips re-inserting since the row already exists."""
+        session = session or {}
         project_id = qs.get("project_id", [""])[0]
         checklist_id = qs.get("checklist_id", [""])[0]
         manufacturer = qs.get("manufacturer", ["SolarEdge"])[0]
@@ -1015,38 +1021,46 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": "project_id and checklist_id required"}, 400)
             return
 
-        # Create the report row first so we have a run_id before spawning.
-        # We can't call derive_params before we have a queue to put status
-        # messages on, so we get the id from an early insert and derive
-        # params inside the thread.
-        session = session or {}
+        # 1. Derive params (fast ~200ms checklist fetch + address lookup).
+        #    Must happen before the INSERT so we have all non-null columns.
+        params = derive_params_from_checklist(project_id, checklist_id, manufacturer, project_state)
+
+        # 2. Insert the report row with full params → get run_id.
+        run_id = None
         try:
             db_project_id = _upsert_project(project_id, session)
             is_test = session.get("role") == "superadmin"
-            # Minimal insert — thread will fill in params + totals.
-            from tools.db import execute_returning as _er
-            row = _er(
-                """INSERT INTO reports (project_id, run_by, is_test, status)
-                   VALUES (%s, %s, %s, 'running') RETURNING id""",
-                (db_project_id, session.get("user_id"), is_test),
+            report_row = execute_returning(
+                """INSERT INTO reports (project_id, run_by, manufacturer, has_battery,
+                   is_backup_battery, is_incentive_state, portal_access_granted, is_test, status)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'running') RETURNING id""",
+                (db_project_id, session.get("user_id"), params.get("manufacturer"),
+                 params.get("has_battery", False), params.get("is_backup_battery", False),
+                 params.get("is_incentive_state", False), params.get("portal_access_granted", False),
+                 is_test),
             )
-            run_id = row["id"] if row else None
+            run_id = report_row["id"] if report_row else None
         except Exception as e:
-            print(f"WARNING: Could not pre-create report row: {e}", file=sys.stderr)
-            run_id = None
+            print(f"WARNING: Could not create report row in DB: {e}", file=sys.stderr)
 
-        result_queue, cancel_event = _register_run(
-            run_id, session.get("user_id"), session.get("org_id")
-        ) if run_id else (queue.Queue(), threading.Event())
+        # 3. Register this run. Use a fallback queue if DB insert failed —
+        #    check still runs, just won't persist to the DB.
+        if run_id:
+            result_queue, cancel_event = _register_run(
+                run_id, session.get("user_id"), session.get("org_id")
+            )
+        else:
+            result_queue, cancel_event = queue.Queue(), threading.Event()
 
-        result_queue.put(json.dumps({"type": "status", "message": "Reading checklist and deriving job parameters..."}))
-        params = derive_params_from_checklist(project_id, checklist_id, manufacturer, project_state)
+        result_queue.put(json.dumps({"type": "status", "message": "Starting check..."}))
 
         if rerun_ids:
             total = len(rerun_ids)
         else:
             total = sum(1 for r in REQUIREMENTS if r["condition"](params))
 
+        # 4. Spawn thread. Thread skips the INSERT since the row was created
+        #    above — it only needs to UPDATE when run finishes.
         t = threading.Thread(
             target=run_check_thread,
             args=(project_id, params, run_id, result_queue, cancel_event),
