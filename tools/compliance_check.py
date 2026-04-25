@@ -799,6 +799,17 @@ _MAX_RETRIES = 6       # total window ≈ 5+10+20+40+60+60 = ~195s per call
 _BASE_BACKOFF_S = 5
 _MAX_BACKOFF_S = 60
 
+# Global semaphore caps the total number of concurrent Anthropic API
+# calls across ALL active check runs. Without this, two concurrent
+# checks (each max_workers=2) can burst to 4 simultaneous calls and
+# starve each other via 429 retries — the second check's calls succeed
+# while the first check waits through exponential backoff, making the
+# first check look "frozen" until the second finishes.
+# Value 3: 1 check uses up to 3 freely; 2 checks share 3 (~1.5 each,
+# fairer); 3+ checks get 1 each. Keeps total ITPM burst well inside
+# our Tier 2 limit while distributing capacity proportionally.
+_anthropic_global_semaphore = _threading.Semaphore(3)
+
 
 def _retry_after_seconds(resp) -> Optional[float]:
     """Extract a sleep duration from Anthropic's rate-limit response headers.
@@ -841,13 +852,21 @@ def _call_anthropic(payload: dict, req_id: str) -> Optional[str]:
     import time
     for attempt in range(_MAX_RETRIES):
         try:
-            t0 = time.time()
-            resp = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                json=payload,
-                headers=ANTHROPIC_HEADERS,
-                timeout=60,
-            )
+            # Acquire the global slot before making the network call.
+            # This blocks if 3 other calls are already in-flight, which
+            # naturally spreads capacity across concurrent check runs
+            # instead of letting one run monopolise the API budget.
+            _anthropic_global_semaphore.acquire()
+            try:
+                t0 = time.time()
+                resp = requests.post(
+                    "https://api.anthropic.com/v1/messages",
+                    json=payload,
+                    headers=ANTHROPIC_HEADERS,
+                    timeout=60,
+                )
+            finally:
+                _anthropic_global_semaphore.release()
             duration_ms = int((time.time() - t0) * 1000)
             # Treat 429 (rate-limit) AND 5xx transient errors (500 internal,
             # 502 bad gateway, 503 unavailable, 504 gateway timeout, 529
