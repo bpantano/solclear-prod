@@ -441,11 +441,18 @@ def run_check_thread(cc_project_id, params, run_id, result_queue, cancel_event,
         # the check itself or the SSE stream the user is watching.
         try:
             from tools.notifications import notify_check_completed, notify_check_cancelled
-            # Enrich summary with project name for the notification copy.
+            # Enrich summary with project name. Use db_report_id (always
+            # available) to look up the project — avoids depending on
+            # db_project_id which is only defined in the fallback INSERT
+            # branch and was causing UnboundLocalError after the Day 4
+            # refactor.
             project_name = None
-            if db_project_id:
+            if db_report_id:
                 try:
-                    p = fetch_one("SELECT name FROM projects WHERE id = %s", (db_project_id,))
+                    p = fetch_one(
+                        "SELECT pr.name FROM reports r JOIN projects pr ON pr.id = r.project_id WHERE r.id = %s",
+                        (db_report_id,),
+                    )
                     project_name = (p or {}).get("name")
                 except Exception:
                     pass
