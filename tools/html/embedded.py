@@ -2681,7 +2681,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         : '';
 
       list.insertAdjacentHTML('beforeend', `
-        <div class="result-row ${status}" style="cursor:pointer;" onclick="this.classList.toggle('collapsed')">
+        <div class="result-row ${status}" data-req-id="${req.id}" style="cursor:pointer;" onclick="this.classList.toggle('collapsed')">
           <div class="result-header">
             <span class="badge ${badgeCls}">${statusLabel}</span>
             <span class="result-id">${req.id}</span>
@@ -2695,7 +2695,25 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         </div>
       `);
 
-      // No auto-scroll — let the user control their own scroll position
+      // Re-sort all cards into canonical requirement order each time one
+      // arrives. With max_workers=2 checks complete out of order, so
+      // without this the live view looks jumbled (R4 before R2, etc.).
+      _sortResultsList(list);
+    }
+
+    // Canonical section order + numeric position within section.
+    // Matches the REQUIREMENTS array order in compliance_check.py.
+    const _SECTION_ORDER = {PS:0, R:1, E:2, S:3, SC:4, SI:5};
+    function _reqSortKey(code) {
+      const m = code && code.match(/^([A-Za-z]+)(\\d+)$/);
+      if (!m) return 9999;
+      const section = _SECTION_ORDER[m[1].toUpperCase()] ?? 9;
+      return section * 100 + parseInt(m[2], 10);
+    }
+    function _sortResultsList(list) {
+      const rows = Array.from(list.querySelectorAll('.result-row[data-req-id]'));
+      rows.sort((a, b) => _reqSortKey(a.dataset.reqId) - _reqSortKey(b.dataset.reqId));
+      rows.forEach(r => list.appendChild(r));  // DOM reorder (stable, no flicker)
     }
 
     let _allCollapsed = false;
