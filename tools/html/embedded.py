@@ -2207,7 +2207,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           const cb = document.getElementById('cancelRunBtn');
           if (cw) cw.style.display = 'block';
           if (cb) { cb.disabled = false; cb.textContent = 'Cancel checks'; }
-          listenSSE(data.total);
+          _currentRunId = data.run_id || null;
+          listenSSE(data.run_id, data.total);
         }).catch(e => { alert('Failed: ' + e.message); showStep('home'); });
 
         // Clean up URL
@@ -2506,13 +2507,19 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         if (cancelWrap) cancelWrap.style.display = 'block';
         if (cancelBtn) { cancelBtn.disabled = false; cancelBtn.textContent = 'Cancel checks'; }
 
-        listenSSE(data.total);
+        // Store run_id for the cancel button and future reconnect logic.
+        _currentRunId = data.run_id || null;
+        listenSSE(data.run_id, data.total);
       } catch (e) {
         alert('Failed to start: ' + e.message);
         btn.disabled = false;
         btn.textContent = 'Run Compliance Check';
       }
     }
+
+    // Tracks the currently-in-progress run so cancelRun() knows which
+    // run to cancel. Reset to null when a run completes/cancels.
+    let _currentRunId = null;
 
     async function cancelRun() {
       const btn = document.getElementById('cancelRunBtn');
@@ -2521,7 +2528,11 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       btn.disabled = true;
       btn.textContent = 'Cancelling…';
       try {
-        const r = await fetch('/api/cancel', {method: 'POST'});
+        const r = await fetch('/api/cancel', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({run_id: _currentRunId}),
+        });
         const data = await r.json();
         if (!data.ok) {
           alert(data.error || 'Could not cancel');
@@ -2536,8 +2547,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       }
     }
 
-    function listenSSE(total) {
-      const es = new EventSource('/stream');
+    function listenSSE(runId, total) {
+      const es = new EventSource('/stream?run=' + (runId || ''));
       let count = 0;
 
       es.onmessage = (e) => {
@@ -2563,6 +2574,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 
         if (data.type === 'done' || data.type === 'cancelled') {
           es.close();
+          _currentRunId = null;  // run is over — clear so stale cancel doesn't fire
           document.getElementById('loaderAnim').classList.add('hidden');
           const s = data.summary;
           const wasCancelled = data.type === 'cancelled';

@@ -58,14 +58,51 @@ TMP_DIR = Path(__file__).parent.parent / ".tmp"
 API_BASE = "https://api.companycam.com/v2"
 CC_TOKEN = os.getenv("COMPANYCAM_API_KEY", "")
 
-# ── Global state ─────────────────────────────────────────────────────────────
+# ── Per-run check registry ────────────────────────────────────────────────────
+#
+# Replaces the old single global (_check_running, _result_queue, _cancel_event)
+# which only allowed one check at a time across the entire server.
+#
+# Each active check owns its own queue + cancel event keyed by run_id
+# (== db_report_id). Multiple users / orgs can run checks concurrently;
+# the only shared resource is the Anthropic API, which is throttled via
+# existing 429-retry logic.
+#
+# Lifecycle:
+#   1. /start creates the entry and spawns run_check_thread.
+#   2. /stream?run=<id> streams from that entry's queue.
+#   3. /api/cancel {run_id} sets that entry's cancel_event.
+#   4. run_check_thread's finally block schedules removal after a 60s
+#      grace window so a reconnecting SSE client still gets the done event.
 
-_check_lock = threading.Lock()
-_check_running = False
-_result_queue = queue.Queue()
-# Cooperative cancellation flag for the current compliance run. Set by
-# POST /api/cancel and cleared in run_check_thread's finally block.
-_cancel_event = threading.Event()
+_active_runs: dict = {}          # run_id (int) → {queue, cancel_event, user_id, org_id}
+_active_runs_lock = threading.Lock()
+
+
+def _register_run(run_id: int, user_id, org_id) -> tuple:
+    """Create and register the queue + cancel_event for a new check.
+    Returns (result_queue, cancel_event)."""
+    q = queue.Queue()
+    ev = threading.Event()
+    with _active_runs_lock:
+        _active_runs[run_id] = {
+            "queue": q,
+            "cancel_event": ev,
+            "user_id": user_id,
+            "org_id": org_id,
+        }
+    return q, ev
+
+
+def _deregister_run(run_id: int, delay: float = 60.0) -> None:
+    """Schedule removal of a finished run from the registry. The 60-second
+    grace window lets any still-connected SSE client read the final done/
+    cancelled event before the queue disappears."""
+    def _remove():
+        time.sleep(delay)
+        with _active_runs_lock:
+            _active_runs.pop(run_id, None)
+    threading.Thread(target=_remove, daemon=True, name=f"run-cleanup-{run_id}").start()
 
 # Cached Anthropic platform status, refreshed by _poll_anthropic_status().
 # Indicator values from Statuspage: "none" (all good), "minor", "major",
@@ -250,41 +287,64 @@ def _upsert_project(cc_project_id, session):
         return proj["id"]
 
 
-def run_check_thread(cc_project_id, params, rerun_ids=None, session=None):
-    global _check_running
+def run_check_thread(cc_project_id, params, run_id, result_queue, cancel_event,
+                     rerun_ids=None, session=None):
+    """Worker thread for a single compliance check run.
+
+    All mutable state (queue, cancel signal) is scoped to this run via
+    `run_id`. Multiple calls can execute concurrently — they never share
+    queue or cancel_event with each other.
+
+    `run_id` equals the DB report_id so the caller can correlate SSE
+    streams with report rows without extra bookkeeping."""
     session = session or {}
     try:
         # Ensure photos are cached
         photos_path = TMP_DIR / f"photos_{cc_project_id}.json"
         if not photos_path.exists():
-            _result_queue.put(json.dumps({"type": "status", "message": "Fetching photos from CompanyCam..."}))
+            result_queue.put(json.dumps({"type": "status", "message": "Fetching photos from CompanyCam..."}))
             photos = get_all_photos(cc_project_id)
             TMP_DIR.mkdir(exist_ok=True)
             with open(photos_path, "w") as f:
                 json.dump(photos, f, indent=2)
-            _result_queue.put(json.dumps({"type": "status", "message": f"Fetched {len(photos)} photos. Starting check..."}))
+            result_queue.put(json.dumps({"type": "status", "message": f"Fetched {len(photos)} photos. Starting check..."}))
 
-        # Upsert project and create report in DB
-        is_test = session.get("role") == "superadmin"
-        db_project_id = None
-        db_report_id = None
+        # The report row was pre-created by _start_check so the client
+        # had a run_id before photos were fetched. Here we fill in the
+        # params (manufacturer, battery, etc.) now that derive_params has
+        # returned. If the pre-create failed, run_id is None and we fall
+        # back to creating a fresh row.
+        db_report_id = run_id
         try:
-            db_project_id = _upsert_project(cc_project_id, session)
-            report_row = execute_returning(
-                """INSERT INTO reports (project_id, run_by, manufacturer, has_battery, is_backup_battery,
-                   is_incentive_state, portal_access_granted, is_test, status)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'running') RETURNING id""",
-                (db_project_id, session.get("user_id"), params.get("manufacturer"),
-                 params.get("has_battery", False), params.get("is_backup_battery", False),
-                 params.get("is_incentive_state", False), params.get("portal_access_granted", False),
-                 is_test)
-            )
-            db_report_id = report_row["id"] if report_row else None
+            if db_report_id:
+                execute(
+                    """UPDATE reports
+                       SET manufacturer = %s, has_battery = %s, is_backup_battery = %s,
+                           is_incentive_state = %s, portal_access_granted = %s
+                       WHERE id = %s""",
+                    (params.get("manufacturer"), params.get("has_battery", False),
+                     params.get("is_backup_battery", False), params.get("is_incentive_state", False),
+                     params.get("portal_access_granted", False), db_report_id),
+                )
+            else:
+                # Fallback if pre-create failed — insert fresh.
+                db_project_id = _upsert_project(cc_project_id, session)
+                is_test = session.get("role") == "superadmin"
+                report_row = execute_returning(
+                    """INSERT INTO reports (project_id, run_by, manufacturer, has_battery, is_backup_battery,
+                       is_incentive_state, portal_access_granted, is_test, status)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'running') RETURNING id""",
+                    (db_project_id, session.get("user_id"), params.get("manufacturer"),
+                     params.get("has_battery", False), params.get("is_backup_battery", False),
+                     params.get("is_incentive_state", False), params.get("portal_access_granted", False),
+                     is_test),
+                )
+                db_report_id = report_row["id"] if report_row else None
         except Exception as e:
-            print(f"WARNING: Could not save report to DB: {e}", file=sys.stderr)
+            print(f"WARNING: Could not update report in DB: {e}", file=sys.stderr)
 
         def on_progress(result, index, total):
-            _result_queue.put(json.dumps({
+            result_queue.put(json.dumps({
                 "type": "progress",
                 "index": index,
                 "total": total,
@@ -311,17 +371,17 @@ def run_check_thread(cc_project_id, params, rerun_ids=None, session=None):
         # POST /api/cancel fires, the current vision call finishes, then
         # the loop breaks out with a partial results array.
         from tools.compliance_check import set_call_context
-        _cancel_event.clear()
+        cancel_event.clear()
         with set_call_context(report_id=db_report_id, purpose="vision"):
             if rerun_ids:
-                _result_queue.put(json.dumps({"type": "status", "message": f"Re-checking {len(rerun_ids)} failed requirements..."}))
+                result_queue.put(json.dumps({"type": "status", "message": f"Re-checking {len(rerun_ids)} failed requirements..."}))
                 report = run_compliance_check(cc_project_id, params, run_vision=True,
                                               progress_callback=on_progress, only_ids=rerun_ids,
-                                              should_cancel=_cancel_event.is_set)
+                                              should_cancel=cancel_event.is_set)
             else:
                 report = run_compliance_check(cc_project_id, params, run_vision=True,
                                               progress_callback=on_progress,
-                                              should_cancel=_cancel_event.is_set)
+                                              should_cancel=cancel_event.is_set)
 
         # Also save to .tmp/ for backward compatibility
         TMP_DIR.mkdir(exist_ok=True)
@@ -370,7 +430,7 @@ def run_check_thread(cc_project_id, params, rerun_ids=None, session=None):
             "checklist_ids": report.get("checklist_ids", []),
             "cancelled": was_cancelled,
         }
-        _result_queue.put(json.dumps({
+        result_queue.put(json.dumps({
             "type": "cancelled" if was_cancelled else "done",
             "summary": summary_payload,
         }))
@@ -399,16 +459,17 @@ def run_check_thread(cc_project_id, params, rerun_ids=None, session=None):
         except Exception as e:
             print(f"check-completion notify failed: {e}", file=sys.stderr)
     except Exception as e:
-        _result_queue.put(json.dumps({"type": "error", "message": str(e)}))
+        result_queue.put(json.dumps({"type": "error", "message": str(e)}))
         if db_report_id:
             try:
                 execute("UPDATE reports SET status = 'error' WHERE id = %s", (db_report_id,))
             except Exception:
                 pass
     finally:
-        _cancel_event.clear()
-        with _check_lock:
-            _check_running = False
+        cancel_event.clear()
+        # Schedule removal of this run from the registry after a grace
+        # period so any reconnecting SSE client can still drain the queue.
+        _deregister_run(run_id)
 
 
 # ── HTTP Handler ─────────────────────────────────────────────────────────────
@@ -706,7 +767,7 @@ class LiveHandler(BaseHTTPRequestHandler):
         elif path == "/start":
             self._start_check(qs, session)
         elif path == "/stream":
-            self._stream_sse()
+            self._stream_sse(qs)
         else:
             self.send_error(404)
 
@@ -740,7 +801,7 @@ class LiveHandler(BaseHTTPRequestHandler):
         # Cancel the currently-running compliance check. Any authenticated
         # user can request it — there's only ever one running at a time.
         elif path == "/api/cancel":
-            self._api_cancel_check()
+            self._api_cancel_check(body)
         elif path == "/api/notifications/read-all":
             self._api_notifications_mark_all_read(session)
         elif path.startswith("/api/notifications/") and path.endswith("/read"):
@@ -940,21 +1001,9 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._send_json({"error": str(e)}, 500)
 
     def _start_check(self, qs, session=None):
-        global _check_running
-
-        with _check_lock:
-            if _check_running:
-                self._send_json({"ok": False, "error": "A check is already running"}, 409)
-                return
-            _check_running = True
-
-        # Drain any old events
-        while not _result_queue.empty():
-            try:
-                _result_queue.get_nowait()
-            except queue.Empty:
-                break
-
+        """Start a compliance check. No longer limited to one per server —
+        each run gets its own queue + cancel_event keyed by db_report_id.
+        Returns run_id so the client can connect the right SSE stream."""
         project_id = qs.get("project_id", [""])[0]
         checklist_id = qs.get("checklist_id", [""])[0]
         manufacturer = qs.get("manufacturer", ["SolarEdge"])[0]
@@ -963,13 +1012,34 @@ class LiveHandler(BaseHTTPRequestHandler):
         rerun_ids = set(rerun_ids_raw.split(",")) if rerun_ids_raw else None
 
         if not project_id or not checklist_id:
-            with _check_lock:
-                _check_running = False
             self._send_json({"ok": False, "error": "project_id and checklist_id required"}, 400)
             return
 
-        # Auto-derive params from checklist data + project address
-        _result_queue.put(json.dumps({"type": "status", "message": "Reading checklist and deriving job parameters..."}))
+        # Create the report row first so we have a run_id before spawning.
+        # We can't call derive_params before we have a queue to put status
+        # messages on, so we get the id from an early insert and derive
+        # params inside the thread.
+        session = session or {}
+        try:
+            db_project_id = _upsert_project(project_id, session)
+            is_test = session.get("role") == "superadmin"
+            # Minimal insert — thread will fill in params + totals.
+            from tools.db import execute_returning as _er
+            row = _er(
+                """INSERT INTO reports (project_id, run_by, is_test, status)
+                   VALUES (%s, %s, %s, 'running') RETURNING id""",
+                (db_project_id, session.get("user_id"), is_test),
+            )
+            run_id = row["id"] if row else None
+        except Exception as e:
+            print(f"WARNING: Could not pre-create report row: {e}", file=sys.stderr)
+            run_id = None
+
+        result_queue, cancel_event = _register_run(
+            run_id, session.get("user_id"), session.get("org_id")
+        ) if run_id else (queue.Queue(), threading.Event())
+
+        result_queue.put(json.dumps({"type": "status", "message": "Reading checklist and deriving job parameters..."}))
         params = derive_params_from_checklist(project_id, checklist_id, manufacturer, project_state)
 
         if rerun_ids:
@@ -977,26 +1047,58 @@ class LiveHandler(BaseHTTPRequestHandler):
         else:
             total = sum(1 for r in REQUIREMENTS if r["condition"](params))
 
-        t = threading.Thread(target=run_check_thread, args=(project_id, params, rerun_ids, session), daemon=True)
+        t = threading.Thread(
+            target=run_check_thread,
+            args=(project_id, params, run_id, result_queue, cancel_event),
+            kwargs={"rerun_ids": rerun_ids, "session": session},
+            daemon=True,
+            name=f"check-{run_id}",
+        )
         t.start()
 
-        self._send_json({"ok": True, "total": total, "project_id": project_id, "derived_params": params})
+        self._send_json({
+            "ok": True,
+            "total": total,
+            "project_id": project_id,
+            "run_id": run_id,
+            "derived_params": params,
+        })
 
-    def _api_cancel_check(self):
-        """Request cancellation of the currently-running compliance check.
-        Cooperative: the in-flight vision call for the current requirement
-        completes (~5-15s), then the loop exits with partial results. The
-        run_check_thread will emit a 'cancelled' SSE event when it's done
-        unwinding."""
-        with _check_lock:
-            running = _check_running
-        if not running:
-            self._send_json({"ok": False, "error": "No check is running"}, 400)
+    def _api_cancel_check(self, body=None):
+        """Request cancellation of a specific check by run_id.
+        Body: {run_id: <int>}. Cooperative — the in-flight vision call
+        finishes (~5-15s), then the loop exits and emits 'cancelled'."""
+        try:
+            data = json.loads(body) if body else {}
+            run_id = data.get("run_id")
+        except Exception:
+            run_id = None
+        if not run_id:
+            self._send_json({"ok": False, "error": "run_id required"}, 400)
             return
-        _cancel_event.set()
+        with _active_runs_lock:
+            run = _active_runs.get(int(run_id))
+        if not run:
+            self._send_json({"ok": False, "error": "No active check with that run_id"}, 404)
+            return
+        run["cancel_event"].set()
         self._send_json({"ok": True})
 
-    def _stream_sse(self):
+    def _stream_sse(self, qs=None):
+        """SSE stream for a specific check run. Client connects with
+        /stream?run=<run_id> and receives progress/done/cancelled events.
+        Sends keepalive comments every 15s so proxies don't drop the
+        connection.
+
+        If the run_id is not found (run finished before client connected,
+        or invalid id) we emit a single 'not_found' event so the client
+        can fall back to polling the report page."""
+        run_id_raw = (qs or {}).get("run", [""])[0]
+        try:
+            run_id = int(run_id_raw) if run_id_raw else None
+        except ValueError:
+            run_id = None
+
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -1004,17 +1106,31 @@ class LiveHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
 
+        if not run_id:
+            self.wfile.write(b'data: {"type":"error","message":"run_id required"}\n\n')
+            self.wfile.flush()
+            return
+
+        with _active_runs_lock:
+            run = _active_runs.get(run_id)
+        if not run:
+            # Run already finished or never existed — client should
+            # navigate to the report page directly.
+            self.wfile.write(b'data: {"type":"not_found"}\n\n')
+            self.wfile.flush()
+            return
+
+        result_queue = run["queue"]
         try:
             while True:
                 try:
-                    data = _result_queue.get(timeout=15)
+                    data = result_queue.get(timeout=15)
                     self.wfile.write(f"data: {data}\n\n".encode())
                     self.wfile.flush()
                     parsed = json.loads(data)
-                    if parsed.get("type") in ("done", "error"):
+                    if parsed.get("type") in ("done", "cancelled", "error"):
                         break
                 except queue.Empty:
-                    # keepalive
                     self.wfile.write(b": keepalive\n\n")
                     self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
