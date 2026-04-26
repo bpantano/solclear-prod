@@ -975,6 +975,31 @@ PREFILTER_KEEP = 5
 MULTI_CRITERION_MAX = 20
 
 
+def _load_reference_photos(req_code: str, max_photos: int = 2) -> list:
+    """Load Palmetto reference photos for a requirement from the DB.
+    Returns a list of (base64_data, mime_type) tuples, at most max_photos.
+    Empty list if none found or if DB is unavailable — caller falls back
+    to text-only selection gracefully."""
+    try:
+        from tools.db import fetch_all
+        import base64 as _b64
+        rows = fetch_all(
+            "SELECT image_bytes, mime_type FROM requirement_reference_photos "
+            "WHERE requirement_code = %s ORDER BY display_order ASC LIMIT %s",
+            (req_code.upper(), max_photos),
+        )
+        result = []
+        for row in rows:
+            img = row.get("image_bytes")
+            if img:
+                data = _b64.standard_b64encode(bytes(img)).decode("utf-8")
+                result.append((data, row.get("mime_type") or "image/jpeg"))
+        return result
+    except Exception as e:
+        print(f"  WARNING: could not load reference photos for {req_code}: {e}", file=sys.stderr)
+        return []
+
+
 def _haiku_prefilter(candidates: list, requirement: dict, keep: int = PREFILTER_KEEP) -> list:
     """Cheap Haiku pass that ranks candidate photos by relevance to the
     requirement and returns the top-`keep` (in original task order). Uses
@@ -1003,17 +1028,50 @@ def _haiku_prefilter(candidates: list, requirement: dict, keep: int = PREFILTER_
         return fallback
 
     selection_criteria = requirement.get("selection_criteria") or requirement["title"]
+
+    # Load Palmetto reference photos for this requirement. Prepending them
+    # gives Haiku a concrete visual standard to rank against instead of
+    # relying solely on text description — significantly improves pick
+    # accuracy for visually ambiguous requirements like R1 and R6.
+    ref_photos = _load_reference_photos(requirement["id"])
+
     content = []
+    if ref_photos:
+        content.append({"type": "text", "text": (
+            f"The following {'photo is' if len(ref_photos) == 1 else 'photos are'} "
+            f"from Palmetto's official M1 documentation showing what a correct "
+            f"\"{requirement['title']}\" photo looks like. Use "
+            f"{'it' if len(ref_photos) == 1 else 'them'} as your visual standard "
+            f"when ranking the candidates below."
+        )})
+        for ref_data, ref_mime in ref_photos:
+            content.append({"type": "text", "text": "Palmetto reference:"})
+            content.append({"type": "image", "source": {"type": "base64", "media_type": ref_mime, "data": ref_data}})
+        content.append({"type": "text", "text": (
+            f"Now, from the {len(downloaded)} candidate photos below, pick the "
+            f"{keep} that best show the same subject and coverage as the reference "
+            f"{'photo' if len(ref_photos) == 1 else 'photos'} above. Match on "
+            f"subject matter, not photo quality — field photos will be rougher "
+            f"than the reference but should show the same elements."
+        )})
     for label_idx, (_, data, media_type) in enumerate(downloaded, start=1):
         content.append({"type": "text", "text": f"Photo {label_idx}:"})
         content.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
-    content.append({"type": "text", "text": (
-        f"Pick the {keep} photos most likely to show: \"{selection_criteria}\".\n\n"
-        f"There are {len(downloaded)} candidates total. Reply with ONLY a comma-separated "
-        f"list of photo numbers, in order of best match first. Example:\n"
-        f"  PICKS: 3, 7, 1, 4, 9\n"
-        f"No other text — just the PICKS line."
-    )})
+    if ref_photos:
+        content.append({"type": "text", "text": (
+            f"Reply with ONLY a comma-separated list of the {keep} best-matching "
+            f"photo numbers, best match first. Example:\n"
+            f"  PICKS: 3, 7, 1, 4, 9\n"
+            f"No other text — just the PICKS line."
+        )})
+    else:
+        content.append({"type": "text", "text": (
+            f"Pick the {keep} photos most likely to show: \"{selection_criteria}\".\n\n"
+            f"There are {len(downloaded)} candidates total. Reply with ONLY a comma-separated "
+            f"list of photo numbers, in order of best match first. Example:\n"
+            f"  PICKS: 3, 7, 1, 4, 9\n"
+            f"No other text — just the PICKS line."
+        )})
 
     payload = {
         "model": PREFILTER_MODEL,
