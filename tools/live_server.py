@@ -1868,6 +1868,28 @@ class LiveHandler(BaseHTTPRequestHandler):
                 _cleanup_stale_tracking()
 
                 is_material = analysis.get("material", True)
+
+                # Notify superadmins about the change so they don't have to
+                # manually check the Requirements page every day. Material
+                # changes (actual requirement additions/modifications) also
+                # send email; cosmetic-only diffs are bell-only.
+                try:
+                    from tools.notifications import notify
+                    from tools.db import fetch_all as _fa
+                    title_notif = "⚠ Palmetto M1 spec changed" if is_material else "Palmetto spec page updated (non-material)"
+                    body_notif = analysis.get("summary", f"{added} lines added, {removed} lines removed.")
+                    superadmins = _fa("SELECT id FROM users WHERE role = 'superadmin' AND is_active = TRUE")
+                    for u in superadmins:
+                        notify(
+                            u["id"], "palmetto_change", title_notif, body_notif,
+                            "https://help.palmetto.finance/en/articles/8306274-solar-energy-plan-install-m1-photo-documentation",
+                            metadata={"material": is_material, "added": added, "removed": removed},
+                            send_email=is_material,
+                        )
+                    print(f"[palmetto] notified {len(superadmins)} superadmin(s) — material={is_material}", file=sys.stderr)
+                except Exception as notify_err:
+                    print(f"[palmetto] notification failed: {notify_err}", file=sys.stderr)
+
                 self._send_json({
                     "status": "changes_detected",
                     "material": is_material,
