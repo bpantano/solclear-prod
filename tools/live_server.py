@@ -1204,8 +1204,11 @@ class LiveHandler(BaseHTTPRequestHandler):
                 "SELECT id, email, first_name, last_name, full_name, role, organization_id, password_hash, is_active FROM users WHERE LOWER(email) = %s",
                 (email,)
             )
-            if not user or not user.get("password_hash"):
+            if not user:
                 self._send_json({"error": "Invalid email or password"}, 401)
+                return
+            if not user.get("password_hash"):
+                self._send_json({"error": "Check your email for an invitation link to set your password before logging in."}, 401)
                 return
             if not user.get("is_active"):
                 self._send_json({"error": "Account is deactivated"}, 403)
@@ -1536,10 +1539,12 @@ class LiveHandler(BaseHTTPRequestHandler):
             if role not in VALID_ROLES:
                 self._send_json({"error": f"Invalid role. Must be one of: {', '.join(VALID_ROLES)}"}, 400)
                 return
-            password = (data.get("password") or "").strip()
             if not email or not first_name or not last_name:
                 self._send_json({"error": "Email, first name, and last name are required"}, 400)
                 return
+            # Password is no longer required on creation — if omitted, an
+            # invite email is sent automatically so the user sets their own.
+            password = (data.get("password") or "").strip()
             pw_hash = hash_password(password) if password else None
             user = execute_returning(
                 "INSERT INTO users (organization_id, email, first_name, last_name, phone, role, password_hash) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *",
@@ -1547,6 +1552,22 @@ class LiveHandler(BaseHTTPRequestHandler):
             )
             user["created_at"] = user["created_at"].isoformat() if user.get("created_at") else None
             user["updated_at"] = user["updated_at"].isoformat() if user.get("updated_at") else None
+
+            # Auto-send invite when no password was provided
+            invite_sent = False
+            if not password and user.get("id"):
+                try:
+                    from tools.auth import create_invite_token, send_invite_email
+                    token = create_invite_token(user["id"], email)
+                    base_url = os.getenv("APP_PUBLIC_URL", "https://app.solclear.co")
+                    invite_url = f"{base_url}/reset-password?token={token}"
+                    # Get the inviting admin's name for the email copy
+                    inviter = session.get("full_name") or session.get("email") or "Your admin"
+                    invite_sent = send_invite_email(email, invite_url, invited_by=inviter)
+                except Exception as e:
+                    print(f"WARNING: invite email failed for {email}: {e}", file=sys.stderr)
+
+            user["invite_sent"] = invite_sent
             self._send_json(user, 201)
         except Exception as e:
             if "unique" in str(e).lower():

@@ -1196,7 +1196,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           <input class="search-input" id="addUserLast" type="text" placeholder="Last Name" style="flex:1;min-width:100px;font-size:13px;">
           <input class="search-input" id="addUserEmail" type="email" placeholder="Email" style="flex:1;min-width:160px;font-size:13px;">
           <input class="search-input" id="addUserPhone" type="tel" placeholder="Phone (optional)" style="flex:1;min-width:120px;font-size:13px;">
-          <input class="search-input" id="addUserPassword" type="text" placeholder="Initial password" style="flex:1;min-width:120px;font-size:13px;">
+          <!-- Password removed — invite email is sent automatically -->
           <select id="addUserRole" style="padding:8px;border:2px solid var(--border);border-radius:8px;font-size:13px;min-height:44px;">
             <option value="crew">Crew</option>
             <option value="reviewer">Reviewer</option>
@@ -1744,14 +1744,13 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       const last_name = document.getElementById('addUserLast').value.trim();
       const email = document.getElementById('addUserEmail').value.trim();
       const phone = document.getElementById('addUserPhone').value.trim() || null;
-      const password = document.getElementById('addUserPassword').value.trim();
       const role = document.getElementById('addUserRole').value;
       if (!email || !first_name || !last_name) { alert('First name, last name, and email required'); return; }
       try {
         const r = await fetch('/api/organizations/' + currentOrgId + '/users', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({email, first_name, last_name, phone, password, role})
+          body: JSON.stringify({email, first_name, last_name, phone, role})
         });
         const result = await r.json();
         if (result.error) { alert(result.error); return; }
@@ -1759,7 +1758,10 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         document.getElementById('addUserLast').value = '';
         document.getElementById('addUserEmail').value = '';
         document.getElementById('addUserPhone').value = '';
-        document.getElementById('addUserPassword').value = '';
+        const msg = result.invite_sent
+          ? `${first_name} ${last_name} added. An invitation email has been sent to ${email}.`
+          : `${first_name} ${last_name} added. (Invite email could not be sent — check Resend configuration.)`;
+        alert(msg);
         openOrg(currentOrgId);  // refresh
       } catch (e) { alert('Error: ' + e.message); }
     }

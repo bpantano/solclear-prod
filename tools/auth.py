@@ -126,7 +126,22 @@ def clear_session_cookie_header() -> str:
 
 # ── Password Reset Tokens ────────────────────────────────────────────────────
 
-RESET_TOKEN_MAX_AGE = 60 * 60  # 1 hour
+RESET_TOKEN_MAX_AGE = 60 * 60      # 1 hour (password reset requests)
+INVITE_TOKEN_MAX_AGE = 24 * 60 * 60  # 24 hours (first-time invitations)
+
+
+def create_invite_token(user_id: int, email: str) -> str:
+    """Like create_reset_token but valid for 24 hours — enough time for a
+    new user to check their email and set their password without urgency."""
+    payload = {
+        "user_id": user_id,
+        "email": email,
+        "type": "reset",
+        "exp": int(time.time()) + INVITE_TOKEN_MAX_AGE,
+    }
+    data = json.dumps(payload, separators=(",", ":"))
+    sig = hmac.new(SESSION_SECRET.encode(), data.encode(), hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(f"{data}.{sig}".encode()).decode()
 
 
 def create_reset_token(user_id: int, email: str) -> str:
@@ -169,6 +184,45 @@ def validate_reset_token(token: str) -> dict:
 
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "noreply@solclear.io")
+
+
+def send_invite_email(to_email: str, set_password_url: str, invited_by: str = "Your admin") -> bool:
+    """Send a first-time invitation email so a new user can set their own
+    password. Uses the same reset-password flow under the hood — the link
+    lands on the same /reset-password page but with invitation copy."""
+    if not RESEND_API_KEY:
+        print(f"RESEND_API_KEY not set. Invite URL: {set_password_url}")
+        return False
+
+    import requests
+    try:
+        resp = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": RESEND_FROM_EMAIL,
+                "to": [to_email],
+                "subject": "You've been invited to Solclear",
+                "html": (
+                    '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">'
+                    '<h2 style="font-size:18px;margin-bottom:8px;color:#1a1a2e;">Welcome to Solclear</h2>'
+                    f'<p style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:8px;">{invited_by} has added you to Solclear — solar installation compliance, simplified.</p>'
+                    '<p style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:24px;">Click the button below to set your password and get started. This link expires in 24 hours.</p>'
+                    f'<a href="{set_password_url}" style="display:inline-block;background:#3b82f6;color:#fff;padding:14px 28px;border-radius:8px;text-decoration:none;font-size:14px;font-weight:600;">Set your password</a>'
+                    '<p style="font-size:12px;color:#9ca3af;margin-top:24px;line-height:1.5;">'
+                    'If you weren\'t expecting this invitation, you can safely ignore this email.</p>'
+                    '</div>'
+                ),
+            },
+            timeout=10,
+        )
+        return resp.status_code in (200, 201)
+    except Exception as e:
+        print(f"Failed to send invite email: {e}")
+        return False
 
 
 def send_reset_email(to_email: str, reset_url: str) -> bool:
