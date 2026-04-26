@@ -1790,7 +1790,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         // Show invite status + resend button for users who haven't set a password
         if (!u.has_password) {
           statusHtml += '<div style="margin-top:10px;padding:10px 12px;background:var(--warning-subtle);border-radius:8px;border:1px solid var(--warning);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">';
-          statusHtml += '<span style="font-size:var(--text-xs);color:var(--warning-text);flex:1;">⏳ Awaiting invitation — this user hasn\'t set their password yet.</span>';
+          statusHtml += '<span style="font-size:var(--text-xs);color:var(--warning-text);flex:1;">⏳ Awaiting invitation — password not yet set.</span>';
           statusHtml += `<button onclick="resendInvite(${u.id})" style="background:var(--warning);color:var(--text-inverse);border:none;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;min-height:32px;white-space:nowrap;">Resend invite</button>`;
           statusHtml += '</div>';
         }
