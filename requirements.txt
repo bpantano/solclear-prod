@@ -4,3 +4,4 @@ anthropic
 psycopg2-binary
 bcrypt
 cryptography
+beautifulsoup4
