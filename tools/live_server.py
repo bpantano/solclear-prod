@@ -2657,31 +2657,19 @@ class LiveHandler(BaseHTTPRequestHandler):
                         row[k] = float(row[k])
                 return row
 
-            # Per-requirement timing: avg wall-clock, broken down into
-            # API time (from api_call_log) vs download/overhead.
-            # Only includes rows where total_duration_ms was captured
-            # (migration 010+). Sorted by avg total time descending.
-            timing_where = "WHERE rr.total_duration_ms IS NOT NULL"
-            timing_params: list = []
-            if filters:
-                timing_where += " AND " + " AND ".join(
-                    f.replace("a.", "acl.").replace("p.", "pr.").replace("r.", "rpt.")
-                    for f in filters
-                    if "a." not in f  # skip api_call_log-specific filters
-                )
-            req_timing = fetch_all(f"""
+            # Per-requirement timing: lifetime averages — intentionally
+            # unfiltered so the Performance tab always reflects inherent
+            # speed characteristics of each requirement, not a filtered
+            # window that would produce noisy averages on small samples.
+            req_timing = fetch_all("""
                 SELECT req.code AS requirement_code,
                        COUNT(*) AS run_count,
                        ROUND(AVG(rr.total_duration_ms)) AS avg_total_ms,
                        ROUND(MIN(rr.total_duration_ms)) AS min_total_ms,
                        ROUND(MAX(rr.total_duration_ms)) AS max_total_ms,
-                       ROUND(COALESCE(
-                           AVG(acl.api_ms), 0
-                       )) AS avg_api_ms
+                       ROUND(COALESCE(AVG(acl.api_ms), 0)) AS avg_api_ms
                 FROM requirement_results rr
                 JOIN requirements req ON req.id = rr.requirement_id
-                JOIN reports rpt ON rpt.id = rr.report_id
-                JOIN projects pr ON pr.id = rpt.project_id
                 LEFT JOIN (
                     SELECT report_id, requirement_code,
                            SUM(duration_ms) AS api_ms
@@ -2689,11 +2677,11 @@ class LiveHandler(BaseHTTPRequestHandler):
                     GROUP BY report_id, requirement_code
                 ) acl ON acl.report_id = rr.report_id
                       AND acl.requirement_code = req.code
-                {timing_where}
+                WHERE rr.total_duration_ms IS NOT NULL
                 GROUP BY req.code
                 ORDER BY avg_total_ms DESC
                 LIMIT 20
-            """, tuple(timing_params) if timing_params else None)
+            """)
 
             totals = _iso(totals or {})
             top_reports = [_iso(r, "completed_at") for r in top_reports]
