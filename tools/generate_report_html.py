@@ -780,6 +780,7 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
         container.dataset.loaded = '1';
         container.style.display = 'flex';
         btn.textContent = '📋 Hide Palmetto reference';
+        rewirePhotoLinks(container);  // wire lightbox on dynamically-added photos
       }} catch (e) {{
         container.innerHTML = '<span class="req-reference-empty">Could not load reference photos.</span>';
         container.style.display = 'flex';
@@ -1085,6 +1086,42 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
       return div.innerHTML;
     }}
 
+    // ── Lightbox ──
+    function openLightbox(url) {{
+      const lb = document.getElementById('photoLightbox');
+      const img = document.getElementById('photoLightboxImg');
+      if (!lb || !img) return;
+      img.src = url;
+      lb.style.display = 'flex';
+      document.body.style.overflow = 'hidden';
+    }}
+    function closeLightbox(ev) {{
+      // Only close when clicking the backdrop (not the image itself)
+      if (ev && ev.target === document.getElementById('photoLightboxImg')) return;
+      const lb = document.getElementById('photoLightbox');
+      if (lb) lb.style.display = 'none';
+      document.body.style.overflow = '';
+    }}
+    document.addEventListener('keydown', function(e) {{
+      if (e.key === 'Escape') closeLightbox();
+    }});
+    // Intercept all photo links on the page and open lightbox instead
+    // of a new tab. Runs after DOM is ready; also called after dynamic
+    // content is injected (reference photos, etc.).
+    function rewirePhotoLinks(root) {{
+      root = root || document;
+      root.querySelectorAll('a.req-photo-link, .req-reference-photos a').forEach(function(a) {{
+        if (a.dataset.lightboxWired) return;
+        a.dataset.lightboxWired = '1';
+        a.addEventListener('click', function(e) {{
+          e.preventDefault();
+          e.stopPropagation();
+          openLightbox(a.href);
+        }});
+      }});
+    }}
+    document.addEventListener('DOMContentLoaded', function() {{ rewirePhotoLinks(); }});
+
     async function recheckItem(btn, reqCode) {{
       if (!IS_INTERACTIVE || !REPORT_ID) return;
       const row = btn.closest('.requirement');
@@ -1311,6 +1348,14 @@ def generate_html(report: dict, project: dict) -> str:
 
   <div class="report-footer">
     Solclear Compliance &middot; Palmetto LightReach M1 &middot; {generated} &middot; ID: {_esc(project_id)}
+  </div>
+
+  <!-- Lightbox overlay — shown when user clicks any photo. Avoids
+       opening a new tab for every inspection. Closed by clicking the
+       backdrop, the X button, or pressing Escape. -->
+  <div id="photoLightbox" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:999;align-items:center;justify-content:center;" onclick="closeLightbox(event)">
+    <button onclick="closeLightbox()" aria-label="Close" style="position:absolute;top:16px;right:20px;background:none;border:none;color:#fff;font-size:28px;cursor:pointer;line-height:1;padding:4px 8px;opacity:0.8;">&#x2715;</button>
+    <img id="photoLightboxImg" src="" alt="" style="max-width:90vw;max-height:88vh;object-fit:contain;border-radius:6px;box-shadow:0 8px 40px rgba(0,0,0,0.6);" onclick="event.stopPropagation()">
   </div>
 
   <script>{script}</script>
