@@ -1562,7 +1562,8 @@ class LiveHandler(BaseHTTPRequestHandler):
                     base_url = os.getenv("APP_PUBLIC_URL", "https://app.solclear.co")
                     invite_url = f"{base_url}/reset-password?token={token}"
                     # Get the inviting admin's name for the email copy
-                    inviter = session.get("full_name") or session.get("email") or "Your admin"
+                    _s = getattr(self, "_session", {}) or {}
+                    inviter = _s.get("full_name") or _s.get("email") or "Your admin"
                     invite_sent = send_invite_email(email, invite_url, invited_by=inviter)
                 except Exception as e:
                     print(f"WARNING: invite email failed for {email}: {e}", file=sys.stderr)
