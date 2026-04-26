@@ -200,7 +200,7 @@ REQUIREMENTS = [
         "condition": always,
         "task_titles": ["Railing Type", "Roof Penetration & Conduit"],
         "keywords": ["railing type", "roof penetration", "flashing", "sealant", "attachment"],
-        "selection_criteria": "a close-up of a roof attachment point that clearly shows the seal between the attachment and the roof — flashing and/or sealant around the penetration",
+        "selection_criteria": "a close-up showing a roof mounting attachment (lag bolt, L-foot, stanchion, or post) physically installed through the roof deck, with sealant visibly applied around the hardware — the metal hardware must be visible, not just a sealed hole",
         "validation_prompt": (
             "This photo should show a close-up of a roof attachment (lag bolt, "
             "stanchion, or post) where it penetrates the roof, documenting the "
@@ -211,11 +211,14 @@ REQUIREMENTS = [
             "applied within or around the attachment in a way that sheds water. "
             "\n\nIMPORTANT — work through these observations BEFORE picking a "
             "verdict. Write each observation as a numbered line:"
-            "\n1. Subject check — Does the photo show a roof attachment point "
-            "(lag bolt / stanchion / post penetrating shingles or the roof "
-            "deck)? Or is it of something else (a rail end, a bare deck, "
-            "completed array, etc.)? Describe what is actually centered in "
-            "the frame."
+            "\n1. Subject check — Does the photo show a roof mounting attachment "
+            "(lag bolt / stanchion / L-foot / post) physically installed through "
+            "the roof deck, with the metal hardware visible? Or is it something "
+            "else — a rail end, a sealed hole with no hardware visible, a bare "
+            "deck, a completed array, or conduit? A sealed hole alone (no "
+            "hardware visible) does NOT qualify — Palmetto requires documentation "
+            "of the actual mounting hardware. Describe what is actually centered "
+            "in the frame."
             "\n2. Sealant check — Is sealant visible at the penetration? "
             "Sealant typically appears as a black, gray, or clear "
             "bead/blob/smear applied around the bolt head, under the "
@@ -240,9 +243,10 @@ REQUIREMENTS = [
             "penetration. (Flashing alone without visible sealant is NOT "
             "enough — sealant is the universally required element.)"
             "\n- FAIL: observation #1 shows the photo is NOT a roof "
-            "attachment close-up at all (e.g., a rail end, a bare deck, "
-            "an array overview), OR observation #2 confirms NO sealant is "
-            "visible anywhere at the penetration."
+            "attachment close-up with visible hardware (e.g., a rail end, "
+            "a bare deck, an array overview, or a sealed hole with no "
+            "mounting hardware visible), OR observation #2 confirms NO "
+            "sealant is visible anywhere at the penetration."
             "\n- NEEDS_REVIEW: subject is the right kind of shot but sealant "
             "presence/quality is genuinely unclear due to glare, shadow, "
             "extreme angle, or a part of the attachment being out of frame. "
