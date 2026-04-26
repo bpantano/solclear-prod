@@ -185,6 +185,20 @@ def validate_reset_token(token: str) -> dict:
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "noreply@solclear.io")
 
+# Email-safe logo — text + amber dot on dark background. SVG is not
+# reliably supported in email clients (Outlook strips it, Gmail is
+# inconsistent), so we use an HTML/CSS representation instead.
+_EMAIL_LOGO_HTML = (
+    '<div style="text-align:center;margin-bottom:28px;">'
+    '<div style="display:inline-block;background:#1a1a2e;padding:12px 24px;border-radius:10px;">'
+    '<span style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif;'
+    'font-size:22px;font-weight:700;color:#ffffff;letter-spacing:-0.5px;">solclear</span>'
+    '<span style="display:inline-block;width:8px;height:8px;background:#F59E0B;'
+    'border-radius:50%;margin-left:4px;vertical-align:middle;position:relative;top:-2px;"></span>'
+    '</div>'
+    '</div>'
+)
+
 
 def send_invite_email(to_email: str, set_password_url: str, invited_by: str = "Your admin") -> bool:
     """Send a first-time invitation email so a new user can set their own
@@ -208,6 +222,7 @@ def send_invite_email(to_email: str, set_password_url: str, invited_by: str = "Y
                 "subject": "You've been invited to Solclear",
                 "html": (
                     '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">'
+                    + _EMAIL_LOGO_HTML +
                     '<h2 style="font-size:18px;margin-bottom:8px;color:#1a1a2e;">Welcome to Solclear</h2>'
                     f'<p style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:8px;">{invited_by} has added you to Solclear — solar installation compliance, simplified.</p>'
                     '<p style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:24px;">Click the button below to set your password and get started. This link expires in 24 hours.</p>'
@@ -245,15 +260,13 @@ def send_reset_email(to_email: str, reset_url: str) -> bool:
                 "subject": "Solclear — Reset Your Password",
                 "html": (
                     '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">'
-                    '<div style="text-align:center;margin-bottom:32px;">'
-                    f'<img src="{reset_url.rsplit("/reset-password", 1)[0]}/logo.svg" alt="solclear" height="40">'
-                    '</div>'
+                    + _EMAIL_LOGO_HTML +
                     '<h2 style="font-size:18px;margin-bottom:8px;color:#1a1a2e;">Reset your password</h2>'
                     '<p style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:24px;">'
                     'We received a request to reset your password. Click the button below to choose a new one. This link expires in 1 hour.</p>'
                     f'<a href="{reset_url}" style="display:inline-block;background:#3b82f6;color:#fff;padding:14px 28px;border-radius:8px;text-decoration:none;font-size:14px;font-weight:600;">Reset Password</a>'
                     '<p style="font-size:12px;color:#9ca3af;margin-top:24px;line-height:1.5;">'
-                    'If you didn\'t request this, you can safely ignore this email. Your password won\'t change until you click the link above.</p>'
+                    'If you did not request this, you can safely ignore this email. Your password will not change until you click the link above.</p>'
                     '</div>'
                 ),
             },

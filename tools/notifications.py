@@ -82,14 +82,24 @@ def _email_html(title: str, body: str, link_url: Optional[str]) -> str:
             f'font-size:14px;margin-top:12px;">Open in Solclear</a>'
         )
     body_html = (body or "").replace("\n", "<br>")
+    logo = (
+        '<div style="text-align:center;margin-bottom:20px;">'
+        '<div style="display:inline-block;background:#1a1a2e;padding:10px 20px;border-radius:8px;">'
+        '<span style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif;'
+        'font-size:18px;font-weight:700;color:#ffffff;letter-spacing:-0.5px;">solclear</span>'
+        '<span style="display:inline-block;width:6px;height:6px;background:#F59E0B;'
+        'border-radius:50%;margin-left:3px;vertical-align:middle;position:relative;top:-1px;"></span>'
+        '</div></div>'
+    )
     return (
         '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;'
         'max-width:480px;margin:0 auto;padding:32px 20px;">'
+        + logo +
         f'<h2 style="font-size:17px;margin-bottom:8px;color:#1a1a2e;">{title}</h2>'
         f'<div style="font-size:14px;color:#374151;line-height:1.55;">{body_html}</div>'
         f'{cta}'
         '<p style="font-size:11px;color:#9ca3af;margin-top:32px;">'
-        'You\'re receiving this because of an event in Solclear. '
+        "You're receiving this because of an event in Solclear. "
         f'Visit <a href="{_APP_URL}" style="color:#9ca3af;">{_APP_URL}</a> for more.'
         '</p></div>'
     )
