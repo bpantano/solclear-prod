@@ -282,6 +282,14 @@ def render_requirement(req: dict, is_interactive: bool, checklist_id: str, proje
       {photo_html}
       {reason_html}
       {note_html}
+      <!-- Palmetto reference photo toggle — JS populates on first open -->
+      <div class="req-reference-toggle" style="margin-top:8px;">
+        <button class="btn btn-sm btn-subtle" style="font-size:10px;"
+                onclick="event.stopPropagation();toggleReferencePhotos(this,'{_esc(code)}')">
+          📋 See Palmetto reference
+        </button>
+        <div class="req-reference-photos" style="display:none;margin-top:8px;"></div>
+      </div>
       {actions_html}
     </div>'''
 
@@ -628,6 +636,21 @@ def _report_style_block() -> str:
     }
     @keyframes btn-spin { to { transform: rotate(360deg); } }
 
+    /* Palmetto reference photos */
+    .requirement.collapsed .req-reference-toggle { display: none !important; }
+    .req-reference-photos {
+      display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px;
+    }
+    .req-reference-photos img {
+      width: 120px; height: 90px; object-fit: cover;
+      border-radius: 6px; border: 1px solid var(--border);
+      cursor: pointer;
+    }
+    .req-reference-photos img:hover { opacity: 0.85; }
+    .req-reference-empty {
+      font-size: 11px; color: var(--text-muted); padding: 4px 0;
+    }
+
     /* Alerts */
     .alert {
       display: flex; gap: 10px; align-items: center;
@@ -723,6 +746,49 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
     }}
 
     // ── Show-more/less for long reason text ──
+    // Palmetto reference photo toggle. Lazy-loads photos on first open
+    // so we don't fetch for every requirement on page load.
+    async function toggleReferencePhotos(btn, reqCode) {{
+      const container = btn.nextElementSibling;  // .req-reference-photos
+      if (container.style.display !== 'none') {{
+        container.style.display = 'none';
+        btn.textContent = '📋 See Palmetto reference';
+        return;
+      }}
+      // Already populated — just show
+      if (container.dataset.loaded) {{
+        container.style.display = 'flex';
+        btn.textContent = '📋 Hide Palmetto reference';
+        return;
+      }}
+      // Fetch from API
+      btn.textContent = 'Loading…';
+      btn.disabled = true;
+      try {{
+        const r = await fetch('/api/reference_photos/' + encodeURIComponent(reqCode));
+        const data = await r.json();
+        const photos = data.photos || [];
+        if (!photos.length) {{
+          container.innerHTML = '<span class="req-reference-empty">No reference photos available for this requirement.</span>';
+        }} else {{
+          container.innerHTML = photos.map(p =>
+            '<a href="' + p.url + '" target="_blank" onclick="event.stopPropagation()">' +
+            '<img src="' + p.url + '" alt="' + (p.alt_text || 'Reference') + '" loading="lazy" title="' + (p.alt_text || 'Palmetto reference photo') + '">' +
+            '</a>'
+          ).join('');
+        }}
+        container.dataset.loaded = '1';
+        container.style.display = 'flex';
+        btn.textContent = '📋 Hide Palmetto reference';
+      }} catch (e) {{
+        container.innerHTML = '<span class="req-reference-empty">Could not load reference photos.</span>';
+        container.style.display = 'flex';
+        btn.textContent = '📋 See Palmetto reference';
+      }} finally {{
+        btn.disabled = false;
+      }}
+    }}
+
     function toggleReason(btn) {{
       const full = btn.previousElementSibling;
       const short = full.previousElementSibling;

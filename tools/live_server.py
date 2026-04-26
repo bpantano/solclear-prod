@@ -730,6 +730,20 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._api_notifications_list(session, qs)
         elif path == "/api/notifications/unread_count":
             self._api_notifications_unread_count(session)
+        elif path.startswith("/api/reference_photos/"):
+            parts = path.split("/")
+            # /api/reference_photos/{req_code}         → list metadata
+            # /api/reference_photos/{req_code}/{id}/img → serve bytes
+            if len(parts) >= 6 and parts[5] == "img":
+                try:
+                    photo_id = int(parts[4])
+                except ValueError:
+                    self.send_error(400, "Invalid photo id")
+                    return
+                self._serve_reference_photo_bytes(photo_id)
+            else:
+                req_code = parts[3] if len(parts) > 3 else ""
+                self._api_reference_photo(req_code)
         elif path == "/api/dev_notes":
             if not self._require_role(session, ("superadmin",)):
                 return
@@ -2057,6 +2071,53 @@ class LiveHandler(BaseHTTPRequestHandler):
         with _anthropic_status_lock:
             out["platform_status"] = dict(_anthropic_status)
         self._send_json(out)
+
+    def _serve_reference_photo_bytes(self, photo_id):
+        """Serve the raw image bytes for a reference photo. Cached for 1 hour
+        (photos only change when the Palmetto spec changes). No auth required."""
+        try:
+            row = fetch_one(
+                "SELECT image_bytes, mime_type FROM requirement_reference_photos WHERE id = %s",
+                (photo_id,),
+            )
+            if not row or not row.get("image_bytes"):
+                self.send_error(404, "Photo not found")
+                return
+            data = bytes(row["image_bytes"])
+            self.send_response(200)
+            self.send_header("Content-Type", row.get("mime_type") or "image/jpeg")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "public, max-age=3600")
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception as e:
+            self.send_error(500, str(e))
+
+    def _api_reference_photo(self, req_code):
+        """Return reference photo metadata for a requirement code.
+        No auth required — reference photos are public Palmetto content.
+        Returns a list of {id, alt_text, url} where url points to
+        /api/reference_photos/{req_code}/{id}/img for the bytes."""
+        if not req_code:
+            self._send_json({"error": "req_code required"}, 400)
+            return
+        try:
+            rows = fetch_all(
+                "SELECT id, alt_text, display_order FROM requirement_reference_photos "
+                "WHERE requirement_code = %s ORDER BY display_order ASC",
+                (req_code.upper(),),
+            )
+            photos = [
+                {
+                    "id": r["id"],
+                    "alt_text": r.get("alt_text") or "",
+                    "url": f"/api/reference_photos/{req_code}/{r['id']}/img",
+                }
+                for r in rows
+            ]
+            self._send_json({"photos": photos})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
 
     def _api_platform_status(self, session):
         """Lightweight endpoint for the SPA to poll every 60s. Returns
