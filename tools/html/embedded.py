@@ -824,8 +824,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       Requirements
     </button>
     <button class="nav-item superadmin-only" data-nav="costs" onclick="navigate('costs')" style="display:none;">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
-      Costs
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      Analytics
     </button>
     <!-- Dev Notes triage tab — superadmin only. The badge shows the
          count of open (awaiting triage) dev notes, refreshed alongside
@@ -1327,28 +1327,43 @@ EMBEDDED_HTML = """<!DOCTYPE html>
   <!-- Cost dashboard (superadmin only) -->
   <div id="adminCosts" class="step">
     <button class="back-btn" onclick="showStep('home')">&larr; Back to home</button>
-    <div class="step-label">API Cost Dashboard</div>
+    <div class="step-label">Analytics</div>
 
-    <!-- Filter bar -->
-    <div class="filter-bar" style="margin-bottom:12px;">
-      <select id="costOrgFilter" class="filter-select" onchange="loadCosts()">
-        <option value="">All organizations</option>
-      </select>
-      <select id="costUserFilter" class="filter-select" onchange="loadCosts()">
-        <option value="">All users</option>
-      </select>
-    </div>
-    <div class="filter-bar" style="margin-bottom:16px;">
-      <div class="filter-range">
-        <input type="date" id="costDateFrom" onchange="loadCosts()" placeholder="From">
-        <span class="sep">to</span>
-        <input type="date" id="costDateTo" onchange="loadCosts()" placeholder="To">
+    <!-- Analytics sub-tabs: Costs | Performance -->
+    <nav style="display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:16px;">
+      <button id="analyticsTabCosts" class="dev-notes-tab active" onclick="switchAnalyticsTab('costs')">Costs</button>
+      <button id="analyticsTabPerf" class="dev-notes-tab" onclick="switchAnalyticsTab('performance')">Performance</button>
+    </nav>
+
+    <!-- Costs sub-page -->
+    <div id="analyticsCosts">
+      <div class="filter-bar" style="margin-bottom:12px;">
+        <select id="costOrgFilter" class="filter-select" onchange="loadCosts()">
+          <option value="">All organizations</option>
+        </select>
+        <select id="costUserFilter" class="filter-select" onchange="loadCosts()">
+          <option value="">All users</option>
+        </select>
       </div>
-      <button class="btn btn-subtle btn-sm" onclick="clearCostFilters()">Clear filters</button>
+      <div class="filter-bar" style="margin-bottom:16px;">
+        <div class="filter-range">
+          <input type="date" id="costDateFrom" onchange="loadCosts()" placeholder="From">
+          <span class="sep">to</span>
+          <input type="date" id="costDateTo" onchange="loadCosts()" placeholder="To">
+        </div>
+        <button class="btn btn-subtle btn-sm" onclick="clearCostFilters()">Clear filters</button>
+      </div>
+      <div id="costSummary" style="margin-top:4px;"></div>
+      <div id="costBody" style="margin-top:16px;"></div>
     </div>
 
-    <div id="costSummary" style="margin-top:4px;"></div>
-    <div id="costBody" style="margin-top:16px;"></div>
+    <!-- Performance sub-page -->
+    <div id="analyticsPerf" style="display:none;">
+      <p style="font-size:var(--text-sm);color:var(--text-muted);margin-bottom:16px;">
+        Wall-clock time per requirement from photo download through AI decisioning. Sorted slowest first. Colour: <span style="color:var(--success);font-weight:600;">green</span> &lt;10s, <span style="color:var(--warning);font-weight:600;">amber</span> 10–30s, <span style="color:var(--danger);font-weight:600;">red</span> &gt;30s.
+      </p>
+      <div id="perfBody"><div style="color:var(--text-muted);font-size:var(--text-sm);">Loading…</div></div>
+    </div>
   </div>
 
   <!-- Dev Notes triage page (superadmin only — gated by route handler).
@@ -1414,8 +1429,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       Requirements
     </button>
     <button class="nav-item superadmin-only" onclick="closeAccountSheet();navigate('costs')" style="display:none;">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
-      Costs
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      Analytics
     </button>
     <div class="sidebar-section-label">Account</div>
     <a class="nav-item" href="/change-password" style="text-decoration:none;">
@@ -3453,6 +3468,30 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       return qs ? ('?' + qs) : '';
     }
 
+    function switchAnalyticsTab(tab) {
+      const isCosts = tab === 'costs';
+      document.getElementById('analyticsCosts').style.display = isCosts ? '' : 'none';
+      document.getElementById('analyticsPerf').style.display = isCosts ? 'none' : '';
+      document.getElementById('analyticsTabCosts').classList.toggle('active', isCosts);
+      document.getElementById('analyticsTabPerf').classList.toggle('active', !isCosts);
+      if (!isCosts) loadPerformance();
+    }
+
+    async function loadPerformance() {
+      const body = document.getElementById('perfBody');
+      if (!body) return;
+      body.innerHTML = spinnerHtml('Loading performance data...');
+      try {
+        // Reuse the cost endpoint — it returns requirement_timing in the same payload
+        const r = await fetch('/api/admin/cost/summary');
+        if (!r.ok) throw new Error('Request failed');
+        const data = await r.json();
+        body.innerHTML = renderReqTiming(data.requirement_timing || []);
+      } catch (e) {
+        body.innerHTML = errorAlert('Could not load performance data: ' + e.message);
+      }
+    }
+
     function clearCostFilters() {
       document.getElementById('costOrgFilter').value = '';
       document.getElementById('costUserFilter').value = '';
@@ -3480,6 +3519,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           renderCostSection('Spend by purpose', renderByPurpose(data.by_purpose, data.totals)) +
           renderCostSection('Most expensive reports', renderTopReports(data.top_reports)) +
           renderCostSection('Most expensive requirements', renderTopRequirements(data.top_requirements)) +
+          renderCostSection('Requirement processing time', renderReqTiming(data.requirement_timing)) +
           renderCostSection('Spend by day (last 30)', renderDailyTrend(data.daily_last_30)) +
           renderCostSection('Recent API calls', renderRecentCalls(data.recent_calls));
       } catch (e) {
@@ -3580,6 +3620,41 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           '<td style="padding:8px 6px;color:var(--text-muted);">' + _fmtDate(r.completed_at) + '</td>' +
           '</tr>'
         ).join('') + '</tbody></table></div>';
+    }
+
+    function renderReqTiming(rows) {
+      if (!rows || !rows.length) return '<div style="color:var(--text-muted);font-size:var(--text-sm);">No timing data yet — run a check to populate.</div>';
+      function _fmtMs(ms) {
+        if (!ms) return '—';
+        if (ms < 1000) return ms + 'ms';
+        return (ms / 1000).toFixed(1) + 's';
+      }
+      return '<div class="table-scroll"><table style="width:100%;border-collapse:collapse;font-size:var(--text-sm);">' +
+        '<thead><tr>' +
+        '<th style="text-align:left;padding:6px;color:var(--text-muted);font-weight:600;">Req</th>' +
+        '<th style="text-align:right;padding:6px;color:var(--text-muted);font-weight:600;">Avg total</th>' +
+        '<th style="text-align:right;padding:6px;color:var(--text-muted);font-weight:600;">Avg API</th>' +
+        '<th style="text-align:right;padding:6px;color:var(--text-muted);font-weight:600;">Avg download</th>' +
+        '<th style="text-align:right;padding:6px;color:var(--text-muted);font-weight:600;">Min</th>' +
+        '<th style="text-align:right;padding:6px;color:var(--text-muted);font-weight:600;">Max</th>' +
+        '<th style="text-align:right;padding:6px;color:var(--text-muted);font-weight:600;">Runs</th>' +
+        '</tr></thead><tbody>' +
+        rows.map(r => {
+          const totalMs = r.avg_total_ms || 0;
+          const apiMs = r.avg_api_ms || 0;
+          const downloadMs = Math.max(0, totalMs - apiMs);
+          // Colour-code by avg total: green <10s, amber 10-30s, red >30s
+          const colour = totalMs > 30000 ? 'var(--danger)' : totalMs > 10000 ? 'var(--warning)' : 'var(--success)';
+          return '<tr style="border-top:1px solid var(--border-light);">' +
+            '<td style="padding:6px;font-weight:600;">' + esc(r.requirement_code) + '</td>' +
+            '<td style="padding:6px;text-align:right;font-weight:700;color:' + colour + ';">' + _fmtMs(totalMs) + '</td>' +
+            '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + _fmtMs(apiMs) + '</td>' +
+            '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + _fmtMs(downloadMs) + '</td>' +
+            '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + _fmtMs(r.min_total_ms) + '</td>' +
+            '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + _fmtMs(r.max_total_ms) + '</td>' +
+            '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + (r.run_count || 0) + '</td>' +
+            '</tr>';
+        }).join('') + '</tbody></table></div>';
     }
 
     function renderTopRequirements(rows) {

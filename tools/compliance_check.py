@@ -1610,8 +1610,11 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
         prior = getattr(_call_ctx, "attrs", None)
         if parent_ctx is not None:
             _call_ctx.attrs = parent_ctx
+        import time as _time
+        t0 = _time.time()
         try:
             vision_result = check_candidates_with_vision(candidates, req)
+            total_ms = int((_time.time() - t0) * 1000)
             return {
                 "id": req["id"],
                 "title": req["title"],
@@ -1621,6 +1624,7 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
                 "candidates": len(candidates),
                 "photo_urls": vision_result.get("photo_urls", {}),
                 "optional": req.get("optional", False),
+                "total_duration_ms": total_ms,
             }
         finally:
             _call_ctx.attrs = prior
