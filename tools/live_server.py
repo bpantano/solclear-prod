@@ -2661,13 +2661,16 @@ class LiveHandler(BaseHTTPRequestHandler):
             # unfiltered so the Performance tab always reflects inherent
             # speed characteristics of each requirement, not a filtered
             # window that would produce noisy averages on small samples.
+            # Cast to INTEGER so these come back as Python int, not Decimal.
+            # ROUND(AVG(...)) returns Postgres NUMERIC which Python's json.dumps
+            # can't serialize — that was silently crashing the whole endpoint.
             req_timing = fetch_all("""
                 SELECT req.code AS requirement_code,
                        COUNT(*) AS run_count,
-                       ROUND(AVG(rr.total_duration_ms)) AS avg_total_ms,
-                       ROUND(MIN(rr.total_duration_ms)) AS min_total_ms,
-                       ROUND(MAX(rr.total_duration_ms)) AS max_total_ms,
-                       ROUND(COALESCE(AVG(acl.api_ms), 0)) AS avg_api_ms
+                       ROUND(AVG(rr.total_duration_ms))::INTEGER AS avg_total_ms,
+                       MIN(rr.total_duration_ms)::INTEGER AS min_total_ms,
+                       MAX(rr.total_duration_ms)::INTEGER AS max_total_ms,
+                       ROUND(COALESCE(AVG(acl.api_ms), 0))::INTEGER AS avg_api_ms
                 FROM requirement_results rr
                 JOIN requirements req ON req.id = rr.requirement_id
                 LEFT JOIN (
