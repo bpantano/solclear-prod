@@ -895,6 +895,13 @@ class LiveHandler(BaseHTTPRequestHandler):
             if not self._require_org_access(session, oid, write=True):
                 return
             self._api_org_user_create(oid, body)
+        elif path.startswith("/api/users/") and path.endswith("/resend-invite"):
+            if not self._require_role(session, ("superadmin", "admin")):
+                return
+            uid = path.split("/")[3]
+            if not self._require_user_access(session, uid):
+                return
+            self._api_user_resend_invite(uid)
         elif path.startswith("/api/users/") and path.endswith("/toggle"):
             if not self._require_role(session, ("superadmin", "admin")):
                 return
@@ -1576,6 +1583,32 @@ class LiveHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json({"error": str(e)}, 500)
 
+    def _api_user_resend_invite(self, user_id):
+        """Re-send the invitation email for a user who hasn't set a password yet.
+        Only works when password_hash IS NULL — if the user already has a
+        password they should use the forgot-password flow instead."""
+        try:
+            user = fetch_one("SELECT id, email, password_hash, is_active FROM users WHERE id = %s", (user_id,))
+            if not user:
+                self._send_json({"error": "User not found"}, 404)
+                return
+            if user.get("password_hash"):
+                self._send_json({"error": "This user already has a password set. Direct them to Forgot Password instead."}, 400)
+                return
+            from tools.auth import create_invite_token, send_invite_email
+            token = create_invite_token(user["id"], user["email"])
+            base_url = os.getenv("APP_PUBLIC_URL", "https://app.solclear.co")
+            invite_url = f"{base_url}/reset-password?token={token}"
+            _s = getattr(self, "_session", {}) or {}
+            inviter = _s.get("full_name") or _s.get("email") or "Your admin"
+            sent = send_invite_email(user["email"], invite_url, invited_by=inviter)
+            if sent:
+                self._send_json({"ok": True, "message": f"Invitation email resent to {user['email']}"})
+            else:
+                self._send_json({"ok": False, "error": "Failed to send email — check Resend configuration"}, 500)
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
     def _api_user_toggle(self, user_id):
         """Toggle a user's is_active status and set/clear deactivated_at."""
         try:
@@ -1600,7 +1633,7 @@ class LiveHandler(BaseHTTPRequestHandler):
         """Get a single user."""
         try:
             user = fetch_one(
-                "SELECT id, email, first_name, last_name, full_name, phone, role, is_active, deactivated_at, created_at, updated_at FROM users WHERE id = %s",
+                "SELECT id, email, first_name, last_name, full_name, phone, role, is_active, deactivated_at, created_at, updated_at, password_hash FROM users WHERE id = %s",
                 (user_id,)
             )
             if not user:
@@ -1609,6 +1642,8 @@ class LiveHandler(BaseHTTPRequestHandler):
             for ts in ("created_at", "updated_at", "deactivated_at"):
                 if user.get(ts):
                     user[ts] = user[ts].isoformat()
+            # Expose whether a password has been set without exposing the hash
+            user["has_password"] = bool(user.pop("password_hash", None))
             self._send_json(user)
         except Exception as e:
             self._send_json({"error": str(e)}, 500)

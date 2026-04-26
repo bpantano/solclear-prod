@@ -1787,8 +1787,28 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         let statusHtml = '<strong>Status:</strong> ' + (u.is_active ? '<span style="color:#10b981;">Active</span>' : '<span style="color:#ef4444;">Inactive</span>');
         if (u.deactivated_at) statusHtml += ' · Deactivated: ' + formatTimestamp(u.deactivated_at);
         if (u.created_at) statusHtml += ' · Created: ' + formatTimestamp(u.created_at);
+        // Show invite status + resend button for users who haven't set a password
+        if (!u.has_password) {
+          statusHtml += '<div style="margin-top:10px;padding:10px 12px;background:var(--warning-subtle);border-radius:8px;border:1px solid var(--warning);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">';
+          statusHtml += '<span style="font-size:var(--text-xs);color:var(--warning-text);flex:1;">⏳ Awaiting invitation — this user hasn\'t set their password yet.</span>';
+          statusHtml += `<button onclick="resendInvite(${u.id})" style="background:var(--warning);color:var(--text-inverse);border:none;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;min-height:32px;white-space:nowrap;">Resend invite</button>`;
+          statusHtml += '</div>';
+        }
         info.innerHTML = statusHtml;
       } catch (e) { alert('Error loading user: ' + e.message); }
+    }
+
+    async function resendInvite(userId) {
+      try {
+        const r = await fetch('/api/users/' + userId + '/resend-invite', {method: 'POST'});
+        const data = await r.json();
+        if (data.ok) {
+          alert(data.message);
+          openUser(userId);  // refresh to reflect any state change
+        } else {
+          alert(data.error || 'Could not resend invite');
+        }
+      } catch (e) { alert('Error: ' + e.message); }
     }
 
     async function saveUser() {
