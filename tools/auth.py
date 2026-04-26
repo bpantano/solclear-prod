@@ -203,7 +203,7 @@ def send_invite_email(to_email: str, set_password_url: str, invited_by: str = "Y
                 "Content-Type": "application/json",
             },
             json={
-                "from": RESEND_FROM_EMAIL,
+                "from": f"Solclear <{RESEND_FROM_EMAIL}>",
                 "to": [to_email],
                 "subject": "You've been invited to Solclear",
                 "html": (
@@ -240,7 +240,7 @@ def send_reset_email(to_email: str, reset_url: str) -> bool:
                 "Content-Type": "application/json",
             },
             json={
-                "from": RESEND_FROM_EMAIL,
+                "from": f"Solclear <{RESEND_FROM_EMAIL}>",
                 "to": [to_email],
                 "subject": "Solclear — Reset Your Password",
                 "html": (

@@ -58,7 +58,7 @@ def _send_email(to_email: str, subject: str, html: str) -> bool:
                 "Authorization": f"Bearer {_RESEND_API_KEY}",
                 "Content-Type": "application/json",
             },
-            json={"from": _RESEND_FROM_EMAIL, "to": [to_email], "subject": subject, "html": html},
+            json={"from": f"Solclear <{_RESEND_FROM_EMAIL}>", "to": [to_email], "subject": subject, "html": html},
             timeout=10,
         )
         if resp.status_code >= 400:
