@@ -3121,7 +3121,8 @@ class LiveHandler(BaseHTTPRequestHandler):
             updated = execute_returning(
                 """UPDATE requirement_results
                    SET status = %s, reason = %s, photo_urls = %s, candidates = %s,
-                       resolved_at = NULL, resolved_by = NULL
+                       resolved_at = NULL, resolved_by = NULL,
+                       total_duration_ms = %s
                    WHERE id = %s
                    RETURNING status, reason, photo_urls, candidates""",
                 (
@@ -3129,6 +3130,7 @@ class LiveHandler(BaseHTTPRequestHandler):
                     new_result.get("reason"),
                     json.dumps(new_result.get("photo_urls", {})),
                     new_result.get("candidates", 0),
+                    new_result.get("total_duration_ms"),
                     row["id"],
                 ),
             )
