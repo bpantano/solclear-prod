@@ -69,23 +69,24 @@ def main():
 
     is_material = analysis.get("material", True)
 
-    # Notify superadmins
-    try:
-        from tools.notifications import notify
-        from tools.db import fetch_all
-        title = "⚠ Palmetto M1 spec changed" if is_material else "Palmetto spec page updated (non-material)"
-        body = analysis.get("summary") or f"{added} lines added, {removed} lines removed."
-        link = "https://help.palmetto.finance/en/articles/8306274-solar-energy-plan-install-m1-photo-documentation"
-        superadmins = fetch_all("SELECT id FROM users WHERE role = 'superadmin' AND is_active = TRUE")
-        for u in superadmins:
-            notify(
-                u["id"], "palmetto_change", title, body, link,
-                metadata={"material": is_material, "added": added, "removed": removed},
-                send_email=is_material,
-            )
-        print(f"[palmetto-cron] notified {len(superadmins)} superadmin(s). email={is_material}")
-    except Exception as e:
-        print(f"[palmetto-cron] notification failed: {e}", file=sys.stderr)
+    # Only notify for material changes — actual requirement additions,
+    # modifications, or removals. Non-material diffs (timestamps, layout,
+    # metadata) are logged but don't require superadmin action.
+    if is_material:
+        try:
+            from tools.notifications import notify
+            from tools.db import fetch_all
+            body = analysis.get("summary") or f"{added} lines added, {removed} lines removed."
+            link = "https://help.palmetto.finance/en/articles/8306274-solar-energy-plan-install-m1-photo-documentation"
+            superadmins = fetch_all("SELECT id FROM users WHERE role = 'superadmin' AND is_active = TRUE")
+            for u in superadmins:
+                notify(u["id"], "palmetto_change", "⚠ Palmetto M1 spec changed", body, link,
+                       metadata={"added": added, "removed": removed}, send_email=True)
+            print(f"[palmetto-cron] notified {len(superadmins)} superadmin(s)")
+        except Exception as e:
+            print(f"[palmetto-cron] notification failed: {e}", file=sys.stderr)
+    else:
+        print("[palmetto-cron] non-material change — no notification sent")
 
     # 4. Save the new content as the updated baseline
     save_snapshot(current)
