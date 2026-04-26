@@ -1507,10 +1507,43 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
     results = []
     cancelled = False
 
+    # Load DB overrides for mutable requirement fields once, before the
+    # main loop. Admins can edit task_titles, keywords, and
+    # validation_prompt via the Requirements admin page — those changes
+    # should take effect immediately on the next check/recheck without
+    # requiring a code deploy. The Python constant provides defaults for
+    # anything not overridden in the DB.
+    _db_req_overrides: dict = {}
+    try:
+        from tools.db import fetch_all as _db_fetch
+        db_reqs = _db_fetch(
+            "SELECT code, task_titles, keywords, validation_prompt "
+            "FROM requirements WHERE is_active = TRUE "
+            "ORDER BY code, version DESC"
+        )
+        # Keep only the latest version per code
+        seen = set()
+        for row in db_reqs:
+            code = row["code"]
+            if code not in seen:
+                seen.add(code)
+                _db_req_overrides[code] = {
+                    k: v for k, v in row.items()
+                    if k != "code" and v is not None
+                }
+    except Exception as _e:
+        print(f"WARNING: could not load DB requirement overrides: {_e}", file=sys.stderr)
+
     # Phase 1 (serial, fast): walk requirements, emit N/A and MISSING
     # immediately, queue the rest as work for parallel vision checks.
     vision_work = []  # (req, candidates) pairs for run_vision==True
-    for req in REQUIREMENTS:
+    for _base_req in REQUIREMENTS:
+        # Merge DB overrides into the Python constant. DB wins for
+        # task_titles, keywords, validation_prompt — the fields an admin
+        # can edit. Structural fields (condition, section, etc.) stay
+        # from the Python definition since they need code to be correct.
+        _override = _db_req_overrides.get(_base_req["id"], {})
+        req = {**_base_req, **_override} if _override else _base_req
         applies = req["condition"](params)
         if only_ids and req["id"] not in only_ids:
             continue
