@@ -2263,7 +2263,10 @@
       try {
         // Reuse the cost endpoint — it returns requirement_timing in the same payload
         const r = await fetch('/api/admin/cost/summary');
-        if (!r.ok) throw new Error('Request failed');
+        if (!r.ok) {
+          const errData = await r.json().catch(() => ({}));
+          throw new Error('HTTP ' + r.status + (errData.error ? ': ' + errData.error : ''));
+        }
         const data = await r.json();
         body.innerHTML = renderReqTiming(data.requirement_timing || []);
       } catch (e) {
