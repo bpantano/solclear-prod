@@ -268,7 +268,9 @@
         const r = await fetch('/api/admin/audit_log');
         if (!r.ok) { container.innerHTML = ''; return; }
         const data = await r.json();
-        const entries = (data.entries || []).filter(e => !orgId); // superadmin sees all; admin filtered server-side
+        // Server already scopes by org (admin = own org, superadmin = all).
+        // No client-side filter needed.
+        const entries = data.entries || [];
         if (!entries.length) {
           container.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No activity recorded yet.</div>';
           return;
@@ -2075,12 +2077,61 @@
     }
 
     function switchAnalyticsTab(tab) {
-      const isCosts = tab === 'costs';
-      document.getElementById('analyticsCosts').style.display = isCosts ? '' : 'none';
-      document.getElementById('analyticsPerf').style.display = isCosts ? 'none' : '';
-      document.getElementById('analyticsTabCosts').classList.toggle('active', isCosts);
-      document.getElementById('analyticsTabPerf').classList.toggle('active', !isCosts);
-      if (!isCosts) loadPerformance();
+      ['costs', 'performance', 'activity'].forEach(t => {
+        const panelId = t === 'costs' ? 'analyticsCosts' : t === 'performance' ? 'analyticsPerf' : 'analyticsActivity';
+        const btnId = 'analyticsTab' + t.charAt(0).toUpperCase() + t.slice(1);
+        const panel = document.getElementById(panelId);
+        const btn = document.getElementById(btnId);
+        if (panel) panel.style.display = t === tab ? '' : 'none';
+        if (btn) btn.classList.toggle('active', t === tab);
+      });
+      if (tab === 'performance') loadPerformance();
+      if (tab === 'activity') loadGlobalAuditLog();
+    }
+
+    async function loadGlobalAuditLog() {
+      const body = document.getElementById('analyticsActivityBody');
+      if (!body || body.dataset.loaded) return;
+      try {
+        const r = await fetch('/api/admin/audit_log');
+        if (!r.ok) throw new Error('Request failed');
+        const data = await r.json();
+        const entries = data.entries || [];
+        if (!entries.length) {
+          body.innerHTML = '<div style="color:var(--text-muted);font-size:var(--text-sm);">No activity recorded yet — actions will appear here as users interact with Solclear.</div>';
+          body.dataset.loaded = '1';
+          return;
+        }
+        const _ACTION_LABELS = {
+          login: 'Logged in', report_run: 'Ran check', report_cancel: 'Cancelled check',
+          requirement_recheck: 'Re-checked requirement', note_add: 'Added note',
+          dev_note_triage: 'Triaged dev note', org_settings_change: 'Updated org settings',
+          user_invite: 'Invited user', user_role_change: 'Changed user role',
+        };
+        body.innerHTML = '<div class="table-scroll"><table style="width:100%;border-collapse:collapse;font-size:var(--text-sm);">' +
+          '<thead><tr>' +
+          '<th style="text-align:left;padding:6px;color:var(--text-muted);font-weight:600;">When</th>' +
+          '<th style="text-align:left;padding:6px;color:var(--text-muted);font-weight:600;">User</th>' +
+          '<th style="text-align:left;padding:6px;color:var(--text-muted);font-weight:600;">Org</th>' +
+          '<th style="text-align:left;padding:6px;color:var(--text-muted);font-weight:600;">Action</th>' +
+          '</tr></thead><tbody>' +
+          entries.map(e => {
+            const label = _ACTION_LABELS[e.action] || e.action;
+            const actor = esc(e.actor_name || e.actor_email || 'System');
+            const org = esc(e.org_name || '—');
+            const time = '<time class="ts-relative" datetime="' + esc(e.created_at || '') + '">' + esc(e.created_at || '') + '</time>';
+            return '<tr style="border-top:1px solid var(--border-light);">' +
+              '<td style="padding:6px;color:var(--text-muted);white-space:nowrap;">' + time + '</td>' +
+              '<td style="padding:6px;font-weight:500;">' + actor + '</td>' +
+              '<td style="padding:6px;color:var(--text-muted);">' + org + '</td>' +
+              '<td style="padding:6px;">' + esc(label) + '</td>' +
+              '</tr>';
+          }).join('') + '</tbody></table></div>';
+        if (typeof localizeTimestamps === 'function') localizeTimestamps(body);
+        body.dataset.loaded = '1';
+      } catch (e) {
+        body.innerHTML = errorAlert('Could not load activity: ' + e.message);
+      }
     }
 
     async function loadPerformance() {

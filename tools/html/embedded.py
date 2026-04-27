@@ -1349,6 +1349,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <nav style="display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:16px;">
       <button id="analyticsTabCosts" class="dev-notes-tab active" onclick="switchAnalyticsTab('costs')">Costs</button>
       <button id="analyticsTabPerf" class="dev-notes-tab" onclick="switchAnalyticsTab('performance')">Performance</button>
+      <button id="analyticsTabActivity" class="dev-notes-tab" onclick="switchAnalyticsTab('activity')">Activity</button>
     </nav>
 
     <!-- Costs sub-page -->
@@ -1379,6 +1380,14 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         Wall-clock time per requirement from photo download through AI decisioning. Sorted slowest first. Colour: <span style="color:var(--success);font-weight:600;">green</span> &lt;10s, <span style="color:var(--warning);font-weight:600;">amber</span> 10–30s, <span style="color:var(--danger);font-weight:600;">red</span> &gt;30s.
       </p>
       <div id="perfBody"><div style="color:var(--text-muted);font-size:var(--text-sm);">Loading…</div></div>
+    </div>
+
+    <!-- Activity tab — all users including superadmin (org_id=NULL) -->
+    <div id="analyticsActivity" style="display:none;">
+      <p style="font-size:var(--text-sm);color:var(--text-muted);margin-bottom:16px;">
+        All user actions across all organizations. Includes superadmin activity (no org) that does not appear in org-specific Activity tabs.
+      </p>
+      <div id="analyticsActivityBody"><div style="color:var(--text-muted);font-size:var(--text-sm);">Loading…</div></div>
     </div>
   </div>
 
