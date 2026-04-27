@@ -3646,8 +3646,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           const colour = totalMs > 30000 ? 'var(--danger)' : totalMs > 10000 ? 'var(--warning)' : 'var(--success)';
           const code = esc(r.requirement_code);
           return (
-            '<tr style="border-top:1px solid var(--border-light);cursor:pointer;" onclick="toggleReqTimingDetail(\'' + code + '\', this)">' +
-              '<td style="padding:6px;font-weight:600;">' + code + ' <span style="font-size:10px;opacity:0.5;">▼</span></td>' +
+            '<tr style="border-top:1px solid var(--border-light);cursor:pointer;" data-code="' + code + '" onclick="toggleReqTimingDetail(this.dataset.code, this)">' +
+              '<td style="padding:6px;font-weight:600;">' + code + ' <span style="font-size:10px;opacity:0.5;">&#9660;</span></td>' +
               '<td style="padding:6px;text-align:right;font-weight:700;color:' + colour + ';">' + _fmtMs(totalMs) + '</td>' +
               '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + _fmtMs(apiMs) + '</td>' +
               '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + _fmtMs(downloadMs) + '</td>' +
