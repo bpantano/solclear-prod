@@ -777,7 +777,7 @@ class LiveHandler(BaseHTTPRequestHandler):
         elif path == "/api/notifications/unread_count":
             self._api_notifications_unread_count(session)
         elif path.startswith("/api/admin/req_timing/"):
-            if not self._require_role(session, ("superadmin",)):
+            if not self._require_role(session, ("superadmin", "admin")):
                 return
             code = path.split("/")[4] if len(path.split("/")) > 4 else ""
             self._api_req_timing_detail(code)
