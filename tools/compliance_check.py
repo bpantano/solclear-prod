@@ -975,11 +975,20 @@ PREFILTER_KEEP = 5
 MULTI_CRITERION_MAX = 20
 
 
+# Requirements excluded from reference-photo prefiltering because their
+# first Palmetto reference photo is a multi-image collage that confuses
+# the prefilter model (it tries to match the collage layout instead of
+# the subject matter). Text-only selection_criteria works better here.
+_REFERENCE_PHOTO_EXCLUDED = {"PS1", "PS2"}
+
+
 def _load_reference_photos(req_code: str, max_photos: int = 2) -> list:
     """Load Palmetto reference photos for a requirement from the DB.
     Returns a list of (base64_data, mime_type) tuples, at most max_photos.
-    Empty list if none found or if DB is unavailable — caller falls back
-    to text-only selection gracefully."""
+    Empty list if none found, DB unavailable, or req is in the exclusion
+    set — caller falls back to text-only selection gracefully."""
+    if req_code.upper() in _REFERENCE_PHOTO_EXCLUDED:
+        return []
     try:
         from tools.db import fetch_all
         import base64 as _b64
