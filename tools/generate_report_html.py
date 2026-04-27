@@ -182,19 +182,14 @@ def render_requirement(req: dict, is_interactive: bool, checklist_id: str, proje
 
     optional_tag = '<span class="optional-tag">optional</span>' if req.get("optional") else ""
 
-    # Reason with show-more/less toggle for long text
+    # Reason — full text always rendered; CSS line-clamp handles truncation.
+    # JS (initExpandableReasons) detects overflow after load and injects the
+    # gradient-fade + "Read more" pill only when text actually overflows.
+    # On desktop wide lines mean fewer overflows; mobile benefits most.
     reason_html = ""
     if status not in ("PASS", "N/A", "FOUND_NO_VISION") and req.get("reason"):
-        short, full = truncate_reason(req["reason"])
-        if full:
-            short_linked = linkify_photos(short, photo_urls)
-            full_linked = linkify_photos(full, photo_urls)
-            reason_html = f'''
-      <p class="reason reason-short">{short_linked}</p>
-      <div class="reason-full" style="display:none"><p class="reason">{full_linked}</p></div>
-      <button class="expand-btn" onclick="toggleReason(this)">Show more <span class="arrow">&#9662;</span></button>'''
-        else:
-            reason_html = f'<p class="reason">{linkify_photos(short, photo_urls)}</p>'
+        full_linked = linkify_photos(req["reason"], photo_urls)
+        reason_html = f'<div class="reason-expandable" onclick="expandReason(event, this)">{full_linked}</div>'
 
     # Photo thumbnail (the evaluated winner is key 1)
     eval_url = photo_urls.get(1) or photo_urls.get("1")
@@ -495,9 +490,7 @@ def _report_style_block() -> str:
       cursor: pointer;
     }
     .requirement.collapsed:hover { opacity: 1; }
-    .requirement.collapsed .reason,
-    .requirement.collapsed .reason-full,
-    .requirement.collapsed .expand-btn,
+    .requirement.collapsed .reason-expandable,
     .requirement.collapsed .req-photo-link,
     .requirement.collapsed .req-actions,
     .requirement.collapsed .req-note { display: none !important; }
@@ -541,13 +534,45 @@ def _report_style_block() -> str:
       line-height: 1.6; padding-left: 10px;
       border-left: 2px solid var(--border-light);
     }
-    .expand-btn {
-      margin-top: 4px; background: none; border: none;
-      color: var(--accent); font-size: var(--text-xs); font-weight: 500;
-      cursor: pointer; padding: 2px 0; font-family: inherit;
+    /* Expandable reason text — CSS line-clamp truncates on mobile;
+       JS adds the gradient + pill only when text actually overflows.
+       Desktop wide lines rarely overflow 3 lines so the pill stays hidden. */
+    .reason-expandable {
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      cursor: pointer;
+      position: relative;
+      margin-top: 6px;
+      font-size: var(--text-sm);
+      color: var(--text-secondary);
+      line-height: 1.55;
+      user-select: none;
     }
-    .expand-btn:hover { text-decoration: underline; }
-    .expand-btn .arrow { font-size: 10px; margin-left: 2px; }
+    .reason-expandable.expanded {
+      display: block;
+      overflow: visible;
+      cursor: default;
+    }
+    .reason-expandable .reason-fade {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      height: 2.8em; pointer-events: none;
+      background: linear-gradient(transparent, var(--bg-card));
+    }
+    .reason-expandable.expanded .reason-fade { display: none; }
+    .reason-expandable .read-more-pill {
+      position: absolute; bottom: 0; right: 0;
+      background: var(--bg-card);
+      color: var(--accent);
+      font-size: 11px; font-weight: 600;
+      padding: 2px 10px; border-radius: 10px;
+      border: 1px solid var(--border);
+      cursor: pointer; pointer-events: auto;
+    }
+    .reason-expandable.expanded .read-more-pill { display: none; }
+    /* Requirement collapsed — hide reason entirely */
+    .requirement.collapsed .reason-expandable { display: none; }
 
     /* Notes thread (comment-thread style, oldest-first). Each note is
        immutable; follow-ups are their own rows. Public notes have an
@@ -790,19 +815,41 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
       }}
     }}
 
-    function toggleReason(btn) {{
-      const full = btn.previousElementSibling;
-      const short = full.previousElementSibling;
-      if (full.style.display === 'none') {{
-        full.style.display = 'block';
-        short.style.display = 'none';
-        btn.innerHTML = 'Show less <span class="arrow">&#9652;</span>';
-      }} else {{
-        full.style.display = 'none';
-        short.style.display = 'block';
-        btn.innerHTML = 'Show more <span class="arrow">&#9662;</span>';
-      }}
+    // ── Expandable reason text ──
+    // CSS line-clamp handles the visual truncation. initExpandableReasons()
+    // detects which elements are actually overflowing and injects the gradient
+    // fade + "Read more ↓" pill. expandReason() handles the click-to-expand.
+    function initExpandableReasons() {{
+      document.querySelectorAll('.reason-expandable').forEach(function(el) {{
+        // Skip already-processed elements
+        if (el.dataset.initialized) return;
+        el.dataset.initialized = '1';
+        // Only add UI if content actually overflows the clamped height.
+        // +4px tolerance for sub-pixel rounding.
+        if (el.scrollHeight <= el.clientHeight + 4) return;
+        el.classList.add('clamped');
+        const fade = document.createElement('div');
+        fade.className = 'reason-fade';
+        const pill = document.createElement('span');
+        pill.className = 'read-more-pill';
+        pill.textContent = 'Read more ↓';
+        el.appendChild(fade);
+        el.appendChild(pill);
+      }});
     }}
+    function expandReason(event, el) {{
+      // Let link clicks inside the reason pass through normally
+      if (event.target.tagName === 'A') return;
+      // Only expand if actually clamped
+      if (!el.classList.contains('clamped')) return;
+      event.stopPropagation();  // don't collapse the requirement row
+      el.classList.add('expanded');
+    }}
+    // Run on load + re-run after fonts settle (fonts affect clientHeight)
+    document.addEventListener('DOMContentLoaded', function() {{
+      initExpandableReasons();
+      setTimeout(initExpandableReasons, 300);
+    }});
 
     // ── Tabs ──
     function filterTab(tab) {{
