@@ -35,9 +35,11 @@ PALMETTO_URL = (
 )
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
-# Regex that matches requirement codes at the start of heading text,
-# e.g. "R1) Close up..." → "R1", "PS4) Module Label" → "PS4"
-_REQ_CODE_RE = re.compile(r'^([A-Z]{1,3}\d+)\)', re.IGNORECASE)
+# Extracts ALL requirement codes mentioned in a heading.
+# Handles both individual headings ("R1) Close up...") and shared
+# example headings ("PS1 and PS2 Photo Examples:") so photos are
+# attributed to every requirement mentioned, not just the first.
+_REQ_CODE_ANY = re.compile(r'\b([A-Z]{1,3}\d+)\b', re.IGNORECASE)
 
 
 def scrape_reference_photos() -> dict:
@@ -53,26 +55,34 @@ def scrape_reference_photos() -> dict:
     )
 
     photos_by_req: dict = {}
-    current_req = None
+    current_reqs: list = []  # may be multiple codes for shared headings
 
     for el in article.descendants:
         if not hasattr(el, "name") or not el.name:
             continue
-        # New requirement heading?
+        # New heading — extract ALL requirement codes mentioned.
+        # "PS1 and PS2 Photo Examples:" → [PS1, PS2]
+        # "R1) Close up of attachments..." → [R1]
         if el.name in ("h1", "h2", "h3", "h4", "h5"):
             heading_text = el.get_text(strip=True)
-            m = _REQ_CODE_RE.match(heading_text)
-            if m:
-                current_req = m.group(1).upper()
-                if current_req not in photos_by_req:
-                    photos_by_req[current_req] = []
-        # Image associated with current requirement?
-        elif el.name == "img" and current_req:
+            codes = [m.upper() for m in _REQ_CODE_ANY.findall(heading_text)]
+            # Only update current_reqs if we found known-style codes
+            # (filter out stray numbers like "1" or "2" in prose)
+            valid = [c for c in codes if len(c) >= 2]
+            if valid:
+                current_reqs = valid
+                for code in current_reqs:
+                    if code not in photos_by_req:
+                        photos_by_req[code] = []
+        # Image — assign to ALL currently-active requirement codes so
+        # shared example sections populate every relevant requirement.
+        elif el.name == "img" and current_reqs:
             src = el.get("src") or el.get("data-src") or ""
             if not src or src.startswith("data:") or len(src) < 20:
                 continue
             alt = el.get("alt") or ""
-            photos_by_req[current_req].append({"src_url": src, "alt_text": alt})
+            for code in current_reqs:
+                photos_by_req[code].append({"src_url": src, "alt_text": alt})
 
     return photos_by_req
 
