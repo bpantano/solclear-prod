@@ -966,6 +966,11 @@ class LiveHandler(BaseHTTPRequestHandler):
             if not self._require_org_access(session, oid, write=True):
                 return
             self._api_org_user_create(oid, body)
+        elif path.startswith("/api/users/") and path.endswith("/delete"):
+            if not self._require_role(session, ("superadmin",)):
+                return
+            uid = path.split("/")[3]
+            self._api_user_delete(uid)
         elif path.startswith("/api/users/") and path.endswith("/resend-invite"):
             if not self._require_role(session, ("superadmin", "admin")):
                 return
@@ -1705,6 +1710,39 @@ class LiveHandler(BaseHTTPRequestHandler):
             if user.get("deactivated_at"):
                 user["deactivated_at"] = user["deactivated_at"].isoformat()
             self._send_json(user)
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_user_delete(self, user_id):
+        """Permanently delete a user. Superadmin only."""
+        session = getattr(self, "_session", {}) or {}
+        caller_id = session.get("user_id")
+        try:
+            user = fetch_one(
+                "SELECT id, role, first_name, last_name FROM users WHERE id = %s",
+                (user_id,)
+            )
+            if not user:
+                self._send_json({"error": "User not found"}, 404)
+                return
+            if str(user["id"]) == str(caller_id):
+                self._send_json({"error": "You cannot delete your own account"}, 400)
+                return
+            if user["role"] == "superadmin":
+                self._send_json({"error": "Cannot delete a superadmin account"}, 400)
+                return
+            uid = int(user_id)
+            # NULL out nullable FK references so historical records are preserved
+            execute("UPDATE reports SET run_by = NULL WHERE run_by = %s", (uid,))
+            execute("UPDATE requirement_results SET resolved_by = NULL WHERE resolved_by = %s", (uid,))
+            execute("UPDATE notes SET author_user_id = NULL WHERE author_user_id = %s", (uid,))
+            execute("UPDATE notes SET resolved_by_user_id = NULL WHERE resolved_by_user_id = %s", (uid,))
+            execute("UPDATE audit_log SET user_id = NULL WHERE user_id = %s", (uid,))
+            # Remove NOT NULL FK rows (notifications cascade automatically)
+            execute("DELETE FROM impersonation_log WHERE superadmin_id = %s OR impersonated_user_id = %s", (uid, uid))
+            execute("DELETE FROM users WHERE id = %s", (uid,))
+            name = f"{user['first_name']} {user['last_name']}"
+            self._send_json({"ok": True, "message": f"{name} has been permanently deleted."})
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 

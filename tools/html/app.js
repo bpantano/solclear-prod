@@ -430,6 +430,13 @@
           statusHtml += `<button onclick="resendInvite(${u.id})" style="background:var(--warning);color:var(--text-inverse);border:none;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;min-height:32px;white-space:nowrap;">Resend invite</button>`;
           statusHtml += '</div>';
         }
+        // Superadmin-only: permanent delete
+        if (_me && _me.role === 'superadmin') {
+          const userName = esc(u.first_name + ' ' + u.last_name);
+          statusHtml += `<div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
+            <button onclick="deleteUser(${u.id}, '${userName}')" style="background:#ef4444;color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:12px;font-weight:600;cursor:pointer;">Delete User Permanently</button>
+          </div>`;
+        }
         info.innerHTML = statusHtml;
       } catch (e) { alert('Error loading user: ' + e.message); }
     }
@@ -476,6 +483,17 @@
         const result = await r.json();
         if (result.error) { alert(result.error); return; }
         openOrg(currentOrgId);  // refresh
+      } catch (e) { alert('Error: ' + e.message); }
+    }
+
+    async function deleteUser(userId, name) {
+      if (!confirm('Permanently delete ' + name + '? This cannot be undone.')) return;
+      try {
+        const r = await fetch('/api/users/' + userId + '/delete', {method: 'POST'});
+        const result = await r.json();
+        if (result.error) { alert(result.error); return; }
+        alert(result.message);
+        openOrg(currentOrgId);
       } catch (e) { alert('Error: ' + e.message); }
     }
 
