@@ -129,7 +129,10 @@
       }
       if (n === 'costs') {
         document.getElementById('adminCosts').classList.add('active');
-        loadCosts();
+        // Default non-superadmins to Performance (Costs is superadmin-only)
+        const defaultTab = (_me && _me.role === 'superadmin') ? 'costs' : 'performance';
+        switchAnalyticsTab(defaultTab);
+        if (defaultTab === 'costs') loadCosts();
         return;
       }
       if (n === 'devnotes') {
@@ -2149,6 +2152,10 @@
     }
 
     function switchAnalyticsTab(tab) {
+      // Costs tab is superadmin-only — redirect admins to Performance
+      if (tab === 'costs' && _me && _me.role !== 'superadmin') {
+        tab = 'performance';
+      }
       ['costs', 'performance', 'activity'].forEach(t => {
         const panelId = t === 'costs' ? 'analyticsCosts' : t === 'performance' ? 'analyticsPerf' : 'analyticsActivity';
         const btnId = 'analyticsTab' + t.charAt(0).toUpperCase() + t.slice(1);

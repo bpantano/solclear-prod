@@ -2204,8 +2204,13 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "req_code required"}, 400)
             return
         try:
-            rows = fetch_all("""
-                SELECT r.id AS report_id,
+            _session = getattr(self, "_session", {}) or {}
+            _role = _session.get("role", "")
+            _session_org = _session.get("org_id")
+            org_filter = "AND p.organization_id = %s" if (_role != "superadmin" and _session_org) else ""
+            org_params = [int(_session_org)] if org_filter else []
+            rows = fetch_all(
+                f"""SELECT r.id AS report_id,
                        p.name AS project_name,
                        rr.total_duration_ms,
                        rr.status,
@@ -2224,9 +2229,11 @@ class LiveHandler(BaseHTTPRequestHandler):
                 ) acl ON acl.report_id = rr.report_id
                 WHERE req.code = %s
                   AND rr.total_duration_ms IS NOT NULL
+                  {org_filter}
                 ORDER BY rr.created_at DESC
-                LIMIT 50
-            """, (req_code.upper(), req_code.upper()))
+                LIMIT 50""",
+                tuple([req_code.upper(), req_code.upper()] + org_params)
+            )
             for r in rows:
                 if r.get("created_at") and hasattr(r["created_at"], "isoformat"):
                     r["created_at"] = r["created_at"].isoformat()
@@ -2687,29 +2694,32 @@ class LiveHandler(BaseHTTPRequestHandler):
     # ── Admin: cost dashboard ────────────────────────────────────────────────
 
     def _api_admin_cost_summary(self, qs=None):
-        """Return per-report / per-requirement / per-day cost stats for the
-        superadmin cost dashboard. Accepts optional filters via query string:
-          org_id=<int>   — only cost from this org's projects
-          user_id=<int>  — only cost from runs this user triggered (reports.run_by)
-          from=YYYY-MM-DD — lower bound on called_at (inclusive)
-          to=YYYY-MM-DD   — upper bound on called_at (inclusive, end-of-day)"""
+        """Return per-report / per-requirement / per-day cost stats.
+        Superadmins can filter by any org via query string; admins are
+        always scoped to their own org — they can't see cross-org data."""
         qs = qs or {}
         try:
-            # Build a shared WHERE clause + params list. Every query joins
-            # reports + projects LEFT so unattributed rows still count when
-            # no report-based filter is set, and get filtered out naturally
-            # when one is.
             filters = []
             params_list = []
 
-            org_id = qs.get("org_id", [""])[0]
+            # Enforce org scoping: non-superadmins always see only their org
+            _session = getattr(self, "_session", {}) or {}
+            _role = _session.get("role", "")
+            _session_org = _session.get("org_id")
+            if _role != "superadmin" and _session_org:
+                # Force the org filter regardless of query params
+                filters.append("p.organization_id = %s")
+                params_list.append(int(_session_org))
+                org_id = str(_session_org)
+            else:
+                org_id = qs.get("org_id", [""])[0]
+                if org_id:
+                    filters.append("p.organization_id = %s")
+                    params_list.append(int(org_id))
+
             user_id = qs.get("user_id", [""])[0]
             date_from = qs.get("from", [""])[0]
             date_to = qs.get("to", [""])[0]
-
-            if org_id:
-                filters.append("p.organization_id = %s")
-                params_list.append(int(org_id))
             if user_id:
                 filters.append("r.run_by = %s")
                 params_list.append(int(user_id))

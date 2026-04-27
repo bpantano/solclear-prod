@@ -828,7 +828,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2h11"/></svg>
       Requirements
     </button>
-    <button class="nav-item superadmin-only" data-nav="costs" onclick="navigate('costs')" style="display:none;">
+    <button class="nav-item admin-write" data-nav="costs" onclick="navigate('costs')" style="display:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
       Analytics
     </button>
@@ -1361,7 +1361,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 
     <!-- Analytics sub-tabs: Costs | Performance -->
     <nav style="display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:16px;">
-      <button id="analyticsTabCosts" class="dev-notes-tab active" onclick="switchAnalyticsTab('costs')">Costs</button>
+      <button id="analyticsTabCosts" class="dev-notes-tab active superadmin-only" onclick="switchAnalyticsTab('costs')" style="display:none;">Costs</button>
       <button id="analyticsTabPerf" class="dev-notes-tab" onclick="switchAnalyticsTab('performance')">Performance</button>
       <button id="analyticsTabActivity" class="dev-notes-tab" onclick="switchAnalyticsTab('activity')">Activity</button>
     </nav>
@@ -1467,7 +1467,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2h11"/></svg>
       Requirements
     </button>
-    <button class="nav-item superadmin-only" onclick="closeAccountSheet();navigate('costs')" style="display:none;">
+    <button class="nav-item admin-write" onclick="closeAccountSheet();navigate('costs')" style="display:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
       Analytics
     </button>
