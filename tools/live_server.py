@@ -45,7 +45,7 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 import requests as http_requests
 from tools.compliance_check import run_compliance_check, REQUIREMENTS
 from tools.companycam_get_project_photos import get_all_photos
-from tools.db import fetch_all, fetch_one, execute, execute_returning
+from tools.db import fetch_all, fetch_one, execute, execute_returning, get_conn
 from tools.crypto import encrypt, decrypt, is_encrypted
 from tools.auth import (
     hash_password, check_password, create_session_token,
@@ -156,6 +156,7 @@ def _poll_anthropic_status():
 
 # Rate limiting for password reset (in-memory)
 _reset_attempts = {}  # {email: (count, window_start_timestamp)}
+_reset_attempts_lock = threading.Lock()
 RESET_RATE_LIMIT = 3  # max attempts per window
 RESET_RATE_WINDOW = 900  # 15 minutes
 
@@ -164,17 +165,18 @@ def _check_rate_limit(email: str) -> bool:
     """Returns True if allowed, False if rate limited."""
     now = time.time()
     key = email.lower()
-    if key in _reset_attempts:
-        count, window_start = _reset_attempts[key]
-        if now - window_start > RESET_RATE_WINDOW:
-            _reset_attempts[key] = (1, now)
+    with _reset_attempts_lock:
+        if key in _reset_attempts:
+            count, window_start = _reset_attempts[key]
+            if now - window_start > RESET_RATE_WINDOW:
+                _reset_attempts[key] = (1, now)
+                return True
+            if count >= RESET_RATE_LIMIT:
+                return False
+            _reset_attempts[key] = (count + 1, window_start)
             return True
-        if count >= RESET_RATE_LIMIT:
-            return False
-        _reset_attempts[key] = (count + 1, window_start)
+        _reset_attempts[key] = (1, now)
         return True
-    _reset_attempts[key] = (1, now)
-    return True
 
 # Track recently detected requirement changes (auto-expire after 7 days)
 _recently_new = {}       # {"PS7": {"section": "...", "title": "...", "ts": timestamp}, ...}
@@ -299,10 +301,19 @@ def _upsert_project(cc_project_id, session):
         r = http_requests.get(f"{API_BASE}/projects/{cc_project_id}", headers=cc_headers(org_id), timeout=10)
         r.raise_for_status()
         p = r.json()
+        thumb_url = None
+        for fi in (p.get("feature_image") or []):
+            if fi.get("type") == "thumbnail":
+                thumb_url = fi.get("uri")
+                break
+        if not thumb_url:
+            for fi in (p.get("feature_image") or []):
+                thumb_url = fi.get("uri")
+                break
         proj = execute_returning(
-            "INSERT INTO projects (organization_id, companycam_id, name, address, city, state) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            "INSERT INTO projects (organization_id, companycam_id, name, address, city, state, thumbnail_url) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (org_id, str(cc_project_id), p.get("name", ""), p.get("address", {}).get("street_address_1", ""),
-             p.get("address", {}).get("city", ""), p.get("address", {}).get("state", ""))
+             p.get("address", {}).get("city", ""), p.get("address", {}).get("state", ""), thumb_url)
         )
         return proj["id"]
     except Exception:
@@ -336,11 +347,21 @@ def run_check_thread(cc_project_id, params, run_id, result_queue, cancel_event,
         TMP_DIR.mkdir(exist_ok=True)
         with open(photos_path, "w") as f:
             json.dump(photos, f, indent=2)
-        # Persist to DB so rechecks survive deploys without refetching
+        # Persist to DB so rechecks survive deploys without refetching.
+        # Also extract thumbnail from the first photo so _api_reports
+        # can serve the list without a per-row CC API call.
         try:
+            thumb_url = None
+            if photos:
+                for _uri in photos[0].get("uris", []):
+                    if _uri.get("type") == "thumbnail":
+                        thumb_url = _uri.get("url")
+                        break
+                if not thumb_url and photos[0].get("uris"):
+                    thumb_url = photos[0]["uris"][0].get("url")
             execute(
-                "UPDATE projects SET photos_cache = %s::jsonb, photos_cached_at = NOW() WHERE companycam_id = %s",
-                (json.dumps(photos), str(cc_project_id))
+                "UPDATE projects SET photos_cache = %s::jsonb, photos_cached_at = NOW(), thumbnail_url = %s WHERE companycam_id = %s",
+                (json.dumps(photos), thumb_url, str(cc_project_id))
             )
         except Exception as _pe:
             print(f"WARNING: could not save photos_cache to DB: {_pe}", file=sys.stderr)
@@ -2935,7 +2956,8 @@ class LiveHandler(BaseHTTPRequestHandler):
             # is partial.
             if role == "superadmin":
                 rows = fetch_all("""
-                    SELECT r.id, r.project_id, p.companycam_id, p.name, r.total_passed, r.total_failed,
+                    SELECT r.id, r.project_id, p.companycam_id, p.name, p.thumbnail_url,
+                           r.total_passed, r.total_failed,
                            r.total_missing, r.total_needs_review, r.total_required, r.is_test, r.status, r.created_at
                     FROM reports r
                     JOIN projects p ON p.id = r.project_id
@@ -2945,7 +2967,8 @@ class LiveHandler(BaseHTTPRequestHandler):
                 """)
             else:
                 rows = fetch_all("""
-                    SELECT r.id, r.project_id, p.companycam_id, p.name, r.total_passed, r.total_failed,
+                    SELECT r.id, r.project_id, p.companycam_id, p.name, p.thumbnail_url,
+                           r.total_passed, r.total_failed,
                            r.total_missing, r.total_needs_review, r.total_required, r.is_test, r.status, r.created_at
                     FROM reports r
                     JOIN projects p ON p.id = r.project_id
@@ -2957,19 +2980,30 @@ class LiveHandler(BaseHTTPRequestHandler):
 
             reports = []
             for row in rows:
-                # Fetch thumbnail from CompanyCam
-                thumb_url = None
-                try:
-                    resp = http_requests.get(f"{API_BASE}/projects/{row['companycam_id']}",
-                                             headers=cc_headers(_session_org_id(self)), timeout=5)
-                    if resp.status_code == 200:
-                        proj = resp.json()
-                        for fi in (proj.get("feature_image") or []):
-                            thumb_url = fi.get("uri")
-                            break
-                except Exception:
-                    pass
-
+                thumb_url = row.get("thumbnail_url")
+                # Backfill thumbnail for projects that existed before migration 013.
+                # Fetches once from CC and caches so future loads are instant.
+                if thumb_url is None:
+                    try:
+                        resp = http_requests.get(
+                            f"{API_BASE}/projects/{row['companycam_id']}",
+                            headers=cc_headers(_session_org_id(self)), timeout=5
+                        )
+                        if resp.status_code == 200:
+                            feature_image = resp.json().get("feature_image") or []
+                            for fi in feature_image:
+                                if fi.get("type") == "thumbnail":
+                                    thumb_url = fi.get("uri")
+                                    break
+                            if not thumb_url:
+                                for fi in feature_image:
+                                    thumb_url = fi.get("uri")
+                                    break
+                            if thumb_url:
+                                execute("UPDATE projects SET thumbnail_url = %s WHERE companycam_id = %s",
+                                        (thumb_url, str(row["companycam_id"])))
+                    except Exception:
+                        pass
                 reports.append({
                     "db_report_id": row["id"],
                     "project_id": row["companycam_id"],

@@ -80,7 +80,19 @@
     }
 
     // ── Step navigation ──
-    function showStep(n) {
+    // Top-level sections get a real history entry so the browser back button
+    // returns to them after viewing a report. Wizard sub-steps and detail
+    // pages use replaceState — no separate history entry.
+    const _PUSH_STEPS = new Set(['home', 'reports', 'reqs', 'orgs', 'orgCreate', 'costs', 'devnotes', 1]);
+
+    function showStep(n, _fromPopstate) {
+      if (!_fromPopstate) {
+        if (_PUSH_STEPS.has(n)) {
+          history.pushState({step: n}, '', '/');
+        } else {
+          history.replaceState({step: n}, '', '/');
+        }
+      }
       document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
       document.getElementById('homePage').style.display = 'none';
       setActiveTab(STEP_TO_NAV[n] || null);
@@ -707,7 +719,7 @@
           // Refresh requirements list to show badges
           loadRequirements();
         } else if (data.status === 'no_baseline') {
-          el.innerHTML = data.message;
+          el.textContent = data.message;
         } else if (data.error) {
           el.innerHTML = `<span style="color:#ef4444;">Error: ${esc(data.error)}</span>`;
         }
@@ -928,12 +940,21 @@
           listenSSE(data.run_id, data.total);
         }).catch(e => { alert('Failed: ' + e.message); showStep('home'); });
 
-        // Clean up URL
-        window.history.replaceState({}, '', '/');
+        // Clean up URL, seed history state so popstate works from here
+        history.replaceState({step: 'home'}, '', '/');
         return;
       }
+      // Seed initial history state so the very first popstate event has a step
+      history.replaceState({step: 'home'}, '', '/');
       loadHomeReports();
     })();
+
+    // Restore the correct SPA step when the user presses the browser back button
+    // (e.g. after viewing a /report/... page and returning to the SPA).
+    window.addEventListener('popstate', function(e) {
+      const step = (e.state && e.state.step != null) ? e.state.step : 'home';
+      showStep(step, true);
+    });
 
     // ── Step 1: Project search ──
     const searchInput = document.getElementById('projectSearch');
@@ -1318,7 +1339,7 @@
           }
           // color:#fff overrides .cc-link's var(--text-inverse), which is dark
           // in dark mode and would otherwise be invisible against #111827.
-          const reportLink = `<a class="cc-link" href="/report/${s.db_report_id || s.project_id}" style="background:#111827;color:#fff;">View Partial Report</a>`;
+          const reportLink = `<a class="cc-link" href="/report/${s.db_report_id || s.project_id}" style="background:#111827;color:#fff;">${wasCancelled ? 'View Partial Report' : 'View Report'}</a>`;
           const reviewStat = nReview ? ` · ${nReview} to review` : '';
           const label = wasCancelled
             ? 'CANCELLED — PARTIAL RESULTS'
