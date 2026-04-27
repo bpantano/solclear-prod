@@ -804,11 +804,11 @@ class LiveHandler(BaseHTTPRequestHandler):
                 return
             self._api_audit_log(session, qs)
         elif path == "/api/admin/cost/summary":
-            if not self._require_role(session, ("superadmin",)):
+            if not self._require_role(session, ("superadmin", "admin")):
                 return
             self._api_admin_cost_summary(qs)
         elif path == "/api/admin/cost/filter-options":
-            if not self._require_role(session, ("superadmin",)):
+            if not self._require_role(session, ("superadmin", "admin")):
                 return
             self._api_admin_cost_filter_options()
         elif path == "/api/projects":

@@ -992,11 +992,17 @@ def _load_reference_photos(req_code: str, max_photos: int = 2) -> list:
     try:
         from tools.db import fetch_all
         import base64 as _b64
+        # Fetch one extra so we can detect multi-photo requirements.
+        # Palmetto's pattern: first photo = collage/overview, subsequent
+        # photos = specific examples. Skip the first when multiple exist.
         rows = fetch_all(
             "SELECT image_bytes, mime_type FROM requirement_reference_photos "
             "WHERE requirement_code = %s ORDER BY display_order ASC LIMIT %s",
-            (req_code.upper(), max_photos),
+            (req_code.upper(), max_photos + 1),
         )
+        if len(rows) > 1:
+            rows = rows[1:]  # drop the collage overview, keep specific examples
+        rows = rows[:max_photos]
         result = []
         for row in rows:
             img = row.get("image_bytes")
