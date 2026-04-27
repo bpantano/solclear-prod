@@ -968,6 +968,14 @@ PREFILTER_MODEL = "claude-haiku-4-5-20251001"
 PREFILTER_THRESHOLD = 5
 PREFILTER_KEEP = 5
 
+# Hard cap on candidates before the prefilter runs. Checklist task photos
+# have no separate thumbnail URL so the prefilter downloads full-res for
+# every candidate. R2 ("Racking Assembly + Grounding") routinely accumulates
+# 50-100+ photos across a job, making uncapped prefilter fetches the dominant
+# cost. Take the most recent MAX_PREFILTER_CANDIDATES; crews upload in
+# chronological order so the tail is the final installation state.
+MAX_PREFILTER_CANDIDATES = 25
+
 # For multi-criterion mode (SC1/SC2) we can't pre-filter — every photo is
 # evidence. Cap the number we send full-res to stay under the payload limit.
 # If a project genuinely has more screenshots than this, the most recent
@@ -1512,6 +1520,29 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
         except Exception as e:
             checklist_tasks = []
             print(f"WARNING: Could not load checklists: {e}", file=sys.stderr)
+
+    # Build a lookup from project-photo URL → thumbnail URL so checklist
+    # task photos (which only carry a single full-res URL) can get real
+    # thumbnails for the Haiku prefilter. Falls back gracefully: if a task
+    # photo URL isn't in the map, get_photo_thumbnail_url returns the
+    # full-res URL as before.
+    _thumb_by_url: dict = {}
+    for _pp in photos:
+        _full_url = _pp.get("photo_url") or ""
+        if not _full_url:
+            continue
+        for _uri in _pp.get("uris", []):
+            if _uri.get("type") == "thumbnail":
+                _thumb_by_url[_full_url] = _uri.get("url")
+                break
+    # Enrich task photos in place — add a synthetic "uris" list so
+    # get_photo_thumbnail_url falls through to the normal thumbnail path.
+    if _thumb_by_url:
+        for _task in checklist_tasks:
+            for _tp in _task.get("photos", []):
+                _tp_url = _tp.get("url", "")
+                if _tp_url in _thumb_by_url and "uris" not in _tp:
+                    _tp["uris"] = [{"type": "thumbnail", "url": _thumb_by_url[_tp_url]}]
 
     # Determine applicable requirements
     if only_ids:
