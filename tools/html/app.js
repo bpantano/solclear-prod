@@ -103,6 +103,7 @@
         document.getElementById('adminReqs').classList.add('active');
         loadRequirements();
         loadMonitorStatus();
+        loadReqChangeHistory();
         return;
       }
       if (n === 'reqDetail') {
@@ -488,6 +489,65 @@
     // ── Recent reports ──
     // ── Requirements ──
     let reqsData = [];
+
+    async function loadReqChangeHistory() {
+      const palBox = document.getElementById('reqPalmettoHistory');
+      const manBox = document.getElementById('reqManualHistory');
+      if (!palBox && !manBox) return;
+      try {
+        const r = await fetch('/api/requirements/change_history');
+        if (!r.ok) return;
+        const data = await r.json();
+
+        // Box 1: Palmetto spec changes
+        if (palBox) {
+          const pChanges = data.palmetto_changes || [];
+          if (!pChanges.length) {
+            palBox.innerHTML = '<div style="color:var(--text-muted);font-size:11px;padding:8px 0;">No changes recorded yet. Run "Check Now" to establish a baseline.</div>';
+          } else {
+            palBox.innerHTML = pChanges.map(c => {
+              const time = '<time class="ts-relative" datetime="' + esc(c.detected_at || '') + '">' + esc(c.detected_at || '') + '</time>';
+              const newPills = (c.new_req_ids || []).map(id => '<span class="badge badge-pass" style="margin:1px 2px;">+' + esc(id) + '</span>').join('');
+              const changedPills = (c.changed_req_ids || []).map(id => '<span class="badge badge-missing" style="margin:1px 2px;">~' + esc(id) + '</span>').join('');
+              const removedPills = (c.removed_req_ids || []).map(id => '<span class="badge badge-fail" style="margin:1px 2px;">−' + esc(id) + '</span>').join('');
+              return '<div style="padding:8px 0;border-bottom:1px solid var(--border-light);">' +
+                '<div style="display:flex;justify-content:space-between;margin-bottom:4px;">' +
+                  '<span style="font-size:10px;color:var(--text-muted);">' + time + '</span>' +
+                  '<span style="font-size:10px;color:var(--text-muted);">+' + (c.lines_added||0) + ' −' + (c.lines_removed||0) + '</span>' +
+                '</div>' +
+                (c.summary ? '<div style="font-size:11px;line-height:1.4;color:var(--text);">' + esc(c.summary) + '</div>' : '') +
+                (newPills || changedPills || removedPills ? '<div style="margin-top:4px;">' + newPills + changedPills + removedPills + '</div>' : '') +
+              '</div>';
+            }).join('');
+          }
+          if (typeof localizeTimestamps === 'function') localizeTimestamps(palBox);
+        }
+
+        // Box 2: Manual requirement edits
+        if (manBox) {
+          const mEdits = data.manual_edits || [];
+          if (!mEdits.length) {
+            manBox.innerHTML = '<div style="color:var(--text-muted);font-size:11px;padding:8px 0;">No manual edits recorded yet.</div>';
+          } else {
+            manBox.innerHTML = mEdits.map(e => {
+              const time = '<time class="ts-relative" datetime="' + esc(e.created_at || '') + '">' + esc(e.created_at || '') + '</time>';
+              const actor = esc(e.actor_name || e.actor_email || 'Unknown');
+              const meta = e.metadata || {};
+              const code = esc(meta.req_code || '');
+              const fields = (meta.changed_fields || []).map(f => esc(f)).join(', ');
+              return '<div style="padding:8px 0;border-bottom:1px solid var(--border-light);">' +
+                '<div style="display:flex;justify-content:space-between;margin-bottom:4px;">' +
+                  '<span style="font-size:11px;font-weight:600;">' + code + '</span>' +
+                  '<span style="font-size:10px;color:var(--text-muted);">' + time + '</span>' +
+                '</div>' +
+                '<div style="font-size:11px;color:var(--text-muted);">' + actor + ' · changed ' + fields + '</div>' +
+              '</div>';
+            }).join('');
+          }
+          if (typeof localizeTimestamps === 'function') localizeTimestamps(manBox);
+        }
+      } catch (e) { /* silently ignore */ }
+    }
 
     async function loadRequirements() {
       const list = document.getElementById('reqsList');

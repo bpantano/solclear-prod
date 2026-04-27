@@ -157,6 +157,20 @@ def main():
 
     is_material = analysis.get("material", True)
 
+    # Save to palmetto_change_history for the Requirements tab changelog.
+    try:
+        from tools.audit import save_palmetto_change
+        save_palmetto_change(
+            summary=analysis.get("summary", f"{added} lines added, {removed} lines removed."),
+            lines_added=added, lines_removed=removed,
+            new_ids=[r.get("id", "") if isinstance(r, dict) else r for r in analysis.get("new_ids", [])],
+            changed_ids=analysis.get("changed_ids", []),
+            removed_ids=analysis.get("removed_ids", []),
+        )
+        print("[palmetto-cron] change saved to palmetto_change_history")
+    except Exception as e:
+        print(f"[palmetto-cron] history save failed: {e}", file=sys.stderr)
+
     # Only notify for material changes — actual requirement additions,
     # modifications, or removals. Non-material diffs (timestamps, layout,
     # metadata) are logged but don't require superadmin action.

@@ -807,6 +807,8 @@ class LiveHandler(BaseHTTPRequestHandler):
             if not self._require_role(session, ("superadmin", "admin", "reviewer")):
                 return
             self._api_requirements_list()
+        elif path == "/api/requirements/change_history":
+            self._api_req_change_history(session)
         elif path == "/api/requirements/monitor/status":
             if not self._require_role(session, ("superadmin", "admin", "reviewer")):
                 return
@@ -1850,22 +1852,76 @@ class LiveHandler(BaseHTTPRequestHandler):
         self._send_json({"error": "Requirement not found"}, 404)
 
     def _api_requirement_update(self, req_id, body):
-        """Update a requirement's editable fields in-memory. Note: does not persist across restarts yet."""
+        """Update a requirement's editable fields. Persists to the DB
+        requirements table (checked_at ordering keeps latest version) so
+        changes survive server restarts. Also logs to audit_log for
+        the manual-edits history box on the Requirements tab."""
         try:
             data = json.loads(body)
+            EDITABLE = ("validation_prompt", "task_titles", "keywords", "title",
+                        "selection_criteria")
+            # Collect what's changing + old values for audit trail
+            old_values: dict = {}
+            new_values: dict = {}
             for r in REQUIREMENTS:
                 if r["id"] == req_id:
-                    if "validation_prompt" in data:
-                        r["validation_prompt"] = data["validation_prompt"]
-                    if "task_titles" in data:
-                        r["task_titles"] = data["task_titles"]
-                    if "keywords" in data:
-                        r["keywords"] = data["keywords"]
-                    if "title" in data:
-                        r["title"] = data["title"]
-                    self._send_json({"ok": True, "id": req_id, "message": "Updated in memory. Will reset on server restart until DB migration."})
-                    return
-            self._send_json({"error": "Requirement not found"}, 404)
+                    for field in EDITABLE:
+                        if field in data:
+                            old_values[field] = r.get(field)
+                            new_values[field] = data[field]
+                            r[field] = data[field]  # update in-memory
+                    break
+            if not old_values:
+                self._send_json({"error": "Requirement not found or no editable fields"}, 404)
+                return
+
+            # Persist to DB so changes survive redeploys
+            try:
+                row = fetch_one(
+                    "SELECT id FROM requirements WHERE code = %s AND is_active = TRUE ORDER BY version DESC LIMIT 1",
+                    (req_id,),
+                )
+                if row:
+                    for field, val in new_values.items():
+                        if field in ("task_titles", "keywords"):
+                            import json as _json
+                            execute(
+                                f"UPDATE requirements SET {field} = %s WHERE id = %s",
+                                (_json.dumps(val) if isinstance(val, list) else val, row["id"]),
+                            )
+                        else:
+                            execute(
+                                f"UPDATE requirements SET {field} = %s WHERE id = %s",
+                                (val, row["id"]),
+                            )
+            except Exception as db_err:
+                print(f"WARNING: could not persist requirement update to DB: {db_err}", file=sys.stderr)
+
+            # Audit log
+            try:
+                from tools.audit import log_requirement_edit
+                _s = getattr(self, "_session", {}) or {}
+                log_requirement_edit(_s.get("user_id"), req_id,
+                                     list(new_values.keys()), old_values, new_values)
+            except Exception:
+                pass
+
+            self._send_json({"ok": True, "id": req_id,
+                             "changed": list(new_values.keys())})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_req_change_history(self, session):
+        """Return the last 15 Palmetto-detected material changes and the
+        last 15 manual requirement edits for the Requirements tab boxes."""
+        try:
+            from tools.audit import list_palmetto_changes, list_audit_log
+            palmetto = list_palmetto_changes(limit=15)
+            manual = list_audit_log(action="requirement_edit", limit=15)
+            self._send_json({
+                "palmetto_changes": palmetto,
+                "manual_edits": manual,
+            })
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 
@@ -1990,6 +2046,21 @@ class LiveHandler(BaseHTTPRequestHandler):
                 # Only notify for material changes — actual requirement
                 # additions, modifications, or removals. Cosmetic diffs
                 # (timestamps, layout, metadata) don't require action.
+                # Save to palmetto_change_history regardless of materiality
+                # so the Requirements tab can show a complete changelog.
+                # Only material changes fire notifications (below).
+                try:
+                    from tools.audit import save_palmetto_change
+                    save_palmetto_change(
+                        summary=analysis.get("summary", f"{added} lines added, {removed} lines removed."),
+                        lines_added=added, lines_removed=removed,
+                        new_ids=[r.get("id", "") for r in analysis.get("new_ids", [])],
+                        changed_ids=analysis.get("changed_ids", []),
+                        removed_ids=analysis.get("removed_ids", []),
+                    )
+                except Exception as hist_err:
+                    print(f"[palmetto] history save failed: {hist_err}", file=sys.stderr)
+
                 if is_material:
                     try:
                         from tools.notifications import notify
@@ -2007,7 +2078,7 @@ class LiveHandler(BaseHTTPRequestHandler):
                     except Exception as notify_err:
                         print(f"[palmetto] notification failed: {notify_err}", file=sys.stderr)
                 else:
-                    print("[palmetto] non-material change — skipping notification", file=sys.stderr)
+                    print("[palmetto] non-material change — no notification sent", file=sys.stderr)
 
                 self._send_json({
                     "status": "changes_detected",

@@ -1301,6 +1301,20 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       <div id="monitorStatus" style="font-size:12px;color:var(--text-muted);"></div>
     </div>
 
+    <!-- Change history boxes — side by side on desktop, stacked on mobile -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;" id="reqHistoryGrid">
+      <!-- Palmetto spec changes (from scrape detection) -->
+      <div style="background:var(--bg-card);border-radius:8px;padding:14px 16px;">
+        <div style="font-size:11px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;">Palmetto Spec Changes</div>
+        <div id="reqPalmettoHistory" style="max-height:220px;overflow-y:auto;font-size:11px;"></div>
+      </div>
+      <!-- Manual requirement edits (validation_prompt, task_titles, keywords) -->
+      <div style="background:var(--bg-card);border-radius:8px;padding:14px 16px;">
+        <div style="font-size:11px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;">Manual Requirement Edits</div>
+        <div id="reqManualHistory" style="max-height:220px;overflow-y:auto;font-size:11px;"></div>
+      </div>
+    </div>
+
     <!-- Requirements by section -->
     <div id="reqsList"></div>
   </div>

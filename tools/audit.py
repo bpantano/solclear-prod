@@ -99,6 +99,56 @@ def log_user_role_change(actor_id: int, org_id: int,
                 metadata={"new_role": new_role})
 
 
+def log_requirement_edit(user_id: Optional[int], req_code: str,
+                          changed_fields: list, old_values: dict,
+                          new_values: dict) -> None:
+    """Log a manual edit to a requirement's editable fields
+    (validation_prompt, task_titles, keywords, title)."""
+    log_action("requirement_edit", user_id=user_id,
+                target_type="requirement",
+                metadata={
+                    "req_code": req_code,
+                    "changed_fields": changed_fields,
+                    "old": old_values,
+                    "new": new_values,
+                })
+
+
+def save_palmetto_change(summary: str, lines_added: int, lines_removed: int,
+                          new_ids: list, changed_ids: list,
+                          removed_ids: list) -> None:
+    """Persist a material Palmetto spec change to the history table so
+    the Requirements tab can show a chronological changelog."""
+    import json
+    try:
+        from tools.db import execute
+        execute(
+            """INSERT INTO palmetto_change_history
+               (summary, lines_added, lines_removed, new_req_ids, changed_req_ids, removed_req_ids)
+               VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb)""",
+            (summary, lines_added, lines_removed,
+             json.dumps(new_ids), json.dumps(changed_ids), json.dumps(removed_ids)),
+        )
+    except Exception as e:
+        print(f"[audit] failed to save palmetto change: {e}", file=sys.stderr)
+
+
+def list_palmetto_changes(limit: int = 15) -> list:
+    """Return the most recent detected Palmetto spec changes, newest first."""
+    from tools.db import fetch_all
+    rows = fetch_all(
+        """SELECT id, detected_at, summary, lines_added, lines_removed,
+                  new_req_ids, changed_req_ids, removed_req_ids
+           FROM palmetto_change_history
+           ORDER BY detected_at DESC LIMIT %s""",
+        (limit,),
+    )
+    for r in rows:
+        if r.get("detected_at") and hasattr(r["detected_at"], "isoformat"):
+            r["detected_at"] = r["detected_at"].isoformat()
+    return rows
+
+
 # ── Read API ─────────────────────────────────────────────────────────────────
 
 def list_audit_log(
