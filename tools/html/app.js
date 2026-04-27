@@ -219,9 +219,20 @@
       } catch (e) { alert('Error: ' + e.message); }
     }
 
+    function switchOrgTab(tab) {
+      ['settings', 'users', 'activity'].forEach(t => {
+        const panel = document.getElementById('orgTab' + t.charAt(0).toUpperCase() + t.slice(1));
+        const btn = document.querySelector('[data-org-tab="' + t + '"]');
+        if (panel) panel.style.display = t === tab ? '' : 'none';
+        if (btn) btn.classList.toggle('active', t === tab);
+      });
+      if (tab === 'activity') loadOrgAuditLog(currentOrgId);
+    }
+
     async function openOrg(orgId) {
       currentOrgId = orgId;
       showStep('orgDetail');
+      switchOrgTab('settings');  // always start on Settings tab
       try {
         const r = await fetch('/api/organizations/' + orgId);
         const org = await r.json();
@@ -245,8 +256,7 @@
         });
         // Render users — renderOrgUsers itself checks role for write actions
         renderOrgUsers(org.users || []);
-        // Audit log for this org (lazy — load after main org data)
-        loadOrgAuditLog(orgId);
+        // Audit log loads lazily when the Activity tab is clicked
       } catch (e) { alert('Error loading org: ' + e.message); }
     }
 

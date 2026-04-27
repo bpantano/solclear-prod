@@ -1152,78 +1152,83 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <button class="back-btn" onclick="showStep('orgs')">&larr; Back to organizations</button>
     <div class="step-label" id="orgDetailLabel">Organization</div>
 
-    <!-- Org info -->
-    <div style="background:var(--bg-card);border-radius:8px;padding:16px;margin-bottom:16px;">
-      <div class="param-group">
-        <label>Name</label>
-        <input class="search-input" id="orgEditName" type="text" style="font-size:14px;">
-      </div>
-      <div class="param-group">
-        <label>Status</label>
-        <div class="toggle-row" id="orgStatusToggles">
-          <button class="toggle-btn" data-param="org-edit-status" data-value="onboarding" onclick="selectToggle(this)">Onboarding</button>
-          <button class="toggle-btn" data-param="org-edit-status" data-value="demo" onclick="selectToggle(this)">Demo</button>
-          <button class="toggle-btn" data-param="org-edit-status" data-value="active" onclick="selectToggle(this)">Active</button>
-          <button class="toggle-btn" data-param="org-edit-status" data-value="inactive" onclick="selectToggle(this)">Inactive</button>
-        </div>
-      </div>
-      <!-- API keys are sensitive — only superadmin/admin can view or edit them -->
-      <div class="param-group admin-write" style="display:none;">
-        <label>CompanyCam API Key</label>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <input class="search-input" id="orgCcKey" type="password" style="font-size:13px;font-family:monospace;flex:1;" placeholder="Not set">
-          <button onclick="toggleKeyVis('orgCcKey')" style="background:var(--border-light);border:none;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:12px;min-height:44px;color:var(--text);">Show</button>
-        </div>
-      </div>
-      <div class="param-group admin-write" style="display:none;">
-        <label>Anthropic API Key</label>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <input class="search-input" id="orgAnthKey" type="password" style="font-size:13px;font-family:monospace;flex:1;" placeholder="Not set">
-          <button onclick="toggleKeyVis('orgAnthKey')" style="background:var(--border-light);border:none;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:12px;min-height:44px;color:var(--text);">Show</button>
-        </div>
-      </div>
-      <button class="run-btn admin-write" onclick="saveOrg()" style="display:none;background:var(--success);">Save Changes</button>
-    </div>
+    <!-- Sub-tabs: Settings | Users | Activity -->
+    <nav style="display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:16px;">
+      <button class="dev-notes-tab active" data-org-tab="settings" onclick="switchOrgTab('settings')">Settings</button>
+      <button class="dev-notes-tab" data-org-tab="users" onclick="switchOrgTab('users')">Users <span id="orgUserCount" style="font-size:10px;color:var(--text-muted);margin-left:4px;"></span></button>
+      <button class="dev-notes-tab" data-org-tab="activity" onclick="switchOrgTab('activity')">Activity</button>
+    </nav>
 
-    <!-- Users -->
-    <div style="background:var(--bg-card);border-radius:8px;padding:16px;margin-bottom:16px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <label style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-secondary);font-weight:600;margin:0;">Users</label>
-        <span id="orgUserCount" style="font-size:11px;color:var(--text-muted);"></span>
-      </div>
-      <div id="orgUsersList"></div>
-
-      <!-- Add user form (admin/superadmin only) -->
-      <div class="admin-write" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border-light);">
-        <div style="font-size:11px;color:var(--text-secondary);font-weight:600;margin-bottom:8px;">ADD USER</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <input class="search-input" id="addUserFirst" type="text" placeholder="First Name" style="flex:1;min-width:100px;font-size:13px;">
-          <input class="search-input" id="addUserLast" type="text" placeholder="Last Name" style="flex:1;min-width:100px;font-size:13px;">
-          <input class="search-input" id="addUserEmail" type="email" placeholder="Email" style="flex:1;min-width:160px;font-size:13px;">
-          <input class="search-input" id="addUserPhone" type="tel" placeholder="Phone (optional)" style="flex:1;min-width:120px;font-size:13px;">
-          <!-- Password removed — invite email is sent automatically -->
-          <select id="addUserRole" style="padding:8px;border:2px solid var(--border);border-radius:8px;font-size:13px;min-height:44px;">
-            <option value="crew">Crew</option>
-            <option value="reviewer">Reviewer</option>
-            <option value="admin">Admin</option>
-          </select>
-          <button onclick="addUser()" style="background:var(--accent);color:var(--text-inverse);border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;min-height:44px;">Add</button>
+    <!-- Settings tab -->
+    <div id="orgTabSettings">
+      <div style="background:var(--bg-card);border-radius:8px;padding:16px;margin-bottom:16px;">
+        <div class="param-group">
+          <label>Name</label>
+          <input class="search-input" id="orgEditName" type="text" style="font-size:14px;">
         </div>
-      </div>
-
-      <!-- CSV upload (admin/superadmin only) -->
-      <div class="admin-write" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border-light);">
-        <div style="font-size:11px;color:var(--text-secondary);font-weight:600;margin-bottom:8px;">BULK IMPORT (CSV)</div>
-        <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Format: email, first_name, last_name, role, phone (one per line)</div>
-        <input type="file" id="csvUpload" accept=".csv" onchange="uploadCsv()" style="font-size:12px;">
-        <div id="csvResult" style="margin-top:8px;font-size:12px;"></div>
+        <div class="param-group">
+          <label>Status</label>
+          <div class="toggle-row" id="orgStatusToggles">
+            <button class="toggle-btn" data-param="org-edit-status" data-value="onboarding" onclick="selectToggle(this)">Onboarding</button>
+            <button class="toggle-btn" data-param="org-edit-status" data-value="demo" onclick="selectToggle(this)">Demo</button>
+            <button class="toggle-btn" data-param="org-edit-status" data-value="active" onclick="selectToggle(this)">Active</button>
+            <button class="toggle-btn" data-param="org-edit-status" data-value="inactive" onclick="selectToggle(this)">Inactive</button>
+          </div>
+        </div>
+        <div class="param-group admin-write" style="display:none;">
+          <label>CompanyCam API Key</label>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input class="search-input" id="orgCcKey" type="password" style="font-size:13px;font-family:monospace;flex:1;" placeholder="Not set">
+            <button onclick="toggleKeyVis('orgCcKey')" style="background:var(--border-light);border:none;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:12px;min-height:44px;color:var(--text);">Show</button>
+          </div>
+        </div>
+        <div class="param-group admin-write" style="display:none;">
+          <label>Anthropic API Key</label>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input class="search-input" id="orgAnthKey" type="password" style="font-size:13px;font-family:monospace;flex:1;" placeholder="Not set">
+            <button onclick="toggleKeyVis('orgAnthKey')" style="background:var(--border-light);border:none;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:12px;min-height:44px;color:var(--text);">Show</button>
+          </div>
+        </div>
+        <button class="run-btn admin-write" onclick="saveOrg()" style="display:none;background:var(--success);">Save Changes</button>
       </div>
     </div>
 
-    <!-- Audit log for this org — loaded by loadOrgAuditLog() -->
-    <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-light);">
-      <div style="font-size:11px;color:var(--text-secondary);font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.08em;">Activity Log</div>
-      <div id="orgAuditLog" style="font-size:12px;color:var(--text-secondary);"></div>
+    <!-- Users tab -->
+    <div id="orgTabUsers" style="display:none;">
+      <div style="background:var(--bg-card);border-radius:8px;padding:16px;margin-bottom:16px;">
+        <div id="orgUsersList"></div>
+
+        <!-- Add user form (admin/superadmin only) -->
+        <div class="admin-write" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border-light);">
+          <div style="font-size:11px;color:var(--text-secondary);font-weight:600;margin-bottom:8px;">ADD USER</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <input class="search-input" id="addUserFirst" type="text" placeholder="First Name" style="flex:1;min-width:100px;font-size:13px;">
+            <input class="search-input" id="addUserLast" type="text" placeholder="Last Name" style="flex:1;min-width:100px;font-size:13px;">
+            <input class="search-input" id="addUserEmail" type="email" placeholder="Email" style="flex:1;min-width:160px;font-size:13px;">
+            <input class="search-input" id="addUserPhone" type="tel" placeholder="Phone (optional)" style="flex:1;min-width:120px;font-size:13px;">
+            <!-- Password removed — invite email is sent automatically -->
+            <select id="addUserRole" style="padding:8px;border:2px solid var(--border);border-radius:8px;font-size:13px;min-height:44px;">
+              <option value="crew">Crew</option>
+              <option value="reviewer">Reviewer</option>
+              <option value="admin">Admin</option>
+            </select>
+            <button onclick="addUser()" style="background:var(--accent);color:var(--text-inverse);border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;min-height:44px;">Add</button>
+          </div>
+        </div>
+
+        <!-- CSV upload (admin/superadmin only) -->
+        <div class="admin-write" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border-light);">
+          <div style="font-size:11px;color:var(--text-secondary);font-weight:600;margin-bottom:8px;">BULK IMPORT (CSV)</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Format: email, first_name, last_name, role, phone (one per line)</div>
+          <input type="file" id="csvUpload" accept=".csv" onchange="uploadCsv()" style="font-size:12px;">
+          <div id="csvResult" style="margin-top:8px;font-size:12px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Activity tab -->
+    <div id="orgTabActivity" style="display:none;">
+      <div id="orgAuditLog"></div>
     </div>
   </div>
 
