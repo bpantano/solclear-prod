@@ -326,15 +326,25 @@ def run_check_thread(cc_project_id, params, run_id, result_queue, cancel_event,
     streams with report rows without extra bookkeeping."""
     session = session or {}
     try:
-        # Ensure photos are cached
+        # Ensure photos are cached. For a full check we always fetch
+        # fresh from CompanyCam so the compliance run sees the latest
+        # uploads, then persist to both .tmp/ (for compliance_check.py)
+        # and the projects.photos_cache column (survives redeploys).
         photos_path = TMP_DIR / f"photos_{cc_project_id}.json"
-        if not photos_path.exists():
-            result_queue.put(json.dumps({"type": "status", "message": "Fetching photos from CompanyCam..."}))
-            photos = get_all_photos(cc_project_id)
-            TMP_DIR.mkdir(exist_ok=True)
-            with open(photos_path, "w") as f:
-                json.dump(photos, f, indent=2)
-            result_queue.put(json.dumps({"type": "status", "message": f"Fetched {len(photos)} photos. Starting check..."}))
+        result_queue.put(json.dumps({"type": "status", "message": "Fetching photos from CompanyCam..."}))
+        photos = get_all_photos(cc_project_id)
+        TMP_DIR.mkdir(exist_ok=True)
+        with open(photos_path, "w") as f:
+            json.dump(photos, f, indent=2)
+        # Persist to DB so rechecks survive deploys without refetching
+        try:
+            execute(
+                "UPDATE projects SET photos_cache = %s::jsonb, photos_cached_at = NOW() WHERE companycam_id = %s",
+                (json.dumps(photos), str(cc_project_id))
+            )
+        except Exception as _pe:
+            print(f"WARNING: could not save photos_cache to DB: {_pe}", file=sys.stderr)
+        result_queue.put(json.dumps({"type": "status", "message": f"Fetched {len(photos)} photos. Starting check..."}))
 
         # The report row was pre-created by _start_check so the client
         # had a run_id before photos were fetched. Here we fill in the
@@ -447,6 +457,19 @@ def run_check_thread(cc_project_id, params, run_id, result_queue, cancel_event,
                 )
             except Exception as e:
                 print(f"WARNING: Could not update report in DB: {e}", file=sys.stderr)
+
+        # Audit: log check run + cancel
+        try:
+            from tools.audit import log_report_run, log_report_cancel
+            runner_id = (session or {}).get("user_id")
+            org_id = (session or {}).get("org_id")
+            if was_cancelled:
+                log_report_cancel(runner_id, org_id, db_report_id)
+            else:
+                log_report_run(runner_id, org_id, db_report_id,
+                               project_id=str(cc_project_id))
+        except Exception:
+            pass
 
         summary_payload = {
             "passed": n_pass,
@@ -755,6 +778,10 @@ class LiveHandler(BaseHTTPRequestHandler):
             if not self._require_role(session, ("superadmin",)):
                 return
             self._api_dev_notes_list(session, qs)
+        elif path == "/api/admin/audit_log":
+            if not self._require_role(session, ("superadmin", "admin")):
+                return
+            self._api_audit_log(session, qs)
         elif path == "/api/admin/cost/summary":
             if not self._require_role(session, ("superadmin",)):
                 return
@@ -1245,6 +1272,8 @@ class LiveHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Invalid email or password"}, 401)
                 return
             token = create_session_token(user["id"], user["role"], user.get("organization_id"))
+            from tools.audit import log_login
+            log_login(user["id"], user.get("organization_id"), user["email"])
             # Send response with session cookie
             resp_body = json.dumps({
                 "ok": True,
@@ -1550,6 +1579,9 @@ class LiveHandler(BaseHTTPRequestHandler):
                 return
             org["created_at"] = org["created_at"].isoformat() if org.get("created_at") else None
             org["updated_at"] = org["updated_at"].isoformat() if org.get("updated_at") else None
+            changed = [k for k in ("name", "status", "companycam_api_key", "anthropic_api_key", "settings") if k in data]
+            from tools.audit import log_org_settings_change
+            log_org_settings_change((session or {}).get("user_id"), int(org_id), changed)
             self._send_json(org)
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
@@ -1597,6 +1629,9 @@ class LiveHandler(BaseHTTPRequestHandler):
                     print(f"WARNING: invite email failed for {email}: {e}", file=sys.stderr)
 
             user["invite_sent"] = invite_sent
+            from tools.audit import log_user_invite
+            _s = getattr(self, "_session", {}) or {}
+            log_user_invite(_s.get("user_id"), int(org_id), email, role)
             self._send_json(user, 201)
         except Exception as e:
             if "unique" in str(e).lower():
@@ -1697,6 +1732,11 @@ class LiveHandler(BaseHTTPRequestHandler):
             if not user:
                 self._send_json({"error": "User not found"}, 404)
                 return
+            if "role" in data:
+                from tools.audit import log_user_role_change
+                _s = getattr(self, "_session", {}) or {}
+                log_user_role_change(_s.get("user_id"), user.get("organization_id") or 0,
+                                     int(user_id), data["role"])
             self._send_json(user)
         except Exception as e:
             if "unique" in str(e).lower():
@@ -2314,6 +2354,19 @@ class LiveHandler(BaseHTTPRequestHandler):
 
     # ── Dev Notes triage (superadmin only) ──────────────────────────────────
 
+    def _api_audit_log(self, session, qs):
+        """Return recent audit log entries. Admins see their own org only;
+        superadmin sees all. Optional ?action=<type> filter."""
+        try:
+            from tools.audit import list_audit_log
+            role = session.get("role", "")
+            org_id = None if role == "superadmin" else session.get("org_id")
+            action = (qs or {}).get("action", [""])[0] or None
+            rows = list_audit_log(org_id=org_id, action=action, limit=200)
+            self._send_json({"entries": rows})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
     def _api_dev_notes_list(self, session, qs):
         """List top-level dev notes for the triage tab. Each row includes
         author + project + requirement context + the inline reply
@@ -2379,6 +2432,9 @@ class LiveHandler(BaseHTTPRequestHandler):
                 )
             except Exception as e:
                 print(f"notify_dev_note_status_changed failed: {e}", file=sys.stderr)
+            from tools.audit import log_dev_note_triage
+            log_dev_note_triage(session.get("user_id"), note_id, new_status,
+                                author_user_id=note.get("author_user_id"))
             # Serialize timestamps
             for k in ("created_at", "resolved_at"):
                 if updated and updated.get(k) and hasattr(updated[k], "isoformat"):
@@ -3096,6 +3152,10 @@ class LiveHandler(BaseHTTPRequestHandler):
                     if n.get(k) and hasattr(n[k], "isoformat"):
                         n[k] = n[k].isoformat()
                 return n
+            from tools.audit import log_note_add
+            log_note_add(session.get("user_id"), session.get("org_id"),
+                         created.get("id"), visibility,
+                         req_code=req_code)
             self._send_json({
                 "ok": True,
                 "created": _iso(dict(created)),
@@ -3120,18 +3180,36 @@ class LiveHandler(BaseHTTPRequestHandler):
                 "is_incentive_state": row.get("is_incentive_state", False),
                 "portal_access_granted": row.get("portal_access_granted", False),
             }
-            # Ensure the photos cache exists. Railway redeploys wipe
-            # /app/.tmp/, so any recheck on a report from a prior deploy
-            # would otherwise hit FileNotFoundError. Refetch on miss —
-            # full check path does the same. (Longer-term fix: move the
-            # cache out of ephemeral disk; see project_multi_user_readiness.md)
+            # Ensure photos are available for the recheck. Priority:
+            # 1. .tmp/ file (already on disk from this session)
+            # 2. DB projects.photos_cache (survives deploys — migration 008)
+            # 3. Fetch fresh from CompanyCam (slow, last resort)
             cc_project_id = row["companycam_id"]
             photos_path = TMP_DIR / f"photos_{cc_project_id}.json"
             if not photos_path.exists():
-                photos = get_all_photos(cc_project_id)
-                TMP_DIR.mkdir(exist_ok=True)
-                with open(photos_path, "w") as f:
-                    json.dump(photos, f, indent=2)
+                # Try the DB cache first — avoids a CompanyCam round-trip
+                # after every deploy and keeps rechecks fast.
+                db_cached = fetch_one(
+                    "SELECT photos_cache FROM projects WHERE companycam_id = %s",
+                    (str(cc_project_id),),
+                )
+                if db_cached and db_cached.get("photos_cache"):
+                    TMP_DIR.mkdir(exist_ok=True)
+                    with open(photos_path, "w") as f:
+                        json.dump(db_cached["photos_cache"], f, indent=2)
+                else:
+                    # Fall back to CompanyCam fetch + persist to DB for next time
+                    photos = get_all_photos(cc_project_id)
+                    TMP_DIR.mkdir(exist_ok=True)
+                    with open(photos_path, "w") as f:
+                        json.dump(photos, f, indent=2)
+                    try:
+                        execute(
+                            "UPDATE projects SET photos_cache = %s::jsonb, photos_cached_at = NOW() WHERE companycam_id = %s",
+                            (json.dumps(photos), str(cc_project_id))
+                        )
+                    except Exception as _pe:
+                        print(f"WARNING: could not save photos_cache to DB: {_pe}", file=sys.stderr)
             # Scope API-call logging to this report + requirement so the
             # recheck cost gets attributed correctly in api_call_log.
             from tools.compliance_check import set_call_context
@@ -3176,6 +3254,9 @@ class LiveHandler(BaseHTTPRequestHandler):
             clear_public_notes_for_req_result(row["id"])
             # Recompute the report summary so totals stay correct
             self._recompute_report_summary(report_id)
+            from tools.audit import log_requirement_recheck
+            log_requirement_recheck(session.get("user_id"), session.get("org_id"),
+                                    int(report_id), req_code)
             self._send_json(updated or {})
         except Exception as e:
             self._send_json({"error": str(e)}, 500)

@@ -1219,6 +1219,12 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         <div id="csvResult" style="margin-top:8px;font-size:12px;"></div>
       </div>
     </div>
+
+    <!-- Audit log for this org — loaded by loadOrgAuditLog() -->
+    <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-light);">
+      <div style="font-size:11px;color:var(--text-secondary);font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.08em;">Activity Log</div>
+      <div id="orgAuditLog" style="font-size:12px;color:var(--text-secondary);"></div>
+    </div>
   </div>
 
   <!-- User detail/edit -->

@@ -245,7 +245,46 @@
         });
         // Render users — renderOrgUsers itself checks role for write actions
         renderOrgUsers(org.users || []);
+        // Audit log for this org (lazy — load after main org data)
+        loadOrgAuditLog(orgId);
       } catch (e) { alert('Error loading org: ' + e.message); }
+    }
+
+    async function loadOrgAuditLog(orgId) {
+      const container = document.getElementById('orgAuditLog');
+      if (!container) return;
+      container.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Loading activity…</div>';
+      try {
+        const r = await fetch('/api/admin/audit_log');
+        if (!r.ok) { container.innerHTML = ''; return; }
+        const data = await r.json();
+        const entries = (data.entries || []).filter(e => !orgId); // superadmin sees all; admin filtered server-side
+        if (!entries.length) {
+          container.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No activity recorded yet.</div>';
+          return;
+        }
+        const _ACTION_LABELS = {
+          login: 'Logged in', report_run: 'Ran check', report_cancel: 'Cancelled check',
+          requirement_recheck: 'Re-checked requirement', note_add: 'Added note',
+          dev_note_triage: 'Triaged dev note', org_settings_change: 'Updated org settings',
+          user_invite: 'Invited user', user_role_change: 'Changed user role',
+        };
+        container.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:11px;">' +
+          entries.slice(0, 50).map(e => {
+            const label = _ACTION_LABELS[e.action] || e.action;
+            const actor = e.actor_name || e.actor_email || 'System';
+            const time = '<time class="ts-relative" datetime="' + esc(e.created_at || '') + '">' + esc(e.created_at || '') + '</time>';
+            const meta = e.metadata && Object.keys(e.metadata).length
+              ? '<span style="opacity:0.6;"> · ' + esc(JSON.stringify(e.metadata).slice(0, 60)) + '</span>'
+              : '';
+            return '<tr style="border-top:1px solid var(--border-light);">' +
+              '<td style="padding:4px 6px;color:var(--text-muted);">' + time + '</td>' +
+              '<td style="padding:4px 6px;font-weight:500;">' + esc(actor) + '</td>' +
+              '<td style="padding:4px 6px;">' + esc(label) + meta + '</td>' +
+              '</tr>';
+          }).join('') + '</table>';
+        if (typeof localizeTimestamps === 'function') localizeTimestamps(container);
+      } catch (e) { container.innerHTML = ''; }
     }
 
     function renderOrgUsers(users) {
@@ -521,7 +560,7 @@
           alert.classList.remove('alert-error');
           alert.classList.add('alert-warning');
           document.getElementById('changeSummary').innerHTML =
-            '<div><strong>Coverage gap:</strong> ' + data.missing_ids.length + ' requirement(s) found on Palmetto\\'s page that are not configured in our system:</div>' +
+            "<div><strong>Coverage gap:</strong> " + data.missing_ids.length + " requirement(s) found on Palmetto's page that are not configured in our system:</div>" +
             '<div style="margin-top:6px;">' + data.missing_ids.map(id =>
               '<span class="badge badge-danger" style="margin:2px 4px 2px 0;">' + esc(id) + '</span>'
             ).join('') + '</div>' +
@@ -1659,15 +1698,18 @@
         : '';
       // Action buttons depend on current status. Cancel reply button
       // is hidden unless the editor is open.
+      // data-status avoids quote-nesting issues between the JS string,
+      // the HTML attribute delimiters, and the JS argument inside onclick.
+      const noteId = n.id;
       let actions = '';
       if (status === 'open') {
-        actions += '<button class="btn btn-sm btn-primary" onclick="setDevNoteStatus(' + n.id + ', \\'acknowledged\\')">Acknowledge</button>';
-        actions += '<button class="btn btn-sm btn-subtle" onclick="setDevNoteStatus(' + n.id + ', \\'corrected\\')">Mark corrected</button>';
+        actions += '<button class="btn btn-sm btn-primary" data-note-id="' + noteId + '" data-status="acknowledged" onclick="setDevNoteStatus(+this.dataset.noteId, this.dataset.status)">Acknowledge</button>';
+        actions += '<button class="btn btn-sm btn-subtle" data-note-id="' + noteId + '" data-status="corrected" onclick="setDevNoteStatus(+this.dataset.noteId, this.dataset.status)">Mark corrected</button>';
       } else if (status === 'acknowledged') {
-        actions += '<button class="btn btn-sm btn-primary" onclick="setDevNoteStatus(' + n.id + ', \\'corrected\\')">Mark corrected</button>';
-        actions += '<button class="btn btn-sm btn-subtle" onclick="setDevNoteStatus(' + n.id + ', \\'open\\')">Reopen</button>';
+        actions += '<button class="btn btn-sm btn-primary" data-note-id="' + noteId + '" data-status="corrected" onclick="setDevNoteStatus(+this.dataset.noteId, this.dataset.status)">Mark corrected</button>';
+        actions += '<button class="btn btn-sm btn-subtle" data-note-id="' + noteId + '" data-status="open" onclick="setDevNoteStatus(+this.dataset.noteId, this.dataset.status)">Reopen</button>';
       } else {
-        actions += '<button class="btn btn-sm btn-subtle" onclick="setDevNoteStatus(' + n.id + ', \\'open\\')">Reopen</button>';
+        actions += '<button class="btn btn-sm btn-subtle" data-note-id="' + noteId + '" data-status="open" onclick="setDevNoteStatus(+this.dataset.noteId, this.dataset.status)">Reopen</button>';
       }
       actions += '<button class="btn btn-sm btn-ghost" onclick="openDevNoteReply(' + n.id + ', this)">Reply</button>';
 
@@ -1895,7 +1937,7 @@
     }
 
     async function startImpersonate(userId, userName) {
-      if (!confirm('Impersonate ' + (userName || 'this user') + '? You\\'ll see the app from their perspective until you stop.')) return;
+      if (!confirm("Impersonate " + (userName || "this user") + "? You'll see the app from their perspective until you stop.")) return;
       try {
         const r = await fetch('/api/admin/impersonate', {
           method: 'POST',
