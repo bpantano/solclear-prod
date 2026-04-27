@@ -1176,6 +1176,8 @@ def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
                 file=sys.stderr, flush=True,
             )
     elif len(candidates) > PREFILTER_THRESHOLD:
+        if len(candidates) > MAX_PREFILTER_CANDIDATES:
+            candidates = candidates[-MAX_PREFILTER_CANDIDATES:]
         keep_indices = _haiku_prefilter(candidates, requirement)
         if keep_indices:
             candidates = [candidates[i] for i in keep_indices]

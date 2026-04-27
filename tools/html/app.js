@@ -2404,13 +2404,14 @@
         ).join('') + '</tbody></table></div>';
     }
 
+    function _fmtMs(ms) {
+      if (!ms) return '—';
+      if (ms < 1000) return ms + 'ms';
+      return (ms / 1000).toFixed(1) + 's';
+    }
+
     function renderReqTiming(rows) {
       if (!rows || !rows.length) return '<div style="color:var(--text-muted);font-size:var(--text-sm);">No timing data yet — run a check to populate.</div>';
-      function _fmtMs(ms) {
-        if (!ms) return '—';
-        if (ms < 1000) return ms + 'ms';
-        return (ms / 1000).toFixed(1) + 's';
-      }
       return '<div class="table-scroll"><table style="width:100%;border-collapse:collapse;font-size:var(--text-sm);">' +
         '<thead><tr>' +
         '<th style="text-align:left;padding:6px;color:var(--text-muted);font-weight:600;">Req</th>' +
