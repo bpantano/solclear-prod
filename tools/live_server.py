@@ -1867,12 +1867,19 @@ class LiveHandler(BaseHTTPRequestHandler):
                 if r["id"] == req_id:
                     for field in EDITABLE:
                         if field in data:
-                            old_values[field] = r.get(field)
-                            new_values[field] = data[field]
-                            r[field] = data[field]  # update in-memory
+                            old_val = r.get(field)
+                            new_val = data[field]
+                            # Only track fields whose value actually changed —
+                            # the frontend sends all fields together even when
+                            # only one was edited.
+                            if old_val != new_val:
+                                old_values[field] = old_val
+                                new_values[field] = new_val
+                            r[field] = new_val  # always update in-memory
                     break
-            if not old_values:
-                self._send_json({"error": "Requirement not found or no editable fields"}, 404)
+            if not new_values:
+                # Nothing actually changed — return ok without logging
+                self._send_json({"ok": True, "id": req_id, "changed": []})
                 return
 
             # Persist to DB so changes survive redeploys
