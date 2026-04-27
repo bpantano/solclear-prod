@@ -1072,6 +1072,10 @@
       try {
         const r = await fetch('/api/projects');
         const projects = await r.json();
+        if (projects.error) {
+          loading.innerHTML = errorAlert('CompanyCam error: ' + esc(projects.error));
+          return;
+        }
         if (!projects.length) {
           loading.innerHTML = emptyState(
             'No projects found',
