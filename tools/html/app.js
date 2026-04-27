@@ -529,18 +529,30 @@
           if (!mEdits.length) {
             manBox.innerHTML = '<div style="color:var(--text-muted);font-size:11px;padding:8px 0;">No manual edits recorded yet.</div>';
           } else {
+            const _FIELD_LABELS = {
+              validation_prompt: 'prompt',
+              task_titles: 'CompanyCam task titles',
+              keywords: 'keywords',
+              title: 'title',
+              selection_criteria: 'selection criteria',
+            };
             manBox.innerHTML = mEdits.map(e => {
               const time = '<time class="ts-relative" datetime="' + esc(e.created_at || '') + '">' + esc(e.created_at || '') + '</time>';
               const actor = esc(e.actor_name || e.actor_email || 'Unknown');
               const meta = e.metadata || {};
               const code = esc(meta.req_code || '');
-              const fields = (meta.changed_fields || []).map(f => esc(f)).join(', ');
+              const fields = (meta.changed_fields || [])
+                .map(f => _FIELD_LABELS[f] || f)
+                .join(', ');
+              const verb = (meta.changed_fields || []).length === 1
+                ? 'Changed ' + fields
+                : 'Changed ' + fields;
               return '<div style="padding:8px 0;border-bottom:1px solid var(--border-light);">' +
-                '<div style="display:flex;justify-content:space-between;margin-bottom:4px;">' +
-                  '<span style="font-size:11px;font-weight:600;">' + code + '</span>' +
-                  '<span style="font-size:10px;color:var(--text-muted);">' + time + '</span>' +
+                '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px;">' +
+                  '<span style="font-size:12px;font-weight:600;">' + code + ' — ' + esc(verb) + '</span>' +
+                  '<span style="font-size:10px;color:var(--text-muted);white-space:nowrap;margin-left:8px;">' + time + '</span>' +
                 '</div>' +
-                '<div style="font-size:11px;color:var(--text-muted);">' + actor + ' · changed ' + fields + '</div>' +
+                '<div style="font-size:11px;color:var(--text-muted);">' + actor + '</div>' +
               '</div>';
             }).join('');
           }
