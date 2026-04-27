@@ -732,6 +732,11 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._api_notifications_list(session, qs)
         elif path == "/api/notifications/unread_count":
             self._api_notifications_unread_count(session)
+        elif path.startswith("/api/admin/req_timing/"):
+            if not self._require_role(session, ("superadmin",)):
+                return
+            code = path.split("/")[4] if len(path.split("/")) > 4 else ""
+            self._api_req_timing_detail(code)
         elif path.startswith("/api/reference_photos/"):
             parts = path.split("/")
             # /api/reference_photos/{req_code}         → list metadata
@@ -2073,6 +2078,45 @@ class LiveHandler(BaseHTTPRequestHandler):
         with _anthropic_status_lock:
             out["platform_status"] = dict(_anthropic_status)
         self._send_json(out)
+
+    def _api_req_timing_detail(self, req_code):
+        """Per-run timing breakdown for one requirement. Powers the
+        drill-down when a row in the Performance tab is clicked."""
+        if not req_code:
+            self._send_json({"error": "req_code required"}, 400)
+            return
+        try:
+            rows = fetch_all("""
+                SELECT r.id AS report_id,
+                       p.name AS project_name,
+                       rr.total_duration_ms,
+                       rr.status,
+                       rr.created_at,
+                       COALESCE(acl.api_ms, 0)::INTEGER AS api_ms
+                FROM requirement_results rr
+                JOIN requirements req ON req.id = rr.requirement_id
+                JOIN reports r ON r.id = rr.report_id
+                JOIN projects p ON p.id = r.project_id
+                LEFT JOIN (
+                    SELECT report_id, requirement_code,
+                           SUM(duration_ms) AS api_ms
+                    FROM api_call_log
+                    WHERE requirement_code = %s
+                    GROUP BY report_id, requirement_code
+                ) acl ON acl.report_id = rr.report_id
+                WHERE req.code = %s
+                  AND rr.total_duration_ms IS NOT NULL
+                ORDER BY rr.created_at DESC
+                LIMIT 50
+            """, (req_code.upper(), req_code.upper()))
+            for r in rows:
+                if r.get("created_at") and hasattr(r["created_at"], "isoformat"):
+                    r["created_at"] = r["created_at"].isoformat()
+                if r.get("total_duration_ms"):
+                    r["total_duration_ms"] = int(r["total_duration_ms"])
+            self._send_json({"runs": rows, "req_code": req_code.upper()})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
 
     def _serve_reference_photo_bytes(self, photo_id):
         """Serve the raw image bytes for a reference photo. Cached for 1 hour

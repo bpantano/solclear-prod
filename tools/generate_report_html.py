@@ -1163,9 +1163,17 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
         const resolveBtn = row.querySelector('[data-role="resolve-btn"]');
         if (resolveBtn) resolveBtn.textContent = 'Mark resolved';
         _updateTabCounts();
-        // Refresh the view to apply new status vs. current tab filter
+        // Update only THIS row's visibility for the active tab — avoids
+        // calling filterTab() which rebuilds the entire list, loses scroll
+        // position, and closes any open lightbox or note editor.
         const activeTab = document.querySelector('.report-tab.active')?.dataset.tab;
-        if (activeTab) filterTab(activeTab);
+        if (activeTab && activeTab !== 'all') {{
+          const isAttention = ['FAIL','MISSING','ERROR','NEEDS_REVIEW'].includes(newStatus);
+          const show = (activeTab === 'attention') ? isAttention
+                     : (activeTab === 'passed')    ? newStatus === 'PASS'
+                     : true;
+          row.style.display = show ? '' : 'none';
+        }}
       }} catch (e) {{
         alert('Could not re-check: ' + e.message);
         // Restore the original badge so the row goes back to its prior state.

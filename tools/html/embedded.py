@@ -3643,18 +3643,72 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           const totalMs = r.avg_total_ms || 0;
           const apiMs = r.avg_api_ms || 0;
           const downloadMs = Math.max(0, totalMs - apiMs);
-          // Colour-code by avg total: green <10s, amber 10-30s, red >30s
           const colour = totalMs > 30000 ? 'var(--danger)' : totalMs > 10000 ? 'var(--warning)' : 'var(--success)';
-          return '<tr style="border-top:1px solid var(--border-light);">' +
-            '<td style="padding:6px;font-weight:600;">' + esc(r.requirement_code) + '</td>' +
-            '<td style="padding:6px;text-align:right;font-weight:700;color:' + colour + ';">' + _fmtMs(totalMs) + '</td>' +
-            '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + _fmtMs(apiMs) + '</td>' +
-            '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + _fmtMs(downloadMs) + '</td>' +
-            '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + _fmtMs(r.min_total_ms) + '</td>' +
-            '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + _fmtMs(r.max_total_ms) + '</td>' +
-            '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + (r.run_count || 0) + '</td>' +
-            '</tr>';
+          const code = esc(r.requirement_code);
+          return (
+            '<tr style="border-top:1px solid var(--border-light);cursor:pointer;" onclick="toggleReqTimingDetail(\'' + code + '\', this)">' +
+              '<td style="padding:6px;font-weight:600;">' + code + ' <span style="font-size:10px;opacity:0.5;">▼</span></td>' +
+              '<td style="padding:6px;text-align:right;font-weight:700;color:' + colour + ';">' + _fmtMs(totalMs) + '</td>' +
+              '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + _fmtMs(apiMs) + '</td>' +
+              '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + _fmtMs(downloadMs) + '</td>' +
+              '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + _fmtMs(r.min_total_ms) + '</td>' +
+              '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + _fmtMs(r.max_total_ms) + '</td>' +
+              '<td style="padding:6px;text-align:right;color:var(--text-muted);">' + (r.run_count || 0) + '</td>' +
+            '</tr>' +
+            '<tr id="reqTimingDetail-' + code + '" style="display:none;">' +
+              '<td colspan="7" style="padding:0;">' +
+                '<div id="reqTimingDetailBody-' + code + '" style="padding:8px 12px;background:var(--bg-subtle);font-size:var(--text-xs);">Loading…</div>' +
+              '</td>' +
+            '</tr>'
+          );
         }).join('') + '</tbody></table></div>';
+    }
+
+    async function toggleReqTimingDetail(code, clickedRow) {
+      const detailRow = document.getElementById('reqTimingDetail-' + code);
+      const body = document.getElementById('reqTimingDetailBody-' + code);
+      if (!detailRow || !body) return;
+      const open = detailRow.style.display !== 'none';
+      detailRow.style.display = open ? 'none' : '';
+      const arrow = clickedRow.querySelector('span');
+      if (arrow) arrow.textContent = open ? '▼' : '▲';
+      if (open || body.dataset.loaded) return;
+      // Lazy-load per-run breakdown
+      try {
+        const r = await fetch('/api/admin/req_timing/' + encodeURIComponent(code));
+        if (!r.ok) throw new Error('Request failed');
+        const data = await r.json();
+        const runs = data.runs || [];
+        if (!runs.length) { body.innerHTML = 'No runs recorded yet.'; body.dataset.loaded = '1'; return; }
+        body.innerHTML = '<table style="width:100%;border-collapse:collapse;">' +
+          '<thead><tr>' +
+          '<th style="text-align:left;padding:4px 6px;color:var(--text-muted);">Project</th>' +
+          '<th style="text-align:right;padding:4px 6px;color:var(--text-muted);">Total</th>' +
+          '<th style="text-align:right;padding:4px 6px;color:var(--text-muted);">API</th>' +
+          '<th style="text-align:right;padding:4px 6px;color:var(--text-muted);">Download</th>' +
+          '<th style="text-align:left;padding:4px 6px;color:var(--text-muted);">Status</th>' +
+          '<th style="text-align:left;padding:4px 6px;color:var(--text-muted);">Date</th>' +
+          '</tr></thead><tbody>' +
+          runs.map(run => {
+            const tot = run.total_duration_ms || 0;
+            const api = run.api_ms || 0;
+            const dl = Math.max(0, tot - api);
+            const colour = tot > 30000 ? 'var(--danger)' : tot > 10000 ? 'var(--warning)' : 'var(--success)';
+            return '<tr style="border-top:1px solid var(--border-light);">' +
+              '<td style="padding:4px 6px;"><a href="/report/' + run.report_id + '" style="color:var(--accent);">' + esc(run.project_name || ('Report ' + run.report_id)) + '</a></td>' +
+              '<td style="padding:4px 6px;text-align:right;font-weight:600;color:' + colour + ';">' + _fmtMs(tot) + '</td>' +
+              '<td style="padding:4px 6px;text-align:right;color:var(--text-muted);">' + _fmtMs(api) + '</td>' +
+              '<td style="padding:4px 6px;text-align:right;color:var(--text-muted);">' + _fmtMs(dl) + '</td>' +
+              '<td style="padding:4px 6px;">' + esc(run.status || '') + '</td>' +
+              '<td style="padding:4px 6px;color:var(--text-muted);"><time class="ts-relative" datetime="' + esc(run.created_at || '') + '">' + esc(run.created_at || '') + '</time></td>' +
+              '</tr>';
+          }).join('') +
+          '</tbody></table>';
+        if (typeof localizeTimestamps === 'function') localizeTimestamps(body);
+        body.dataset.loaded = '1';
+      } catch (e) {
+        body.innerHTML = 'Error: ' + esc(e.message);
+      }
     }
 
     function renderTopRequirements(rows) {
