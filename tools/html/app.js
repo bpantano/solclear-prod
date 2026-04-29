@@ -1380,6 +1380,9 @@
 
           document.getElementById('runBtn').disabled = false;
           document.getElementById('runBtn').textContent = 'Run Compliance Check';
+          // Refresh home page banner so "your check is still running" clears
+          // immediately without waiting for the next home page navigation.
+          fetchActiveChecks();
           return;
         }
 
