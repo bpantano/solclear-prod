@@ -413,12 +413,13 @@ def run_check_thread(cc_project_id, params, run_id, result_queue, cancel_event,
                 try:
                     execute(
                         """INSERT INTO requirement_results
-                           (report_id, requirement_id, status, reason, photo_urls, candidates, total_duration_ms)
+                           (report_id, requirement_id, status, reason, photo_urls, photo_captions, candidates, total_duration_ms)
                            VALUES (%s, (SELECT id FROM requirements WHERE code = %s AND is_active = TRUE ORDER BY version DESC LIMIT 1),
-                                   %s, %s, %s, %s, %s)""",
+                                   %s, %s, %s, %s, %s, %s)""",
                         (db_report_id, result.get("id"), result.get("status"), result.get("reason"),
-                         json.dumps(result.get("photo_urls", {})), result.get("candidates", 0),
-                         result.get("total_duration_ms"))
+                         json.dumps(result.get("photo_urls", {})),
+                         json.dumps(result.get("photo_captions", {})),
+                         result.get("candidates", 0), result.get("total_duration_ms"))
                     )
                 except Exception:
                     pass  # Requirements table may not have matching rows yet
@@ -3082,7 +3083,7 @@ class LiveHandler(BaseHTTPRequestHandler):
                 # LEFT JOIN on users so resolver name comes along when present.
                 results = fetch_all("""
                     SELECT rr.id AS req_result_id,
-                           rr.status, rr.reason, rr.photo_urls, rr.candidates,
+                           rr.status, rr.reason, rr.photo_urls, rr.photo_captions, rr.candidates,
                            rr.resolved_at, rr.resolved_by, rr.notes,
                            u.full_name AS resolved_by_name,
                            req.code as id, req.title, req.section, req.is_optional as optional
@@ -3393,15 +3394,16 @@ class LiveHandler(BaseHTTPRequestHandler):
             # Update the existing row (not a new row — patches the current report)
             updated = execute_returning(
                 """UPDATE requirement_results
-                   SET status = %s, reason = %s, photo_urls = %s, candidates = %s,
-                       resolved_at = NULL, resolved_by = NULL,
+                   SET status = %s, reason = %s, photo_urls = %s, photo_captions = %s,
+                       candidates = %s, resolved_at = NULL, resolved_by = NULL,
                        total_duration_ms = %s
                    WHERE id = %s
-                   RETURNING status, reason, photo_urls, candidates""",
+                   RETURNING status, reason, photo_urls, photo_captions, candidates""",
                 (
                     new_result.get("status"),
                     new_result.get("reason"),
                     json.dumps(new_result.get("photo_urls", {})),
+                    json.dumps(new_result.get("photo_captions", {})),
                     new_result.get("candidates", 0),
                     new_result.get("total_duration_ms"),
                     row["id"],

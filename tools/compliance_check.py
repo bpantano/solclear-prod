@@ -268,12 +268,21 @@ REQUIREMENTS = [
         "condition": always,
         "task_titles": ["Racking Assembly + Grounding"],
         "keywords": ["racking assembly", "grounding", "rail", "EGC", "wire management", "clips"],
+        "selection_criteria": "a wide pullback shot of a roof mounting plane showing the full racking system with rail, wire management clips, and EGC copper grounding wire routed between rails — not a close-up or a photo after panels are installed",
         "validation_prompt": (
-            "This photo should show the racking assembly area including rail, attachments, and wire management. "
-            "Verify: (1) Is racking/rail visible? (2) Is wire management visible (clips, secured wires)? "
-            "PASS if the photo shows the racking area with wire management present. "
-            "A grounding conductor may not be clearly distinguishable at photo resolution — do not fail solely for that. "
-            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
+            "Palmetto M1 R2 requires: a pullback of each mounting plane showing (1) rail and attachments installed "
+            "with optimizers/micro-inverters if present, (2) wire management — wires secured with UV-rated clips or "
+            "cable ties on the rail or modules, and (3) the EGC (Equipment Grounding Conductor) copper wire routed "
+            "between the rails for each array.\n\n"
+            "Evaluate the COMPLETE SET of photos together — on multi-array jobs the evidence may be spread across "
+            "multiple photos, one per array. PASS if the photos collectively show a pullback of each array's mounting "
+            "plane with rail, wire management, and EGC copper visible. FAIL if any array's mounting plane is missing "
+            "from the documentation, or if wire management or EGC is absent across all photos.\n\n"
+            "Note: the EGC appears as a copper wire (bare or green) running along or between the rails. It may not "
+            "be clearly distinguishable at photo resolution — do not fail solely because you cannot identify it, "
+            "but do fail if there is no evidence of any grounding conductor across the full photo set.\n\n"
+            "Select as EVIDENCE only the photos that show a mounting plane pullback — exclude close-ups, "
+            "under-array shots, or photos taken after panels are installed."
         ),
     },
     {
@@ -974,7 +983,8 @@ PREFILTER_KEEP = 5
 # 50-100+ photos across a job, making uncapped prefilter fetches the dominant
 # cost. Take the most recent MAX_PREFILTER_CANDIDATES; crews upload in
 # chronological order so the tail is the final installation state.
-MAX_PREFILTER_CANDIDATES = 25
+MAX_PREFILTER_CANDIDATES = 18  # Anthropic hard limit is 20 images per request;
+# reference photos take up to 2 slots, leaving 18 safe for candidate thumbnails.
 
 # For multi-criterion mode (SC1/SC2) we can't pre-filter — every photo is
 # evidence. Cap the number we send full-res to stay under the payload limit.
@@ -1176,9 +1186,14 @@ def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
                 file=sys.stderr, flush=True,
             )
     elif len(candidates) > PREFILTER_THRESHOLD:
+        import time as _t
+        _t0 = _t.time()
         if len(candidates) > MAX_PREFILTER_CANDIDATES:
+            print(f"[timing:{requirement['id']}] capping {len(candidates)} → {MAX_PREFILTER_CANDIDATES} candidates", file=sys.stderr, flush=True)
             candidates = candidates[-MAX_PREFILTER_CANDIDATES:]
+        print(f"[timing:{requirement['id']}] starting prefilter with {len(candidates)} candidates", file=sys.stderr, flush=True)
         keep_indices = _haiku_prefilter(candidates, requirement)
+        print(f"[timing:{requirement['id']}] prefilter done in {_t.time()-_t0:.1f}s → {len(keep_indices)} kept", file=sys.stderr, flush=True)
         if keep_indices:
             candidates = [candidates[i] for i in keep_indices]
 
@@ -1186,8 +1201,11 @@ def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
     # the model can still reason about the ones that succeeded. Photos keep
     # their original task-list order for consistency with what the
     # CompanyCam API returns.
+    import time as _t
+    _t1 = _t.time()
     urls_by_idx = {i: get_photo_web_url(p) for i, p in enumerate(candidates)}
     fetched = _download_images_parallel(urls_by_idx.items())
+    print(f"[timing:{requirement['id']}] full-res download of {len(candidates)} photos done in {_t.time()-_t1:.1f}s", file=sys.stderr, flush=True)
     downloaded = [
         (i, urls_by_idx[i], *fetched[i])
         for i in range(len(candidates))
@@ -1217,13 +1235,14 @@ def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
     # max_tokens budgets per-photo description room plus validation reasoning
     # plus the final VERDICT + EXPLANATION lines. Capped so a task with 15+
     # photos can't blow up costs.
-    dynamic_max_tokens = min(450 + 60 * len(downloaded), 1200)
+    dynamic_max_tokens = min(500 + 60 * len(downloaded), 1400)
     payload = {
         "model": VISION_MODEL,
         "max_tokens": dynamic_max_tokens,
         "messages": [{"role": "user", "content": content}],
     }
     text = _call_anthropic(payload, requirement["id"])
+    print(f"[debug:{requirement['id']}] raw response tail: {repr((text or '')[-300:])}", file=sys.stderr, flush=True)
     if text and text.startswith("ERROR"):
         # Best-effort photo_urls even on error — default to task order.
         all_photo_urls = {i + 1: get_photo_web_url(p) for i, p in enumerate(candidates) if get_photo_web_url(p)}
@@ -1233,6 +1252,7 @@ def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
     # In multi-criterion mode there's no single winner — every photo is
     # part of the evidence set. Keep task-order indexing so photo_urls[1] is
     # just "first screenshot" (a stable, predictable reference).
+    all_photo_captions = {}  # populated in single-winner path when EVIDENCE line is present
     if requirement.get("criteria"):
         all_photo_urls = {}
         for i, photo in enumerate(candidates):
@@ -1240,27 +1260,59 @@ def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
             if url:
                 all_photo_urls[i + 1] = url
     else:
-        # Single-winner-pick mode: rotate photo_urls so winner is at key 1.
-        choice_idx = _parse_choice(text or "", len(downloaded))
-        winner_candidate_idx = downloaded[choice_idx][0]
-        winner_url = downloaded[choice_idx][1]
+        # Try to extract explicit EVIDENCE photo numbers from the response.
+        # If the model cited specific photos, store only those — this keeps
+        # irrelevant candidates out of the report and moves toward using
+        # AI-selected photos as the submission evidence set.
+        evidence_nums = _parse_evidence(text or "", len(downloaded))
+        photo_descs = _parse_photo_descriptions(text or "", len(downloaded))
+        print(f"[debug:{requirement['id']}] photo_descs keys={list(photo_descs.keys())} evidence_nums={evidence_nums}", file=sys.stderr, flush=True)
+        if evidence_nums:
+            all_photo_urls = {}
+            all_photo_captions = {}
+            for rank, model_photo_num in enumerate(evidence_nums, start=1):
+                candidate_entry = downloaded[model_photo_num - 1]
+                url = candidate_entry[1]
+                if url:
+                    all_photo_urls[rank] = url
+                desc = photo_descs.get(model_photo_num)
+                if desc:
+                    all_photo_captions[rank] = desc
+        else:
+            # Fallback: existing single-winner-pick logic — winner at key 1,
+            # remaining candidates at keys 2+. Used when EVIDENCE line is
+            # absent (legacy prompts, parse failure, single-photo case).
+            all_photo_captions = {}
+            choice_idx = _parse_choice(text or "", len(downloaded))
+            winner_candidate_idx = downloaded[choice_idx][0]
+            winner_url = downloaded[choice_idx][1]
+            if photo_descs.get(choice_idx + 1):
+                all_photo_captions[1] = photo_descs[choice_idx + 1]
 
-        all_photo_urls = {1: winner_url}
-        next_key = 2
-        for i, photo in enumerate(candidates):
-            if i == winner_candidate_idx:
-                continue
-            url = get_photo_web_url(photo)
-            if url:
-                all_photo_urls[next_key] = url
-                next_key += 1
+            all_photo_urls = {1: winner_url}
+            next_key = 2
+            for i, photo in enumerate(candidates):
+                if i == winner_candidate_idx:
+                    continue
+                url = get_photo_web_url(photo)
+                if url:
+                    all_photo_urls[next_key] = url
+                    next_key += 1
 
     verdict = _parse_verdict(text or "")
     explanation = _parse_explanation(text or "")
     reason = explanation or text  # fall back to full response if EXPLANATION missing
     if truncation_note:
         reason = (reason or "").rstrip() + truncation_note
-    return {"result": verdict, "reason": reason, "photo_urls": all_photo_urls}
+    # For multi-photo runs where Sonnet described some photos but skipped others,
+    # fall back to EXPLANATION for the gaps. Single-photo runs intentionally get
+    # no tooltip — the caption would duplicate the reason text shown in the row.
+    if explanation and photo_descs:
+        for k in all_photo_urls:
+            if k not in all_photo_captions:
+                all_photo_captions[k] = explanation
+    return {"result": verdict, "reason": reason, "photo_urls": all_photo_urls,
+            "photo_captions": all_photo_captions}
 
 
 def _build_validation_prompt(requirement: dict, n_photos: int) -> str:
@@ -1274,7 +1326,8 @@ def _build_validation_prompt(requirement: dict, n_photos: int) -> str:
     if n_photos == 1:
         return base + (
             "Work through what you see in the photo, then end your response with "
-            "these two lines exactly:\n"
+            "these three lines exactly:\n"
+            "  EVIDENCE: 1\n"
             "  VERDICT: PASS   (or FAIL, or NEEDS_REVIEW)\n"
             "  EXPLANATION: <one sentence describing what was actually seen that led "
             "to the verdict. Customer-facing — do NOT reference photo numbers like "
@@ -1286,14 +1339,16 @@ def _build_validation_prompt(requirement: dict, n_photos: int) -> str:
         "  Photo 1: <what you see>\n"
         "  Photo 2: <what you see>\n"
         "  ...\n\n"
-        "STEP 2 — Pick the photo that best matches this selection criteria:\n"
+        "STEP 2 — Pick the photo(s) that best match this selection criteria:\n"
         f"  \"{selection_criteria}\"\n"
         "  If multiple photos are of the same general subject, prefer the one that "
         "matches the specific criteria over a generic shot. State your choice:\n"
         "  CHOICE: <number>\n\n"
-        "STEP 3 — For the photo you chose, apply the validation rules from the "
+        "STEP 3 — For the photo(s) you chose, apply the validation rules from the "
         "REQUIREMENT block above.\n\n"
-        "STEP 4 — End your response with these two lines exactly:\n"
+        "STEP 4 — End your response with these three lines exactly:\n"
+        "  EVIDENCE: <comma-separated list of photo numbers you used as evidence — "
+        "only photos that directly support your verdict, not every photo you saw>\n"
         "  VERDICT: PASS   (or FAIL, or NEEDS_REVIEW)\n"
         "  EXPLANATION: <one sentence describing what was actually seen that led "
         "to the verdict. Customer-facing — do NOT reference photo numbers like "
@@ -1357,6 +1412,36 @@ def _parse_explanation(text: str) -> str:
     if not m:
         return ""
     return m.group(1).strip()
+
+
+def _parse_photo_descriptions(text: str, n_candidates: int) -> dict:
+    """Extract per-photo descriptions from Sonnet's STEP 1 output.
+    Returns {photo_number: description_string} for every photo described.
+    Used to populate hover tooltips on evidence photos in the report."""
+    descriptions = {}
+    for m in re.finditer(r'\bPhoto\s+(\d+)\s*:\s*(.+)', text, re.IGNORECASE):
+        num = int(m.group(1))
+        if 1 <= num <= n_candidates:
+            descriptions[num] = m.group(2).strip()
+    return descriptions
+
+
+def _parse_evidence(text: str, n_candidates: int) -> list:
+    """Extract the EVIDENCE photo numbers from a model response.
+    Returns a list of 1-based photo indices (e.g. [1, 3]) that the model
+    cited as supporting evidence. Returns [] if the line is absent or
+    unparseable — caller falls back to existing winner logic."""
+    m = re.search(r"EVIDENCE\s*:\s*([0-9,\s]+)", text, re.IGNORECASE)
+    if not m:
+        return []
+    nums = []
+    for part in m.group(1).split(","):
+        part = part.strip()
+        if part.isdigit():
+            n = int(part)
+            if 1 <= n <= n_candidates:
+                nums.append(n)
+    return nums
 
 
 def _parse_verdict(text: str) -> str:
@@ -1537,14 +1622,70 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
             if _uri.get("type") == "thumbnail":
                 _thumb_by_url[_full_url] = _uri.get("url")
                 break
-    # Enrich task photos in place — add a synthetic "uris" list so
-    # get_photo_thumbnail_url falls through to the normal thumbnail path.
-    if _thumb_by_url:
-        for _task in checklist_tasks:
-            for _tp in _task.get("photos", []):
-                _tp_url = _tp.get("url", "")
-                if _tp_url in _thumb_by_url and "uris" not in _tp:
-                    _tp["uris"] = [{"type": "thumbnail", "url": _thumb_by_url[_tp_url]}]
+    # Both task photo URLs and project photo URIs are imgproxy URLs that
+    # encode the same S3 source path as base64 after the processing params.
+    # Extract that base64 payload as a common key to match them — regardless
+    # of whether the sizes differ (rs:fit:4032:4032 vs rs:fit:250:250).
+    def _imgproxy_b64_key(url: str) -> str:
+        """Extract the base64 source-URL payload from an imgproxy URL.
+        All size variants of the same photo share this payload, making it
+        a stable key for cross-referencing task photos ↔ project thumbnails."""
+        if not url or "img.companycam.com" not in url:
+            return ""
+        try:
+            parts = url.split("/")
+            # Structure: https: / '' / img.companycam.com / {sig} / {params...} / {b64...}
+            # parts[3] = signature (skip), parts[4+] with ':' = params (skip),
+            # remaining parts = base64 payload (join and strip file extension).
+            b64_parts = []
+            skip_sig = True
+            for part in parts[3:]:
+                if skip_sig:
+                    skip_sig = False
+                    continue
+                if ":" in part:
+                    continue
+                if part:
+                    b64_parts.append(part.split(".")[0])
+            return "".join(b64_parts)
+        except Exception:
+            return ""
+
+    # Build b64_key → thumbnail_url map from project photos
+    _thumb_by_b64: dict = {}
+    for _pp in photos:
+        thumb_url = next(
+            (u["url"] for u in _pp.get("uris", []) if u.get("type") == "thumbnail"),
+            None,
+        )
+        if not thumb_url:
+            continue
+        for _uri in _pp.get("uris", []):
+            key = _imgproxy_b64_key(_uri.get("url", ""))
+            if key:
+                _thumb_by_b64[key] = thumb_url
+                break  # all URIs for same photo share the same b64 payload
+
+    # Enrich task photos: inject a synthetic uris entry so get_photo_thumbnail_url
+    # returns the real 250px thumbnail instead of the 4032px original.
+    enriched_count = 0
+    for _task in checklist_tasks:
+        for _tp in _task.get("photos", []):
+            if "uris" in _tp:
+                continue
+            key = _imgproxy_b64_key(_tp.get("url", ""))
+            thumb = _thumb_by_b64.get(key) if key else None
+            if thumb:
+                # Include both thumbnail (for prefilter) and original (for
+                # validation) so get_photo_web_url still returns full-res.
+                _tp["uris"] = [
+                    {"type": "thumbnail", "url": thumb},
+                    {"type": "original", "url": _tp["url"]},
+                ]
+                enriched_count += 1
+    if enriched_count:
+        print(f"[thumb-enrich] enriched {enriched_count} task photos with real thumbnails",
+              file=sys.stderr, flush=True)
 
     # Determine applicable requirements
     if only_ids:
@@ -1671,6 +1812,7 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
                 "reason": vision_result["reason"],
                 "candidates": len(candidates),
                 "photo_urls": vision_result.get("photo_urls", {}),
+                "photo_captions": vision_result.get("photo_captions", {}),
                 "optional": req.get("optional", False),
                 "total_duration_ms": total_ms,
             }

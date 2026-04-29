@@ -177,6 +177,7 @@ def render_requirement(req: dict, is_interactive: bool, checklist_id: str, proje
     status = req.get("status", "")
     code = req.get("id", "")
     photo_urls = req.get("photo_urls", {}) or {}
+    photo_captions = req.get("photo_captions", {}) or {}
     is_failure = status in _FAILURE_STATUSES or status == "NEEDS_REVIEW"
     is_resolved = bool(req.get("resolved_at"))
 
@@ -191,15 +192,38 @@ def render_requirement(req: dict, is_interactive: bool, checklist_id: str, proje
         full_linked = linkify_photos(req["reason"], photo_urls)
         reason_html = f'<div class="reason-expandable" onclick="expandReason(event, this)">{full_linked}</div>'
 
-    # Photo thumbnail (the evaluated winner is key 1)
-    eval_url = photo_urls.get(1) or photo_urls.get("1")
+    # Photo display — single thumbnail for one evidence photo, grid for multiple.
+    # photo_urls keys are 1-based; key 1 is always the primary/winner photo.
+    sorted_keys = sorted(photo_urls.keys(), key=lambda k: int(k) if str(k).isdigit() else 0)
+    evidence_pairs = [
+        (k, url)
+        for k in sorted_keys
+        if (url := (photo_urls.get(k) or photo_urls.get(str(k))))
+    ][:4]
     photo_html = ""
-    if eval_url and status not in ("N/A", "FOUND_NO_VISION"):
-        photo_html = (
-            f'<a href="{_esc(eval_url)}" target="_blank" class="req-photo-link">'
-            f'<img src="{_esc(eval_url)}" alt="Evaluated photo" loading="lazy" class="req-photo">'
-            f'</a>'
-        )
+    if evidence_pairs and status not in ("N/A", "FOUND_NO_VISION"):
+        def _caption_attr(rank_key):
+            cap = photo_captions.get(rank_key) or photo_captions.get(str(rank_key))
+            return f' data-caption="{_esc(cap)}"' if cap else ""
+
+        if len(evidence_pairs) == 1:
+            k, u = evidence_pairs[0]
+            photo_html = (
+                f'<a href="{_esc(u)}" target="_blank" class="req-photo-link"{_caption_attr(k)}>'
+                f'<img src="{_esc(u)}" alt="Evaluated photo" loading="lazy" class="req-photo">'
+                f'</a>'
+            )
+        else:
+            grid_items = "".join(
+                f'<a href="{_esc(u)}" target="_blank" class="req-photo-link"{_caption_attr(k)} style="flex:1;min-width:0;">'
+                f'<img src="{_esc(u)}" alt="Evidence photo" loading="lazy" '
+                f'style="width:100%;height:72px;object-fit:cover;border-radius:4px;display:block;">'
+                f'</a>'
+                for k, u in evidence_pairs
+            )
+            photo_html = (
+                f'<div style="display:flex;gap:4px;margin-top:4px;">{grid_items}</div>'
+            )
 
     # Resolved chip — shown when the item is marked resolved
     resolved_chip = ""
@@ -274,8 +298,8 @@ def render_requirement(req: dict, is_interactive: bool, checklist_id: str, proje
         {resolved_chip}
         {optional_tag}
       </div>
-      {photo_html}
-      {reason_html}
+      <div data-role="photo-container">{photo_html}</div>
+      <div data-role="reason-container">{reason_html}</div>
       {note_html}
       <!-- Palmetto reference photo toggle — JS populates on first open -->
       <div class="req-reference-toggle" style="margin-top:8px;">
@@ -522,12 +546,33 @@ def _report_style_block() -> str:
     .badge-na           { background: var(--bg-subtle); color: var(--text-muted); }
     .badge-success      { background: var(--success-subtle); color: var(--success-text); }
 
-    .req-photo-link { display: block; margin-top: 10px; }
+    .req-photo-link { display: block; margin-top: 10px; position: relative; }
     .req-photo {
       display: block; max-width: 100%;
       border-radius: 6px; border: 2px solid var(--border);
     }
     @media (min-width: 640px) { .req-photo { max-width: 280px; } }
+
+    /* Hover tooltip for photo selection reasoning */
+    .req-photo-link[data-caption]::after {
+      content: attr(data-caption);
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 0;
+      background: rgba(0,0,0,0.88);
+      color: #fff;
+      font-size: 11px;
+      line-height: 1.5;
+      padding: 6px 10px;
+      border-radius: 6px;
+      white-space: normal;
+      width: 220px;
+      z-index: 200;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+    .req-photo-link[data-caption]:hover::after { opacity: 1; }
 
     .reason {
       margin-top: 8px; font-size: var(--text-sm); color: var(--text-secondary);
@@ -1127,6 +1172,15 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
     // render once localizeTimestamps runs.
     function _fmtNoteTime(iso) {{ return formatTimestamp(iso); }}
 
+    function _linkifyPhotos(text, photoUrls) {{
+      if (!text) return '';
+      return _esc(text).replace(/\bPhoto\s+(\d+)\b/gi, function(match, num) {{
+        const url = (photoUrls || {{}})[num] || (photoUrls || {{}})[String(num)];
+        if (!url) return match;
+        return '<a href="' + _esc(url) + '" target="_blank">' + match + '</a>';
+      }});
+    }}
+
     function _esc(s) {{
       const div = document.createElement('div');
       div.textContent = s == null ? '' : String(s);
@@ -1209,6 +1263,41 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
         if (chip) chip.remove();
         const resolveBtn = row.querySelector('[data-role="resolve-btn"]');
         if (resolveBtn) resolveBtn.textContent = 'Mark resolved';
+        // Update reason text
+        const reasonContainer = row.querySelector('[data-role="reason-container"]');
+        if (reasonContainer) {{
+          const shouldShowReason = !['PASS','N/A','FOUND_NO_VISION'].includes(newStatus) && data.reason;
+          if (shouldShowReason) {{
+            const linked = _linkifyPhotos(data.reason, data.photo_urls || {{}});
+            reasonContainer.innerHTML = '<div class="reason-expandable" onclick="expandReason(event,this)">' + linked + '</div>';
+            if (typeof initExpandableReasons === 'function') initExpandableReasons(reasonContainer);
+          }} else {{
+            reasonContainer.innerHTML = '';
+          }}
+        }}
+        // Update photo grid
+        const photoContainer = row.querySelector('[data-role="photo-container"]');
+        if (photoContainer) {{
+          const photoUrls = data.photo_urls || {{}};
+          const photoCaptions = data.photo_captions || {{}};
+          const pairs = Object.keys(photoUrls).sort((a,b) => +a - +b)
+            .map(k => ({{k, url: photoUrls[k], cap: photoCaptions[k] || ''}}))
+            .filter(p => p.url).slice(0,4);
+          function _captionAttr(cap) {{
+            return cap ? ' data-caption="' + _esc(cap) + '"' : '';
+          }}
+          if (!pairs.length) {{
+            photoContainer.innerHTML = '';
+          }} else if (pairs.length === 1) {{
+            const p = pairs[0];
+            photoContainer.innerHTML = '<a href="' + _esc(p.url) + '" target="_blank" class="req-photo-link"' + _captionAttr(p.cap) + '><img src="' + _esc(p.url) + '" alt="Evaluated photo" loading="lazy" class="req-photo"></a>';
+          }} else {{
+            photoContainer.innerHTML = '<div style="display:flex;gap:4px;margin-top:4px;">' +
+              pairs.map(p => '<a href="' + _esc(p.url) + '" target="_blank" class="req-photo-link"' + _captionAttr(p.cap) + ' style="flex:1;min-width:0;"><img src="' + _esc(p.url) + '" alt="Evidence photo" loading="lazy" style="width:100%;height:72px;object-fit:cover;border-radius:4px;display:block;"></a>').join('') +
+              '</div>';
+          }}
+          if (typeof rewirePhotoLinks === 'function') rewirePhotoLinks(photoContainer);
+        }}
         _updateTabCounts();
         // Update only THIS row's visibility for the active tab — avoids
         // calling filterTab() which rebuilds the entire list, loses scroll
