@@ -456,8 +456,8 @@ REQUIREMENTS = [
         "section": "Electrical",
         "title": "Balance of System Pullback",
         "condition": always,
-        "task_titles": ["Inverter Location & Wiring"],
-        "keywords": ["inverter location & wiring", "BOS", "balance of system", "pullback"],
+        "task_titles": ["Inverter Location & Wiring", "Battery Location"],
+        "keywords": ["inverter location & wiring", "BOS", "balance of system", "pullback", "battery location"],
         "validation_prompt": (
             "This photo should show a pullback view of the balance-of-system (BOS) equipment area. "
             "Verify: (1) Does the photo show the general BOS area? (2) Is equipment visible in the frame? "

@@ -1937,19 +1937,15 @@ class LiveHandler(BaseHTTPRequestHandler):
                                 new_values[field] = new_val
                             r[field] = new_val  # always update in-memory
                     break
-            if not new_values:
-                # Nothing actually changed — return ok without logging
-                self._send_json({"ok": True, "id": req_id, "changed": []})
-                return
-
-            # Persist to DB so changes survive redeploys
+            # Always persist ALL submitted editable fields to DB so it stays
+            # in sync after code deploys that change a field's default value.
             try:
                 row = fetch_one(
                     "SELECT id FROM requirements WHERE code = %s AND is_active = TRUE ORDER BY version DESC LIMIT 1",
                     (req_id,),
                 )
                 if row:
-                    for field, val in new_values.items():
+                    for field, val in {f: data[f] for f in EDITABLE if f in data}.items():
                         if field in ("task_titles", "keywords"):
                             import json as _json
                             execute(
