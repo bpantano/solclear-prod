@@ -1946,17 +1946,14 @@ class LiveHandler(BaseHTTPRequestHandler):
                 )
                 if row:
                     for field, val in {f: data[f] for f in EDITABLE if f in data}.items():
-                        if field in ("task_titles", "keywords"):
-                            import json as _json
-                            execute(
-                                f"UPDATE requirements SET {field} = %s WHERE id = %s",
-                                (_json.dumps(val) if isinstance(val, list) else val, row["id"]),
-                            )
-                        else:
-                            execute(
-                                f"UPDATE requirements SET {field} = %s WHERE id = %s",
-                                (val, row["id"]),
-                            )
+                        # task_titles and keywords are TEXT[] columns — pass as
+                        # Python list directly so psycopg2 formats a Postgres array.
+                        # json.dumps() was producing a JSON string which Postgres
+                        # silently rejected, leaving the DB value unchanged.
+                        execute(
+                            f"UPDATE requirements SET {field} = %s WHERE id = %s",
+                            (val, row["id"]),
+                        )
             except Exception as db_err:
                 print(f"WARNING: could not persist requirement update to DB: {db_err}", file=sys.stderr)
 
