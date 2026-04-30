@@ -473,11 +473,20 @@ REQUIREMENTS = [
         "condition": always,
         "task_titles": ["CT Installation", "Meter Enclosure"],
         "keywords": ["CT installation", "meter enclosure", "production meter", "production CT", "RGM"],
+        "review_if_missing_for": ["tesla"],
         "validation_prompt": (
-            "This photo should show the production meter or production current transformers (CTs). "
-            "Verify: (1) Is a production meter or CT visible? (2) For Enphase: is L1 wiring from branch circuits "
-            "passing through the production CT visible? Are CT terminal lugs with correct phase landing visible? "
-            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
+            "This photo should show the production metering device for this solar installation.\n\n"
+            "Standard installations use a dedicated production CT clipped to the production circuit "
+            "conductor, or a standalone production meter. Tesla/Powerwall installations use a Tesla "
+            "Backup Switch (Gateway) or Tesla Remote Meter as the production monitoring device.\n\n"
+            "PASS if: traditional production CTs or a dedicated production meter is visible and "
+            "properly installed on the production circuit conductors.\n"
+            "NEEDS_REVIEW if: a Tesla Backup Switch, Tesla Gateway, or Tesla Remote Meter is visible "
+            "as the monitoring device — these require manual reviewer verification that the Tesla "
+            "integration is complete and the meter collar is properly installed.\n"
+            "FAIL if: no production metering device or CT is visible in the photo.\n\n"
+            "Work through what you see, then end your response with a final line: "
+            "VERDICT: PASS or VERDICT: FAIL or VERDICT: NEEDS_REVIEW."
         ),
     },
     {
@@ -487,10 +496,19 @@ REQUIREMENTS = [
         "condition": always,
         "task_titles": ["CT Installation"],
         "keywords": ["CT installation", "consumption CT", "service feeder", "CT direction"],
+        "review_if_missing_for": ["tesla"],
         "validation_prompt": (
-            "This photo should show consumption monitoring CTs on service feeders. "
-            "Verify: (1) Are CTs visible on service feeders? (2) Is the CT direction/orientation visible? "
-            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
+            "This photo should show the consumption monitoring device for this solar installation.\n\n"
+            "Standard installations use CTs clipped around service feeder conductors for consumption "
+            "monitoring, with CT orientation/direction discernible. Tesla/Powerwall installations use "
+            "the Tesla Backup Switch (Gateway) for consumption monitoring in place of traditional CTs.\n\n"
+            "PASS if: CTs are visible on service feeder conductors with discernible orientation.\n"
+            "NEEDS_REVIEW if: a Tesla Backup Switch or Tesla Gateway is visible as the consumption "
+            "monitoring device — these require manual reviewer verification that the integration is "
+            "complete.\n"
+            "FAIL if: no consumption monitoring device or CT is visible in the photo.\n\n"
+            "Work through what you see, then end your response with a final line: "
+            "VERDICT: PASS or VERDICT: FAIL or VERDICT: NEEDS_REVIEW."
         ),
     },
     {
@@ -558,10 +576,19 @@ REQUIREMENTS = [
         "condition": if_battery,
         "task_titles": ["CT Installation", "Battery Wiring"],
         "keywords": ["CT installation", "battery wiring", "battery CT", "battery current transformer"],
+        "review_if_missing_for": ["tesla"],
         "validation_prompt": (
-            "This photo should show the battery CT with its location and direction visible. "
-            "Verify: (1) Is the CT visible? (2) Is the CT direction/orientation discernible? "
-            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
+            "This photo should show the battery current monitoring device for this storage installation.\n\n"
+            "Standard installations use a dedicated CT for battery current monitoring, with orientation "
+            "discernible. Tesla/Powerwall installations use the Tesla Backup Switch (Gateway) for "
+            "battery current monitoring in place of a traditional CT.\n\n"
+            "PASS if: a battery CT is visible with discernible direction/orientation.\n"
+            "NEEDS_REVIEW if: a Tesla Backup Switch or Tesla Gateway is visible as the battery "
+            "monitoring device — these require manual reviewer verification that the integration is "
+            "complete.\n"
+            "FAIL if: no battery monitoring device or CT is visible in the photo.\n\n"
+            "Work through what you see, then end your response with a final line: "
+            "VERDICT: PASS or VERDICT: FAIL or VERDICT: NEEDS_REVIEW."
         ),
     },
     {
@@ -1319,8 +1346,12 @@ def _build_validation_prompt(requirement: dict, n_photos: int) -> str:
     """Compose the single-tier prompt wrapped around the requirement's
     validation_prompt. For N=1 we skip the selection step."""
     selection_criteria = requirement.get("selection_criteria") or requirement["title"]
+    manufacturer_line = ""
+    if requirement.get("_manufacturer"):
+        manufacturer_line = f"Job manufacturer: {requirement['_manufacturer']}\n"
     base = (
-        f"REQUIREMENT: {requirement['id']} — {requirement['title']}\n\n"
+        f"REQUIREMENT: {requirement['id']} — {requirement['title']}\n"
+        f"{manufacturer_line}\n"
         f"{requirement['validation_prompt']}\n\n"
     )
     if n_photos == 1:
@@ -1749,12 +1780,24 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
 
         candidates = find_candidate_photos(req, photos, checklist_tasks)
         if not candidates:
+            manufacturer = (params.get("manufacturer") or "").lower()
+            review_manufacturers = [m.lower() for m in req.get("review_if_missing_for", [])]
+            if manufacturer in review_manufacturers:
+                missing_status = "NEEDS_REVIEW"
+                missing_reason = (
+                    f"No CT photo found in CompanyCam — on {params.get('manufacturer')} "
+                    f"installations this requirement uses manufacturer-specific hardware "
+                    f"that requires manual reviewer verification."
+                )
+            else:
+                missing_status = "MISSING"
+                missing_reason = "No matching photo found in CompanyCam"
             result_entry = {
                 "id": req["id"],
                 "title": req["title"],
                 "section": req["section"],
-                "status": "MISSING",
-                "reason": "No matching photo found in CompanyCam",
+                "status": missing_status,
+                "reason": missing_reason,
                 "optional": req.get("optional", False),
             }
             results.append(result_entry)
@@ -1777,7 +1820,11 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
             vision_work.append(("__skip__", result_entry))
             continue
 
-        vision_work.append((req, candidates))
+        # Inject manufacturer so prompts can use it without mutating the
+        # shared requirement definition. Critical for E6/E7/S3 (Tesla CTs).
+        manufacturer = (params.get("manufacturer") or "").strip()
+        req_ctx = dict(req, _manufacturer=manufacturer) if manufacturer else req
+        vision_work.append((req_ctx, candidates))
 
     # Phase 2: parallel execution of vision checks (and emission of the
     # already-decided MISSING / FOUND_NO_VISION results) so progress events
@@ -1804,11 +1851,19 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
         try:
             vision_result = check_candidates_with_vision(candidates, req)
             total_ms = int((_time.time() - t0) * 1000)
+            # Upgrade FAIL → NEEDS_REVIEW for manufacturer-specific requirements
+            # where the correct hardware may not be in the expected checklist task
+            # (e.g. Tesla CTs are handled by the Backup Switch, not standard CTs).
+            result_status = vision_result["result"]
+            _mfr = (req.get("_manufacturer") or "").lower()
+            _review_mfrs = [m.lower() for m in req.get("review_if_missing_for", [])]
+            if result_status == "FAIL" and _mfr in _review_mfrs:
+                result_status = "NEEDS_REVIEW"
             return {
                 "id": req["id"],
                 "title": req["title"],
                 "section": req["section"],
-                "status": vision_result["result"],
+                "status": result_status,
                 "reason": vision_result["reason"],
                 "candidates": len(candidates),
                 "photo_urls": vision_result.get("photo_urls", {}),
