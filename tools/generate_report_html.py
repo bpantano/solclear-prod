@@ -180,6 +180,7 @@ def render_requirement(req: dict, is_interactive: bool, checklist_id: str, proje
     photo_captions = req.get("photo_captions", {}) or {}
     is_failure = status in _FAILURE_STATUSES or status == "NEEDS_REVIEW"
     is_resolved = bool(req.get("resolved_at"))
+    is_manually_verified = bool(req.get("manually_verified"))
 
     optional_tag = '<span class="optional-tag">optional</span>' if req.get("optional") else ""
 
@@ -268,17 +269,13 @@ def render_requirement(req: dict, is_interactive: bool, checklist_id: str, proje
                 f'<button class="btn btn-sm btn-subtle" data-role="resolve-btn" '
                 f'onclick="event.stopPropagation();toggleResolved(this, \'{_esc(code)}\')">{resolve_label}</button>'
             )
-        # Dev note button is gated to reviewer/admin/superadmin via the
-        # .reviewer-plus class — same pattern used elsewhere. Crew never
-        # sees this button server-rendered (we'd ideally check role here)
-        # but the report HTML is currently role-agnostic, so we use the
-        # CSS class which is hidden by default + revealed by loadMe().
         actions_html = f'''
       <div class="req-actions">
         {cc_btn}
         {resolve_btn}
         <button class="btn btn-sm btn-subtle" onclick="event.stopPropagation();openNoteEditor(this, '{_esc(code)}', 'public')">Add note</button>
         <button class="btn btn-sm btn-subtle reviewer-plus" style="display:none;" onclick="event.stopPropagation();openNoteEditor(this, '{_esc(code)}', 'dev')">Flag bug</button>
+        <button class="btn btn-sm btn-subtle reviewer-plus" style="display:none;border-color:var(--accent);color:var(--accent);" onclick="event.stopPropagation();openPhotoPicker('{_esc(code)}', '{_esc(req.get('title',''))}')">Select photo</button>
         <button class="btn btn-sm btn-primary" onclick="event.stopPropagation();recheckItem(this, '{_esc(code)}')">Re-check</button>
       </div>'''
 
@@ -288,14 +285,17 @@ def render_requirement(req: dict, is_interactive: bool, checklist_id: str, proje
     collapsed_class = " collapsed" if status == "PASS" and not notes_thread else ""
     click_handler = ' onclick="this.classList.toggle(\'collapsed\')"' if status == "PASS" else ""
 
+    manual_badge = '<span class="badge badge-info" style="font-size:10px;margin-left:4px;" title="Photo selected manually by a reviewer">Manual</span>' if is_manually_verified else ""
     resolved_data = ' data-resolved="1"' if is_resolved else ""
+    manually_verified_data = ' data-manually-verified="1"' if is_manually_verified else ""
     return f'''
-    <div class="requirement req-{status.lower()}{collapsed_class}" data-status="{_esc(status)}" data-id="{_esc(code)}"{resolved_data}{click_handler}>
+    <div class="requirement req-{status.lower()}{collapsed_class}" data-status="{_esc(status)}" data-id="{_esc(code)}"{resolved_data}{manually_verified_data}{click_handler}>
       <div class="req-header">
         {status_badge(status)}
+        {resolved_chip}
+        {manual_badge}
         <span class="req-id">{_esc(code)}</span>
         <span class="req-title">{_esc(req.get("title", ""))}</span>
-        {resolved_chip}
         {optional_tag}
       </div>
       <div data-role="photo-container">{photo_html}</div>
@@ -970,6 +970,238 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
       set('all', counts.all);
     }}
 
+    // ── Photo picker ────────────────────────────────────────────────────────
+    let _pickerReqCode = null;
+    let _pickerAllPhotos = [];
+    let _pickerSelected = {{}};   // photoId -> photo object
+    let _pickerPhotoMap = {{}};   // photoId -> photo object (all loaded photos)
+
+    async function openPhotoPicker(reqCode, reqTitle) {{
+      if (!IS_INTERACTIVE || !REPORT_ID) return;
+      _pickerReqCode = reqCode;
+      _pickerSelected = {{}};
+      _pickerPhotoMap = {{}};
+      document.getElementById('pickerReqTitle').textContent = reqTitle || reqCode;
+      document.getElementById('pickerRunBtn').disabled = true;
+      document.getElementById('pickerSelCount').textContent = '';
+      document.getElementById('pickerGrid').innerHTML = '<div style="color:var(--text-muted);font-size:13px;grid-column:1/-1;padding:24px 0;text-align:center;">Loading photos…</div>';
+      document.getElementById('photoPickerOverlay').style.display = 'flex';
+      document.body.style.overflow = 'hidden';
+      try {{
+        const r = await fetch('/api/report/' + REPORT_ID + '/photos');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const data = await r.json();
+        const groups = data.groups || [];
+        const ungrouped = data.ungrouped || [];
+        // Flatten all photos into the map for selection lookup
+        groups.forEach(function(g) {{
+          g.photos.forEach(function(p) {{ _pickerPhotoMap[p.id] = p; }});
+        }});
+        ungrouped.forEach(function(p) {{ _pickerPhotoMap[p.id] = p; }});
+        renderPickerGrouped(groups, ungrouped);
+      }} catch (e) {{
+        document.getElementById('pickerGrid').innerHTML =
+          '<div style="color:var(--danger);font-size:13px;grid-column:1/-1;padding:24px 0;text-align:center;">Could not load photos: ' + _esc(e.message) + '</div>';
+      }}
+    }}
+
+    function closePhotoPicker() {{
+      document.getElementById('photoPickerOverlay').style.display = 'none';
+      document.body.style.overflow = '';
+    }}
+
+    function _pickerPhotoHtml(p) {{
+      const sel = _pickerSelected[p.id] ? 'outline:3px solid var(--accent);outline-offset:-2px;' : '';
+      const check = _pickerSelected[p.id]
+        ? '<div style="position:absolute;top:3px;right:3px;background:var(--accent);color:#fff;border-radius:50%;width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;pointer-events:none;">✓</div>'
+        : '';
+      return [
+        '<div data-picker-id="', _esc(p.id), '"',
+        ' onclick="togglePickerPhoto(this.dataset.pickerId)"',
+        ' style="position:relative;cursor:pointer;border-radius:6px;overflow:hidden;width:96px;height:96px;flex-shrink:0;', sel, '">',
+        '<img src="', _esc(p.thumbnail_url), '" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block;">',
+        check,
+        '</div>'
+      ].join('');
+    }}
+
+    function _pickerSectionHtml(label) {{
+      return '<div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 8px;padding-bottom:4px;border-bottom:1px solid var(--border);">' + _esc(label) + '</div>';
+    }}
+
+    function renderPickerGrouped(groups, ungrouped) {{
+      const grid = document.getElementById('pickerGrid');
+      if (!groups.length && !ungrouped.length) {{
+        grid.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:24px 0;text-align:center;">No photos in cache — run a full check first.</div>';
+        return;
+      }}
+      let html = '';
+      groups.forEach(function(g) {{
+        const label = g.section && g.task ? g.section + ' · ' + g.task : (g.section || g.task || 'Task');
+        html += _pickerSectionHtml(label);
+        html += '<div style="display:flex;flex-wrap:wrap;gap:8px;">';
+        g.photos.forEach(function(p) {{ html += _pickerPhotoHtml(p); }});
+        html += '</div>';
+      }});
+      if (ungrouped.length) {{
+        html += _pickerSectionHtml('All other photos');
+        html += '<div style="display:flex;flex-wrap:wrap;gap:8px;">';
+        ungrouped.forEach(function(p) {{ html += _pickerPhotoHtml(p); }});
+        html += '</div>';
+      }}
+      grid.innerHTML = html;
+    }}
+
+    function togglePickerPhoto(photoId) {{
+      if (_pickerSelected[photoId]) {{
+        delete _pickerSelected[photoId];
+      }} else {{
+        if (Object.keys(_pickerSelected).length >= 4) {{
+          alert('Maximum 4 photos can be selected.');
+          return;
+        }}
+        _pickerSelected[photoId] = _pickerPhotoMap[photoId];
+      }}
+      const n = Object.keys(_pickerSelected).length;
+      document.getElementById('pickerRunBtn').disabled = n === 0;
+      document.getElementById('pickerSelCount').textContent = n > 0 ? n + ' selected' : '';
+      // Update checkmark overlays in place without re-fetching
+      document.querySelectorAll('[data-picker-id]').forEach(function(el) {{
+        const pid = el.dataset.pickerId;
+        const sel = !!_pickerSelected[pid];
+        el.style.outline = sel ? '3px solid var(--accent)' : '';
+        el.style.outlineOffset = sel ? '-2px' : '';
+        let check = el.querySelector('.picker-check');
+        if (sel && !check) {{
+          check = document.createElement('div');
+          check.className = 'picker-check';
+          check.style.cssText = 'position:absolute;top:3px;right:3px;background:var(--accent);color:#fff;border-radius:50%;width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;pointer-events:none;';
+          check.textContent = '✓';
+          el.appendChild(check);
+        }} else if (!sel && check) {{
+          check.remove();
+        }}
+      }});
+    }}
+
+    async function runCheckWithSelectedPhotos() {{
+      if (!_pickerReqCode || Object.keys(_pickerSelected).length === 0) return;
+      const runBtn = document.getElementById('pickerRunBtn');
+      runBtn.disabled = true;
+      runBtn.textContent = 'Running…';
+      const ids = Object.keys(_pickerSelected);
+      const row = document.querySelector('.requirement[data-id="' + _pickerReqCode + '"]');
+      closePhotoPicker();
+      // Show running state on the requirement row so the user knows the check is active
+      if (row) {{
+        row.classList.add('req-rechecking');
+        const badge = row.querySelector('.badge:not(.badge-info):not(.resolved-chip)');
+        if (badge) {{ badge.className = 'badge badge-running'; badge.textContent = 'RUNNING'; }}
+      }}
+      try {{
+        const r = await fetch('/api/recheck/' + REPORT_ID + '/' + encodeURIComponent(_pickerReqCode), {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{manual_photo_ids: ids}}),
+        }});
+        const data = await r.json();
+        if (data.error) throw new Error(data.error);
+        // Reuse recheckItem update logic to refresh the row
+        if (row) _applyRecheckResult(row, data);
+      }} catch (e) {{
+        alert('Photo check failed: ' + e.message);
+        if (row) row.classList.remove('req-rechecking');
+      }} finally {{
+        runBtn.textContent = 'Run check';
+        runBtn.disabled = false;
+      }}
+    }}
+
+    function _applyRecheckResult(row, data) {{
+      const newStatus = data.status || '';
+      row.dataset.status = newStatus;
+      row.className = 'requirement req-' + newStatus.toLowerCase();
+      const badge = row.querySelector('.badge:not(.badge-info)');
+      if (badge) {{
+        const cfg = {{PASS:'pass', FAIL:'fail', MISSING:'missing', ERROR:'error', NEEDS_REVIEW:'needs_review'}};
+        const labels = {{PASS:'PASS', FAIL:'FAIL', MISSING:'MISSING', ERROR:'ERROR', NEEDS_REVIEW:'NEEDS REVIEW'}};
+        badge.className = 'badge badge-' + (cfg[newStatus] || 'na');
+        badge.textContent = labels[newStatus] || newStatus;
+      }}
+      // Manual badge
+      let manualBadge = row.querySelector('.badge.badge-info');
+      if (data.manually_verified) {{
+        if (!manualBadge) {{
+          manualBadge = document.createElement('span');
+          manualBadge.className = 'badge badge-info';
+          manualBadge.style.fontSize = '10px';
+          manualBadge.title = 'Photo selected manually by a reviewer';
+          manualBadge.textContent = 'Manual';
+          // Insert after the status badge (first child of req-header)
+          const header = row.querySelector('.req-header');
+          if (header) {{
+            const statusBadge = header.querySelector('.badge:not(.badge-info):not(.resolved-chip)');
+            if (statusBadge && statusBadge.nextSibling) {{
+              header.insertBefore(manualBadge, statusBadge.nextSibling);
+            }} else if (header.firstChild) {{
+              header.insertBefore(manualBadge, header.firstChild.nextSibling);
+            }} else {{
+              header.appendChild(manualBadge);
+            }}
+          }}
+        }}
+        row.dataset.manuallyVerified = '1';
+      }} else if (manualBadge) {{
+        manualBadge.remove();
+        delete row.dataset.manuallyVerified;
+      }}
+      // Reason + photos (reuse existing logic)
+      const reasonContainer = row.querySelector('[data-role="reason-container"]');
+      if (reasonContainer) {{
+        const shouldShowReason = !['PASS','N/A','FOUND_NO_VISION'].includes(newStatus) && data.reason;
+        if (shouldShowReason) {{
+          const linked = _linkifyPhotos(data.reason, data.photo_urls || {{}});
+          reasonContainer.innerHTML = '<div class="reason-expandable" onclick="expandReason(event,this)">' + linked + '</div>';
+          if (typeof initExpandableReasons === 'function') initExpandableReasons(reasonContainer);
+        }} else {{
+          reasonContainer.innerHTML = '';
+        }}
+      }}
+      const photoContainer = row.querySelector('[data-role="photo-container"]');
+      if (photoContainer) {{
+        const photoUrls = data.photo_urls || {{}};
+        const photoCaptions = data.photo_captions || {{}};
+        const pairs = Object.keys(photoUrls).sort((a,b) => +a - +b)
+          .map(k => ({{k, url: photoUrls[k], cap: photoCaptions[k] || ''}}))
+          .filter(p => p.url).slice(0,4);
+        function _captionAttr(cap) {{ return cap ? ' data-caption="' + _esc(cap) + '"' : ''; }}
+        if (!pairs.length) {{
+          photoContainer.innerHTML = '';
+        }} else if (pairs.length === 1) {{
+          const p = pairs[0];
+          photoContainer.innerHTML = '<a href="' + _esc(p.url) + '" target="_blank" class="req-photo-link"' + _captionAttr(p.cap) + '><img src="' + _esc(p.url) + '" alt="Evaluated photo" loading="lazy" class="req-photo"></a>';
+        }} else {{
+          photoContainer.innerHTML = '<div style="display:flex;gap:4px;margin-top:4px;">' +
+            pairs.map(p => '<a href="' + _esc(p.url) + '" target="_blank" class="req-photo-link"' + _captionAttr(p.cap) + ' style="flex:1;min-width:0;"><img src="' + _esc(p.url) + '" alt="Evidence photo" loading="lazy" style="width:100%;height:72px;object-fit:cover;border-radius:4px;display:block;"></a>').join('') +
+            '</div>';
+        }}
+        if (typeof rewirePhotoLinks === 'function') rewirePhotoLinks(photoContainer);
+      }}
+      row.dataset.resolved = '';
+      const chip = row.querySelector('.resolved-chip');
+      if (chip) chip.remove();
+      const resolveBtn = row.querySelector('[data-role="resolve-btn"]');
+      if (resolveBtn) resolveBtn.textContent = 'Mark resolved';
+      if (typeof _updateTabCounts === 'function') _updateTabCounts();
+    }}
+
+    // Close picker on Escape
+    document.addEventListener('keydown', function(e) {{
+      if (e.key === 'Escape' && document.getElementById('photoPickerOverlay').style.display !== 'none') {{
+        closePhotoPicker();
+      }}
+    }});
+
     async function toggleResolved(btn, reqCode) {{
       if (!IS_INTERACTIVE || !REPORT_ID) return;
       btn.disabled = true;
@@ -1244,72 +1476,18 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
         const r = await fetch('/api/recheck/' + REPORT_ID + '/' + reqCode, {{method: 'POST'}});
         const data = await r.json();
         if (data.error) throw new Error(data.error);
-        // Update row visuals without a page reload
-        const newStatus = data.status || '';
-        row.dataset.status = newStatus;
-        row.className = 'requirement req-' + newStatus.toLowerCase();
-        // Update badge (class + display label)
-        const badge = row.querySelector('.badge');
-        if (badge) {{
-          const cfg = {{PASS:'pass', FAIL:'fail', MISSING:'missing', ERROR:'error', NEEDS_REVIEW:'needs_review'}};
-          const labels = {{PASS:'PASS', FAIL:'FAIL', MISSING:'MISSING', ERROR:'ERROR', NEEDS_REVIEW:'NEEDS REVIEW'}};
-          const cls = cfg[newStatus] || 'na';
-          badge.className = 'badge badge-' + cls;
-          badge.textContent = labels[newStatus] || newStatus;
-        }}
-        // Resolved state is cleared server-side on recheck
-        row.dataset.resolved = '';
-        const chip = row.querySelector('.resolved-chip');
-        if (chip) chip.remove();
-        const resolveBtn = row.querySelector('[data-role="resolve-btn"]');
-        if (resolveBtn) resolveBtn.textContent = 'Mark resolved';
-        // Update reason text
-        const reasonContainer = row.querySelector('[data-role="reason-container"]');
-        if (reasonContainer) {{
-          const shouldShowReason = !['PASS','N/A','FOUND_NO_VISION'].includes(newStatus) && data.reason;
-          if (shouldShowReason) {{
-            const linked = _linkifyPhotos(data.reason, data.photo_urls || {{}});
-            reasonContainer.innerHTML = '<div class="reason-expandable" onclick="expandReason(event,this)">' + linked + '</div>';
-            if (typeof initExpandableReasons === 'function') initExpandableReasons(reasonContainer);
-          }} else {{
-            reasonContainer.innerHTML = '';
-          }}
-        }}
-        // Update photo grid
-        const photoContainer = row.querySelector('[data-role="photo-container"]');
-        if (photoContainer) {{
-          const photoUrls = data.photo_urls || {{}};
-          const photoCaptions = data.photo_captions || {{}};
-          const pairs = Object.keys(photoUrls).sort((a,b) => +a - +b)
-            .map(k => ({{k, url: photoUrls[k], cap: photoCaptions[k] || ''}}))
-            .filter(p => p.url).slice(0,4);
-          function _captionAttr(cap) {{
-            return cap ? ' data-caption="' + _esc(cap) + '"' : '';
-          }}
-          if (!pairs.length) {{
-            photoContainer.innerHTML = '';
-          }} else if (pairs.length === 1) {{
-            const p = pairs[0];
-            photoContainer.innerHTML = '<a href="' + _esc(p.url) + '" target="_blank" class="req-photo-link"' + _captionAttr(p.cap) + '><img src="' + _esc(p.url) + '" alt="Evaluated photo" loading="lazy" class="req-photo"></a>';
-          }} else {{
-            photoContainer.innerHTML = '<div style="display:flex;gap:4px;margin-top:4px;">' +
-              pairs.map(p => '<a href="' + _esc(p.url) + '" target="_blank" class="req-photo-link"' + _captionAttr(p.cap) + ' style="flex:1;min-width:0;"><img src="' + _esc(p.url) + '" alt="Evidence photo" loading="lazy" style="width:100%;height:72px;object-fit:cover;border-radius:4px;display:block;"></a>').join('') +
-              '</div>';
-          }}
-          if (typeof rewirePhotoLinks === 'function') rewirePhotoLinks(photoContainer);
-        }}
-        _updateTabCounts();
-        // Update only THIS row's visibility for the active tab — avoids
-        // calling filterTab() which rebuilds the entire list, loses scroll
-        // position, and closes any open lightbox or note editor.
+        _applyRecheckResult(row, data);
+        // Update only THIS row's visibility for the active tab
         const activeTab = document.querySelector('.report-tab.active')?.dataset.tab;
         if (activeTab && activeTab !== 'all') {{
+          const newStatus = data.status || '';
           const isAttention = ['FAIL','MISSING','ERROR','NEEDS_REVIEW'].includes(newStatus);
           const show = (activeTab === 'attention') ? isAttention
                      : (activeTab === 'passed')    ? newStatus === 'PASS'
                      : true;
           row.style.display = show ? '' : 'none';
         }}
+        fetchActiveChecks();
       }} catch (e) {{
         alert('Could not re-check: ' + e.message);
         // Restore the original badge so the row goes back to its prior state.
@@ -1500,6 +1678,29 @@ def generate_html(report: dict, project: dict) -> str:
   <div id="photoLightbox" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:999;align-items:center;justify-content:center;" onclick="closeLightbox(event)">
     <button onclick="closeLightbox()" aria-label="Close" style="position:absolute;top:16px;right:20px;background:none;border:none;color:#fff;font-size:28px;cursor:pointer;line-height:1;padding:4px 8px;opacity:0.8;">&#x2715;</button>
     <img id="photoLightboxImg" src="" alt="" style="max-width:90vw;max-height:88vh;object-fit:contain;border-radius:6px;box-shadow:0 8px 40px rgba(0,0,0,0.6);" onclick="event.stopPropagation()">
+  </div>
+
+  <!-- Photo picker modal — reviewer+ only, opened by "Select photo" button -->
+  <div id="photoPickerOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:flex-start;justify-content:center;padding-top:40px;">
+    <div style="background:var(--bg-card);border-radius:12px;width:min(880px,95vw);max-height:80vh;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,0.4);overflow:hidden;">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-shrink:0;">
+        <div>
+          <div style="font-weight:700;font-size:15px;">Select photos</div>
+          <div id="pickerReqTitle" style="font-size:12px;color:var(--text-muted);margin-top:2px;"></div>
+        </div>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:10px;">
+          <span id="pickerSelCount" style="font-size:12px;color:var(--text-muted);"></span>
+          <button onclick="closePhotoPicker()" style="background:none;border:none;color:var(--text-secondary);font-size:20px;cursor:pointer;padding:2px 6px;line-height:1;">&#x2715;</button>
+        </div>
+      </div>
+      <div id="pickerGrid" style="overflow-y:auto;padding:16px;flex:1;">
+        <div style="color:var(--text-muted);font-size:13px;grid-column:1/-1;padding:24px 0;text-align:center;">Loading photos…</div>
+      </div>
+      <div style="padding:14px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px;flex-shrink:0;">
+        <button onclick="closePhotoPicker()" class="btn btn-ghost">Cancel</button>
+        <button id="pickerRunBtn" onclick="runCheckWithSelectedPhotos()" class="btn btn-primary" disabled>Run check</button>
+      </div>
+    </div>
   </div>
 
   <script>{script}</script>

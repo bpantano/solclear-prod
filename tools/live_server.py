@@ -870,6 +870,11 @@ class LiveHandler(BaseHTTPRequestHandler):
             if not self._require_org_access(session, oid):  # read — reviewer allowed
                 return
             self._api_org_detail(oid)
+        elif path.startswith("/api/report/") and path.endswith("/photos"):
+            if not self._require_role(session, ("superadmin", "admin", "reviewer")):
+                return
+            rid = path.split("/")[3]
+            self._api_report_photos(rid, session)
         elif path.startswith("/report/"):
             pid = path.split("/")[2]
             self._serve_report(pid, session)
@@ -1031,7 +1036,7 @@ class LiveHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/recheck/"):
             parts = path.split("/")
             if len(parts) == 5:
-                self._api_report_item_recheck(parts[3], parts[4], session)
+                self._api_report_item_recheck(parts[3], parts[4], session, body)
             else:
                 self.send_error(404)
         else:
@@ -2973,6 +2978,141 @@ class LiveHandler(BaseHTTPRequestHandler):
 
     # ── Report handlers ──────────────────────────────────────────────────────
 
+    def _api_report_photos(self, report_id, session):
+        """Return project photos grouped by checklist section/task for the
+        manual photo picker. Groups photos by where they appear in the
+        CompanyCam checklist; unmatched photos go in an 'ungrouped' list.
+        Auth: reviewer+, scoped to the report's org."""
+        try:
+            row = fetch_one("""
+                SELECT p.photos_cache, p.organization_id, p.companycam_id
+                FROM reports r
+                JOIN projects p ON p.id = r.project_id
+                WHERE r.id = %s
+            """, (report_id,))
+            if not row:
+                self._send_json({"error": "Report not found"}, 404)
+                return
+            _s = getattr(self, "_session", {}) or {}
+            if _s.get("role") != "superadmin":
+                if str(row.get("organization_id") or "") != str(_s.get("org_id") or ""):
+                    self._send_json({"error": "Forbidden"}, 403)
+                    return
+
+            photos_raw = row.get("photos_cache") or []
+
+            # Build a helper to convert CompanyCam photo objects to picker format
+            def _photo_obj(p):
+                thumb = next(
+                    (u.get("url") for u in p.get("uris", []) if u.get("type") == "thumbnail"),
+                    None,
+                )
+                original = next(
+                    (u.get("url") for u in p.get("uris", [])
+                     if u.get("type") in ("original", "web")),
+                    p.get("photo_url"),
+                )
+                if not original:
+                    return None
+                return {
+                    "id": str(p.get("id", "")),
+                    "thumbnail_url": thumb or original,
+                    "original_url": original,
+                }
+
+            # Extract imgproxy b64 key to match task photo URLs → project photos
+            def _b64_key(url):
+                if not url or "img.companycam.com" not in url:
+                    return ""
+                try:
+                    parts = url.split("/")
+                    b64_parts = []
+                    skip_sig = True
+                    for part in parts[3:]:
+                        if skip_sig:
+                            skip_sig = False
+                            continue
+                        if ":" in part:
+                            continue
+                        if part:
+                            b64_parts.append(part.split(".")[0])
+                    return "".join(b64_parts)
+                except Exception:
+                    return ""
+
+            # Build b64_key → project photo lookup
+            b64_to_photo = {}
+            all_photo_objs = {}  # photo_id -> picker obj
+            for p in photos_raw:
+                obj = _photo_obj(p)
+                if not obj:
+                    continue
+                pid = obj["id"]
+                all_photo_objs[pid] = obj
+                for uri in p.get("uris", []):
+                    key = _b64_key(uri.get("url", ""))
+                    if key:
+                        b64_to_photo[key] = pid
+                        break
+
+            # Fetch checklist to get section/task grouping
+            groups = []
+            matched_ids = set()
+            cc_project_id = row.get("companycam_id")
+            if cc_project_id:
+                try:
+                    # Use env-var CC key (same key compliance_check.py uses for
+                    # checklists) — the per-org key is for the SPA project browser
+                    # only; photos_cache and compliance checklists both use CC_TOKEN.
+                    resp = http_requests.get(
+                        f"{API_BASE}/projects/{cc_project_id}/checklists",
+                        headers={"Authorization": f"Bearer {CC_TOKEN}", "Content-Type": "application/json"},
+                        timeout=10,
+                    )
+                    resp.raise_for_status()
+                    checklists = resp.json()
+                    for cl in checklists:
+                        cl_name = cl.get("name") or "Checklist"
+                        # Sectionless tasks — group under checklist name directly
+                        for task in cl.get("sectionless_tasks", []):
+                            task_photos = []
+                            for tp in task.get("photos", []):
+                                key = _b64_key(tp.get("url", ""))
+                                pid = b64_to_photo.get(key)
+                                if pid and pid not in matched_ids:
+                                    task_photos.append(all_photo_objs[pid])
+                                    matched_ids.add(pid)
+                            if task_photos:
+                                groups.append({
+                                    "section": cl_name,
+                                    "task": task.get("title", ""),
+                                    "photos": task_photos,
+                                })
+                        # Sectioned tasks
+                        for section in cl.get("sections", []):
+                            sec_name = section.get("title") or cl_name
+                            for task in section.get("tasks", []):
+                                task_photos = []
+                                for tp in task.get("photos", []):
+                                    key = _b64_key(tp.get("url", ""))
+                                    pid = b64_to_photo.get(key)
+                                    if pid and pid not in matched_ids:
+                                        task_photos.append(all_photo_objs[pid])
+                                        matched_ids.add(pid)
+                                if task_photos:
+                                    groups.append({
+                                        "section": sec_name,
+                                        "task": task.get("title", ""),
+                                        "photos": task_photos,
+                                    })
+                except Exception as _ce:
+                    print(f"WARNING: could not fetch checklist for picker (project={cc_project_id}): {_ce}", file=sys.stderr)
+
+            ungrouped = [obj for pid, obj in all_photo_objs.items() if pid not in matched_ids]
+            self._send_json({"groups": groups, "ungrouped": ungrouped})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
     def _api_reports(self, session=None):
         """Return a list of compliance reports from Postgres, scoped by org."""
         try:
@@ -3077,6 +3217,7 @@ class LiveHandler(BaseHTTPRequestHandler):
                 results = fetch_all("""
                     SELECT rr.id AS req_result_id,
                            rr.status, rr.reason, rr.photo_urls, rr.photo_captions, rr.candidates,
+                           rr.manually_verified,
                            rr.resolved_at, rr.resolved_by, rr.notes,
                            u.full_name AS resolved_by_name,
                            req.code as id, req.title, req.section, req.is_optional as optional
@@ -3318,15 +3459,28 @@ class LiveHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 
-    def _api_report_item_recheck(self, report_id, req_code, session):
+    def _api_report_item_recheck(self, report_id, req_code, session, body=b""):
         """Re-run compliance for a single requirement on an existing report.
-        Updates the requirement_results row in place and returns the new result."""
+        Updates the requirement_results row in place and returns the new result.
+
+        Optional JSON body: {"manual_photo_ids": ["id1", "id2", ...]}
+        When provided, bypasses automatic photo discovery and uses those
+        specific photos from the project's photos_cache as candidates."""
         row, err = self._load_report_item(report_id, req_code, session)
         if err:
             status = 404 if err == "Report item not found" else (403 if err == "Forbidden" else 500)
             self._send_json({"error": err}, status)
             return
         try:
+            # Optional manual photo selection — body may be empty for normal rechecks
+            manual_photo_ids = []
+            if body:
+                try:
+                    manual_photo_ids = json.loads(body).get("manual_photo_ids") or []
+                except Exception:
+                    pass
+            is_manual = bool(manual_photo_ids)
+
             params = {
                 "manufacturer": row.get("manufacturer"),
                 "has_battery": row.get("has_battery", False),
@@ -3364,6 +3518,20 @@ class LiveHandler(BaseHTTPRequestHandler):
                         )
                     except Exception as _pe:
                         print(f"WARNING: could not save photos_cache to DB: {_pe}", file=sys.stderr)
+            # Build override_candidates from photos_cache when manual IDs provided
+            override_candidates = None
+            if is_manual:
+                db_photos = fetch_one(
+                    "SELECT photos_cache FROM projects WHERE companycam_id = %s",
+                    (str(cc_project_id),),
+                )
+                all_photos = (db_photos or {}).get("photos_cache") or []
+                id_set = set(str(pid) for pid in manual_photo_ids)
+                override_candidates = [p for p in all_photos if str(p.get("id", "")) in id_set]
+                if not override_candidates:
+                    self._send_json({"error": "None of the selected photo IDs found in project cache"}, 400)
+                    return
+
             # Scope API-call logging to this report + requirement so the
             # recheck cost gets attributed correctly in api_call_log.
             from tools.compliance_check import set_call_context
@@ -3375,6 +3543,7 @@ class LiveHandler(BaseHTTPRequestHandler):
                     cc_project_id, params,
                     run_vision=True, only_ids={req_code},
                     max_workers=1,
+                    override_candidates=override_candidates,
                 )
             # Find the matching requirement result
             new_result = next(
@@ -3384,14 +3553,30 @@ class LiveHandler(BaseHTTPRequestHandler):
             if not new_result:
                 self._send_json({"error": "Recheck returned no result"}, 500)
                 return
+            # For manual rechecks: the reviewer already chose the evidence photos,
+            # so override Sonnet's EVIDENCE selection and store all selected photos.
+            if is_manual and override_candidates:
+                from tools.compliance_check import get_photo_web_url
+                manual_urls = {}
+                for i, p in enumerate(override_candidates, start=1):
+                    url = get_photo_web_url(p)
+                    if url:
+                        manual_urls[i] = url
+                if manual_urls:
+                    new_result["photo_urls"] = manual_urls
+                    # Use the AI explanation as caption for all evidence photos
+                    explanation = new_result.get("reason", "")
+                    new_result["photo_captions"] = {i: explanation for i in manual_urls}
+                    new_result["candidates"] = len(manual_urls)
             # Update the existing row (not a new row — patches the current report)
             updated = execute_returning(
                 """UPDATE requirement_results
                    SET status = %s, reason = %s, photo_urls = %s, photo_captions = %s,
                        candidates = %s, resolved_at = NULL, resolved_by = NULL,
-                       total_duration_ms = %s
+                       total_duration_ms = %s, manually_verified = %s
                    WHERE id = %s
-                   RETURNING status, reason, photo_urls, photo_captions, candidates""",
+                   RETURNING status, reason, photo_urls, photo_captions,
+                             candidates, manually_verified""",
                 (
                     new_result.get("status"),
                     new_result.get("reason"),
@@ -3399,6 +3584,7 @@ class LiveHandler(BaseHTTPRequestHandler):
                     json.dumps(new_result.get("photo_captions", {})),
                     new_result.get("candidates", 0),
                     new_result.get("total_duration_ms"),
+                    is_manual,
                     row["id"],
                 ),
             )
@@ -3541,10 +3727,8 @@ def main():
     def _on_term(signum, frame):
         print(f"[shutdown] signal {signum} received, cleaning up…", file=sys.stderr)
         _mark_running_checks_cancelled_on_shutdown()
-        try:
-            server.shutdown()
-        except Exception:
-            pass
+        # daemon_threads=True means all worker threads die with the process —
+        # server.shutdown() would block on active SSE connections, so skip it.
         sys.exit(0)
     signal.signal(signal.SIGTERM, _on_term)
     signal.signal(signal.SIGINT, _on_term)

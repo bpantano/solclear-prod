@@ -562,11 +562,19 @@ REQUIREMENTS = [
         "task_titles": ["Comms Cable & Drain Wire"],
         "keywords": ["comms cable & drain wire", "comms cable", "drain wire", "communication cable"],
         "validation_prompt": (
-            "This photo should show battery comms cable terminations with the drain wire visible. "
-            "Verify: (1) Are both ends of the comms cable terminated and visible? "
-            "(2) Is the drain wire visible and landed on ONE end only (not both)? "
-            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL. "
-            "FAIL if drain wire is on both ends or neither end."
+            "This photo should show battery communications cable installation.\n\n"
+            "Requirements differ by manufacturer:\n"
+            "- Tesla/Powerwall: comms cable must be terminated AND a drain wire must be "
+            "visible, landed on ONE end only (not both ends).\n"
+            "- All other manufacturers (SolarEdge, Enphase, etc.): comms cable must be "
+            "terminated and visible. A drain wire is NOT required and its absence is not "
+            "a reason to fail.\n\n"
+            "PASS if: the comms cable is visible and properly terminated per the "
+            "manufacturer requirements above.\n"
+            "FAIL if: the comms cable is not visible or not terminated. For Tesla only: "
+            "also FAIL if the drain wire is landed on both ends or not visible at all.\n\n"
+            "Work through what you see, then end your response with a final line: "
+            "VERDICT: PASS or VERDICT: FAIL."
         ),
     },
     {
@@ -1262,7 +1270,12 @@ def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
     # max_tokens budgets per-photo description room plus validation reasoning
     # plus the final VERDICT + EXPLANATION lines. Capped so a task with 15+
     # photos can't blow up costs.
-    dynamic_max_tokens = min(500 + 60 * len(downloaded), 1400)
+    # Manual rechecks use a detailed per-photo prompt (~150 tokens/photo);
+    # normal runs use a single-winner prompt (~60 tokens/photo).
+    if requirement.get("_manual_recheck"):
+        dynamic_max_tokens = min(1000 + 200 * len(downloaded), 2400)
+    else:
+        dynamic_max_tokens = min(500 + 60 * len(downloaded), 1400)
     payload = {
         "model": VISION_MODEL,
         "max_tokens": dynamic_max_tokens,
@@ -1354,6 +1367,7 @@ def _build_validation_prompt(requirement: dict, n_photos: int) -> str:
         f"{manufacturer_line}\n"
         f"{requirement['validation_prompt']}\n\n"
     )
+    is_manual = requirement.get("_manual_recheck", False)
     if n_photos == 1:
         return base + (
             "Work through what you see in the photo, then end your response with "
@@ -1363,6 +1377,25 @@ def _build_validation_prompt(requirement: dict, n_photos: int) -> str:
             "  EXPLANATION: <one sentence describing what was actually seen that led "
             "to the verdict. Customer-facing — do NOT reference photo numbers like "
             "'Photo 1'; describe what's physically visible instead.>"
+        )
+    if is_manual:
+        return base + (
+            f"A reviewer has manually selected these {n_photos} photos as candidates. "
+            f"Evaluate each photo independently against the requirement above.\n\n"
+            "STEP 1 — Describe each photo briefly (one line each):\n"
+            "  Photo 1: <what you see>\n"
+            "  Photo 2: <what you see>\n"
+            "  ...\n\n"
+            "STEP 2 — Identify which photos (if any) satisfy the requirement.\n\n"
+            "STEP 3 — Apply these verdict rules:\n"
+            "  PASS if at least one photo clearly meets the requirement.\n"
+            "  FAIL if no photo meets the requirement.\n"
+            "  NEEDS_REVIEW if it is unclear.\n\n"
+            "STEP 4 — End your response with these three lines exactly:\n"
+            "  EVIDENCE: <comma-separated numbers of photos that best support your verdict>\n"
+            "  VERDICT: PASS   (or FAIL, or NEEDS_REVIEW)\n"
+            "  EXPLANATION: <one sentence describing what was seen. Customer-facing — "
+            "do NOT reference photo numbers.>"
         )
     return base + (
         f"You have {n_photos} candidate photos. Work through this in four steps:\n\n"
@@ -1578,7 +1611,8 @@ def get_photo_thumbnail_url(photo: dict) -> Optional[str]:
 
 def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
                          progress_callback=None, only_ids=None,
-                         should_cancel=None, max_workers: int = 2) -> dict:
+                         should_cancel=None, max_workers: int = 2,
+                         override_candidates: list = None) -> dict:
     """Run a full compliance check.
 
     `should_cancel`: optional callable returning True when the caller wants
@@ -1778,7 +1812,13 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
             })
             continue
 
-        candidates = find_candidate_photos(req, photos, checklist_tasks)
+        # Manual photo selection: bypass algorithmic candidate discovery
+        # when a reviewer has explicitly chosen specific photos.
+        is_manual_recheck = bool(override_candidates and only_ids and req["id"] in only_ids)
+        if is_manual_recheck:
+            candidates = override_candidates
+        else:
+            candidates = find_candidate_photos(req, photos, checklist_tasks)
         if not candidates:
             manufacturer = (params.get("manufacturer") or "").lower()
             review_manufacturers = [m.lower() for m in req.get("review_if_missing_for", [])]
@@ -1820,10 +1860,15 @@ def run_compliance_check(project_id: str, params: dict, run_vision: bool = True,
             vision_work.append(("__skip__", result_entry))
             continue
 
-        # Inject manufacturer so prompts can use it without mutating the
-        # shared requirement definition. Critical for E6/E7/S3 (Tesla CTs).
+        # Inject manufacturer and manual-recheck flag without mutating the
+        # shared requirement definition.
         manufacturer = (params.get("manufacturer") or "").strip()
-        req_ctx = dict(req, _manufacturer=manufacturer) if manufacturer else req
+        extras = {}
+        if manufacturer:
+            extras["_manufacturer"] = manufacturer
+        if is_manual_recheck:
+            extras["_manual_recheck"] = True
+        req_ctx = dict(req, **extras) if extras else req
         vision_work.append((req_ctx, candidates))
 
     # Phase 2: parallel execution of vision checks (and emission of the
