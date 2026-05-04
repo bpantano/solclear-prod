@@ -200,7 +200,7 @@ REQUIREMENTS = [
         "condition": always,
         "task_titles": ["Railing Type", "Roof Penetration & Conduit"],
         "keywords": ["railing type", "roof penetration", "flashing", "sealant", "attachment"],
-        "selection_criteria": "a close-up showing a roof mounting attachment (lag bolt, L-foot, stanchion, or post) physically installed through the roof deck, with sealant visibly applied around the hardware — the metal hardware must be visible, not just a sealed hole",
+        "selection_criteria": "photos showing roof mounting attachment points — either a lag bolt, L-foot, or stanchion penetrating a pitched roof (with sealant bead or flashing visible), OR a post/stanchion base plate on a flat roof (penetration base plates are valid weatherproofing). The mounting hardware must be visible. Prefer close-up shots of individual attachment points, but also include medium-distance or pullback shots if they clearly show multiple attachment points with visible weatherproofing. Select ALL photos that show attachment hardware with weatherproofing evidence — multiple photos may serve as evidence together.",
         "validation_prompt": (
             "This photo should show a close-up of a roof attachment (lag bolt, "
             "stanchion, or post) where it penetrates the roof, documenting the "
@@ -219,46 +219,40 @@ REQUIREMENTS = [
             "hardware visible) does NOT qualify — Palmetto requires documentation "
             "of the actual mounting hardware. Describe what is actually centered "
             "in the frame."
-            "\n2. Sealant check — Is sealant visible at the penetration? "
-            "Sealant typically appears as a black, gray, or clear "
-            "bead/blob/smear applied around the bolt head, under the "
-            "flashing, or directly on the shingle. It is a hand-applied "
-            "caulking material — irregular shape, often glossy, sometimes "
-            "with visible squeeze-out lines. "
-            "Things that are NOT sealant (do not count these): rail end "
-            "caps (molded plastic plugs on cut rail ends), rubber EPDM "
-            "washers under bolt heads (these are gaskets, not sealant — "
-            "though they're often used WITH sealant), the metal flashing "
-            "itself, or shingle adhesive strips. "
-            "State whether you see sealant, where it is, and whether it "
-            "looks freshly applied vs. weathered/missing."
-            "\n3. Flashing check — Is flashing visible (a metal or composite "
-            "plate slid under the upper course of shingles to direct water "
-            "around the attachment)? Note its presence and whether it is "
-            "properly tucked under the upper shingle course or sitting on "
-            "top of shingles."
+            "\n2. Weatherproofing check — Is there evidence of weatherproofing "
+            "at the penetration? Acceptable weatherproofing takes different "
+            "forms depending on roof type:\n"
+            "  • Pitched roofs: hand-applied sealant (black, gray, or clear "
+            "bead/blob/smear around the bolt head or under flashing — "
+            "irregular shape, often glossy, sometimes with squeeze-out lines) "
+            "and/or metal/composite flashing tucked under the upper shingle.\n"
+            "  • Flat roofs: pre-manufactured penetration base plates or boot "
+            "flashings (circular or square factory-sealed bases the post/stanchion "
+            "passes through — these ARE the weatherproof seal and are fully "
+            "acceptable without a separate sealant bead).\n"
+            "Things that are NOT weatherproofing: rail end caps (plastic plugs "
+            "on cut rail ends), the bare metal flashing plate itself with no "
+            "sealant, or shingle adhesive strips.\n"
+            "State what weatherproofing evidence you see and which type it is."
+            "\n3. Flashing check — Is flashing or a penetration base plate "
+            "visible? Note its presence and whether it appears properly installed."
             "\n\nOnly AFTER those three observations, choose:"
-            "\n- PASS: observation #1 confirms a roof attachment point AND "
-            "observation #2 confirms sealant is visibly applied at the "
-            "penetration. (Flashing alone without visible sealant is NOT "
-            "enough — sealant is the universally required element.)"
-            "\n- FAIL: observation #1 shows the photo is NOT a roof "
-            "attachment close-up with visible hardware (e.g., a rail end, "
-            "a bare deck, an array overview, or a sealed hole with no "
-            "mounting hardware visible), OR observation #2 confirms NO "
-            "sealant is visible anywhere at the penetration."
-            "\n- NEEDS_REVIEW: subject is the right kind of shot but sealant "
-            "presence/quality is genuinely unclear due to glare, shadow, "
-            "extreme angle, or a part of the attachment being out of frame. "
-            "Use this when you'd be guessing rather than reading."
-            "\n\nFORMAT — your response MUST follow this structure, in this "
-            "order:"
-            "\n1. <observation #1>"
-            "\n2. <observation #2>"
-            "\n3. <observation #3>"
+            "\n\nEvaluate the COMPLETE SET of photos together — multiple photos "
+            "may collectively document different attachment points on the same job. "
+            "PASS if at least one photo clearly shows mounting hardware with "
+            "visible weatherproofing (sealant bead, flashing with sealant, OR "
+            "a penetration base plate on a flat roof). "
+            "NEEDS_REVIEW if hardware is visible in at least one photo and "
+            "weatherproofing is present or likely but genuinely unclear (distance, "
+            "glare, shadow, unfamiliar flat-roof method). "
+            "FAIL only if NO photo shows a roof attachment point with any "
+            "weatherproofing evidence — e.g. all photos are rail overviews, "
+            "bare deck, completed arrays, or conduit penetrations."
+            "\n\nFORMAT — work through observations first, then end with:"
+            "\nEVIDENCE: <comma-separated numbers of photos showing attachment "
+            "hardware with weatherproofing — include all that qualify, not just one>"
             "\nVERDICT: PASS   (or FAIL, or NEEDS_REVIEW)"
-            "\n\nDo NOT put the verdict at the top. Work through observations "
-            "first, then commit to a verdict on the last line."
+            "\nEXPLANATION: <one customer-facing sentence describing what was seen>"
         ),
     },
     {
@@ -1032,7 +1026,7 @@ MULTI_CRITERION_MAX = 20
 # first Palmetto reference photo is a multi-image collage that confuses
 # the prefilter model (it tries to match the collage layout instead of
 # the subject matter). Text-only selection_criteria works better here.
-_REFERENCE_PHOTO_EXCLUDED = {"PS1", "PS2"}
+_REFERENCE_PHOTO_EXCLUDED = {"PS1", "PS2", "R1"}  # R1 Palmetto ref shows pitched-roof sealant bead which biases Haiku against flat-roof base plate photos
 
 
 def _load_reference_photos(req_code: str, max_photos: int = 2) -> list:
