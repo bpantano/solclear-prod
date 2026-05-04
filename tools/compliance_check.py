@@ -743,12 +743,12 @@ def print_cost_estimate(params: dict):
     input_tokens = tier1_tokens + tier2_tokens
     output_tokens = applicable * 150
     cost = (input_tokens / 1_000_000) * 0.80 + (output_tokens / 1_000_000) * 4.00
-    print(f"\n── COST ESTIMATE ──────────────────────────────────")
-    print(f"  Model:          claude-haiku-4-5-20251001")
+    print("\n── COST ESTIMATE ──────────────────────────────────")
+    print("  Model:          claude-haiku-4-5-20251001")
     print(f"  Requirements:   {applicable} | API calls: {applicable} (1 per requirement)")
     print(f"  Est. tokens:    ~{input_tokens:,} in / ~{output_tokens:,} out")
     print(f"  Est. cost:      ~${cost:.4f} USD")
-    print(f"──────────────────────────────────────────────────\n")
+    print("──────────────────────────────────────────────────\n")
 
 
 # ── Vision check ─────────────────────────────────────────────────────────────
@@ -1433,7 +1433,7 @@ def _build_multi_criterion_prompt(requirement: dict, n_photos: int) -> str:
     )
 
     set_context = (
-        f"There is only 1 photo to check." if n_photos == 1
+        "There is only 1 photo to check." if n_photos == 1
         else f"You have {n_photos} photos. Scan across ALL of them — criteria may be "
              f"confirmed in any photo, not necessarily the same one."
     )

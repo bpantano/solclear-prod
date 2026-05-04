@@ -13,7 +13,6 @@ import os
 import sys
 import time
 from http.cookies import SimpleCookie
-from urllib.parse import quote, unquote
 
 import bcrypt
 from dotenv import load_dotenv

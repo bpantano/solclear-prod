@@ -46,7 +46,7 @@ import requests as http_requests
 from tools.compliance_check import run_compliance_check, REQUIREMENTS
 from tools.companycam_get_project_photos import get_all_photos
 from tools.db import fetch_all, fetch_one, execute, execute_returning, get_conn
-from tools.crypto import encrypt, decrypt, is_encrypted
+from tools.crypto import encrypt, decrypt
 from tools.auth import (
     hash_password, check_password, create_session_token,
     get_session_from_request, set_session_cookie_header,
@@ -2040,7 +2040,7 @@ class LiveHandler(BaseHTTPRequestHandler):
             page_ids = set(re_mod.findall(r'\b(PS\d+|R\d+|E\d+|S\d+|SC\d+|SI\d+|AMS\d+)\b', current))
             our_ids = set(r["id"] for r in REQUIREMENTS)
             missing_from_us = sorted(page_ids - our_ids)
-            extra_in_us = sorted(our_ids - page_ids)
+
 
             previous = load_snapshot()
             if not previous:
@@ -2061,14 +2061,14 @@ class LiveHandler(BaseHTTPRequestHandler):
             else:
                 diff = compare(previous, current)
                 diff_text = '\n'.join(diff[:100])
-                added = sum(1 for l in diff if l.startswith('+') and not l.startswith('+++'))
-                removed = sum(1 for l in diff if l.startswith('-') and not l.startswith('---'))
+                added = sum(1 for line in diff if line.startswith('+') and not line.startswith('+++'))
+                removed = sum(1 for line in diff if line.startswith('-') and not line.startswith('---'))
                 # Get structured AI analysis (~$0.001)
                 analysis = {"summary": "", "new_ids": [], "changed_ids": [], "removed_ids": []}
                 try:
                     from tools.monitor_requirements import analyze_changes_structured
                     analysis = analyze_changes_structured(diff_text)
-                except Exception as ex:
+                except Exception:
                     analysis["summary"] = f"{added} lines added, {removed} lines removed. Review the diff for details."
 
                 # Update tracking sets
@@ -3743,11 +3743,11 @@ def main():
     signal.signal(signal.SIGTERM, _on_term)
     signal.signal(signal.SIGINT, _on_term)
 
-    print(f"\n  Solclear Live Compliance Server")
-    print(f"  ────────────────────────────────")
+    print("\n  Solclear Live Compliance Server")
+    print("  ────────────────────────────────")
     print(f"  Local:   http://localhost:{args.port}")
     print(f"  Network: http://{local_ip}:{args.port}")
-    print(f"\n  Share the network URL with field crews.\n")
+    print("\n  Share the network URL with field crews.\n")
 
     try:
         server.serve_forever()

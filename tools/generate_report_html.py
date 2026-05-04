@@ -23,7 +23,6 @@ import re
 import sys
 import webbrowser
 from pathlib import Path
-from datetime import datetime
 import requests
 from dotenv import load_dotenv
 
@@ -1409,7 +1408,7 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
 
     function _linkifyPhotos(text, photoUrls) {{
       if (!text) return '';
-      return _esc(text).replace(/\bPhoto\s+(\d+)\b/gi, function(match, num) {{
+      return _esc(text).replace(/\\bPhoto\\s+(\\d+)\\b/gi, function(match, num) {{
         const url = (photoUrls || {{}})[num] || (photoUrls || {{}})[String(num)];
         if (!url) return match;
         return '<a href="' + _esc(url) + '" target="_blank">' + match + '</a>';
@@ -1490,7 +1489,7 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
                      : true;
           row.style.display = show ? '' : 'none';
         }}
-        fetchActiveChecks();
+        if (typeof fetchActiveChecks === 'function') fetchActiveChecks();
       }} catch (e) {{
         alert('Could not re-check: ' + e.message);
         // Restore the original badge so the row goes back to its prior state.
@@ -1726,7 +1725,7 @@ def main():
     with open(report_path) as f:
         report = json.load(f)
 
-    print(f"Fetching project details...", file=sys.stderr)
+    print("Fetching project details...", file=sys.stderr)
     project = fetch_project(args.project_id)
 
     html = generate_html(report, project)
