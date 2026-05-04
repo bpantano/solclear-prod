@@ -2993,9 +2993,8 @@ class LiveHandler(BaseHTTPRequestHandler):
             if not row:
                 self._send_json({"error": "Report not found"}, 404)
                 return
-            _s = getattr(self, "_session", {}) or {}
-            if _s.get("role") != "superadmin":
-                if str(row.get("organization_id") or "") != str(_s.get("org_id") or ""):
+            if session.get("role") != "superadmin":
+                if str(row.get("organization_id") or "") != str(session.get("org_id") or ""):
                     self._send_json({"error": "Forbidden"}, 403)
                     return
 
@@ -3476,10 +3475,21 @@ class LiveHandler(BaseHTTPRequestHandler):
             manual_photo_ids = []
             if body:
                 try:
-                    manual_photo_ids = json.loads(body).get("manual_photo_ids") or []
+                    parsed_body = json.loads(body)
+                    ids = parsed_body.get("manual_photo_ids")
+                    if isinstance(ids, list):
+                        manual_photo_ids = ids
                 except Exception:
                     pass
             is_manual = bool(manual_photo_ids)
+            # Role gate: manual photo selection is reviewer+ only
+            if is_manual and session.get("role") not in ("superadmin", "admin", "reviewer"):
+                self._send_json({"error": "Insufficient permissions"}, 403)
+                return
+            # Server-side cap matching the UI limit — prevents direct API abuse
+            if is_manual and len(manual_photo_ids) > 4:
+                self._send_json({"error": "Maximum 4 photos can be selected"}, 400)
+                return
 
             params = {
                 "manufacturer": row.get("manufacturer"),

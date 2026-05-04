@@ -1093,10 +1093,12 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
       const row = document.querySelector('.requirement[data-id="' + _pickerReqCode + '"]');
       closePhotoPicker();
       // Show running state on the requirement row so the user knows the check is active
+      const _pickerBadge = row ? row.querySelector('.badge:not(.badge-info):not(.resolved-chip)') : null;
+      const _pickerOrigClass = _pickerBadge ? _pickerBadge.className : '';
+      const _pickerOrigText  = _pickerBadge ? _pickerBadge.textContent : '';
       if (row) {{
         row.classList.add('req-rechecking');
-        const badge = row.querySelector('.badge:not(.badge-info):not(.resolved-chip)');
-        if (badge) {{ badge.className = 'badge badge-running'; badge.textContent = 'RUNNING'; }}
+        if (_pickerBadge) {{ _pickerBadge.className = 'badge badge-running'; _pickerBadge.textContent = 'RUNNING'; }}
       }}
       try {{
         const r = await fetch('/api/recheck/' + REPORT_ID + '/' + encodeURIComponent(_pickerReqCode), {{
@@ -1111,6 +1113,7 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
       }} catch (e) {{
         alert('Photo check failed: ' + e.message);
         if (row) row.classList.remove('req-rechecking');
+        if (_pickerBadge) {{ _pickerBadge.className = _pickerOrigClass; _pickerBadge.textContent = _pickerOrigText; }}
       }} finally {{
         runBtn.textContent = 'Run check';
         runBtn.disabled = false;
@@ -1121,7 +1124,7 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
       const newStatus = data.status || '';
       row.dataset.status = newStatus;
       row.className = 'requirement req-' + newStatus.toLowerCase();
-      const badge = row.querySelector('.badge:not(.badge-info)');
+      const badge = row.querySelector('.badge:not(.badge-info):not(.resolved-chip)');
       if (badge) {{
         const cfg = {{PASS:'pass', FAIL:'fail', MISSING:'missing', ERROR:'error', NEEDS_REVIEW:'needs_review'}};
         const labels = {{PASS:'PASS', FAIL:'FAIL', MISSING:'MISSING', ERROR:'ERROR', NEEDS_REVIEW:'NEEDS REVIEW'}};
