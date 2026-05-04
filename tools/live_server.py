@@ -3712,10 +3712,46 @@ def _mark_running_checks_cancelled_on_shutdown():
         print(f"[shutdown] cleanup failed: {e}", file=sys.stderr)
 
 
+def _apply_db_requirement_overrides():
+    """At startup, apply DB-stored requirement edits to the in-memory
+    REQUIREMENTS list so the admin UI shows the correct saved values.
+
+    Without this, every deploy resets the in-memory list to Python
+    defaults, making admin-saved changes appear lost in the UI (and
+    causing subsequent saves to overwrite the DB with the old default)."""
+    try:
+        db_reqs = fetch_all(
+            "SELECT code, task_titles, keywords, validation_prompt, title "
+            "FROM requirements WHERE is_active = TRUE ORDER BY code, version DESC"
+        )
+        seen: set = set()
+        db_map: dict = {}
+        for row in db_reqs:
+            code = row["code"]
+            if code not in seen:
+                seen.add(code)
+                db_map[code] = row
+        for req in REQUIREMENTS:
+            override = db_map.get(req["id"])
+            if not override:
+                continue
+            for field in ("task_titles", "keywords", "validation_prompt", "title"):
+                db_val = override.get(field)
+                if db_val is not None and db_val != req.get(field):
+                    req[field] = db_val
+    except Exception as e:
+        print(f"WARNING: could not apply DB requirement overrides at startup: {e}",
+              file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Live compliance check server")
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
+
+    # Apply any admin-saved requirement edits from DB to in-memory list
+    # before the server starts accepting requests.
+    _apply_db_requirement_overrides()
 
     local_ip = get_local_ip()
     server = ThreadedHTTPServer(("0.0.0.0", args.port), LiveHandler)
