@@ -1349,7 +1349,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         <label>Keywords (comma-separated)</label>
         <input class="search-input" id="reqEditKeywords" type="text" style="font-size:13px;" placeholder="e.g. main breaker, ampere">
       </div>
-      <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">Changes are saved in memory. They will reset on server restart until requirements are migrated to the database.</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">Changes are saved to the database and persist across restarts.</div>
       <button class="run-btn" onclick="saveRequirement()" style="background:var(--success);">Save Changes</button>
     </div>
   </div>
