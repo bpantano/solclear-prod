@@ -260,7 +260,7 @@ REQUIREMENTS = [
         "section": "Roof",
         "title": "Rail + EGC + Wire Management (per array)",
         "condition": always,
-        "task_titles": ["Racking Assembly + Grounding"],
+        "task_titles": ["Racking", "Racking Assembly + Grounding"],
         "keywords": ["racking assembly", "grounding", "rail", "EGC", "wire management", "clips"],
         "selection_criteria": "a wide pullback shot of a roof mounting plane showing the full racking system with rail, wire management clips, and EGC copper grounding wire routed between rails — not a close-up or a photo after panels are installed",
         "validation_prompt": (
