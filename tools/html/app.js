@@ -1850,6 +1850,7 @@
         '<div class="dev-note-card ' + cls + '" id="devNote-' + n.id + '">' +
           '<div class="dn-meta">' +
             '<span class="dn-meta-author">' + author + '</span>' +
+            '<span style="font-size:10px;opacity:0.5;margin-left:2px;">#' + n.id + '</span>' +
             time +
             (orgLine ? '<span>' + orgLine + '</span>' : '') +
             (reqLine ? '<span>· ' + reqLine + '</span>' : '') +
