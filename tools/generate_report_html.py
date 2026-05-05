@@ -174,10 +174,15 @@ def _render_note(note: dict, is_interactive: bool = False, code: str = "") -> st
             f'onclick="event.stopPropagation();openReplyEditor(this.dataset.replyNoteId,this.dataset.replyReqCode)">'
             f'Reply</button>'
         )
+    note_id_label = (
+        f'<span style="font-size:10px;opacity:0.5;margin-left:2px;">#{note_id}</span>'
+        if visibility == "dev" and not is_reply and note_id else ""
+    )
     return (
         f'<div class="req-note {visibility_cls}{reply_cls}" data-note-id="{_esc(str(note_id))}">'
         f'<div class="req-note-meta">'
         f'<span class="req-note-author">{_esc(author)}</span>'
+        f'{note_id_label}'
         f'{time_html}'
         f'{dev_pill}'
         f'{reply_btn}'
@@ -1408,10 +1413,14 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
           ' onclick="event.stopPropagation();openReplyEditor(this.dataset.replyNoteId,this.dataset.replyReqCode)">' +
           'Reply</button>';
       }}
+      const noteIdLabel = (isDev && !isReply && n.id)
+        ? '<span style="font-size:10px;opacity:0.5;margin-left:2px;">#' + n.id + '</span>'
+        : '';
       return (
         '<div class="req-note ' + visCls + replyCls + '" data-note-id="' + n.id + '">' +
           '<div class="req-note-meta">' +
             '<span class="req-note-author">' + author + '</span>' +
+            noteIdLabel +
             timeHtml +
             devPill +
             replyBtn +
