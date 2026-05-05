@@ -1218,8 +1218,14 @@ def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
         import time as _t
         _t0 = _t.time()
         if len(candidates) > MAX_PREFILTER_CANDIDATES:
-            print(f"[timing:{requirement['id']}] capping {len(candidates)} → {MAX_PREFILTER_CANDIDATES} candidates", file=sys.stderr, flush=True)
-            candidates = candidates[-MAX_PREFILTER_CANDIDATES:]
+            # Evenly sample across the full range instead of taking the most
+            # recent N. Recency bias causes wrong-stage photos to be selected
+            # when crews upload out of order (e.g. pre-rail photos added after
+            # post-rail completion, pushing the good ones out of the tail).
+            total = len(candidates)
+            step = total / MAX_PREFILTER_CANDIDATES
+            candidates = [candidates[int(i * step)] for i in range(MAX_PREFILTER_CANDIDATES)]
+            print(f"[timing:{requirement['id']}] evenly sampled {total} → {MAX_PREFILTER_CANDIDATES} candidates", file=sys.stderr, flush=True)
         print(f"[timing:{requirement['id']}] starting prefilter with {len(candidates)} candidates", file=sys.stderr, flush=True)
         keep_indices = _haiku_prefilter(candidates, requirement)
         print(f"[timing:{requirement['id']}] prefilter done in {_t.time()-_t0:.1f}s → {len(keep_indices)} kept", file=sys.stderr, flush=True)

@@ -1552,27 +1552,59 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
     }}
 
     // ── Lightbox ──
-    function openLightbox(url) {{
-      const lb = document.getElementById('photoLightbox');
+    // Lightbox state — tracks the sibling photos so arrows can navigate
+    let _lbUrls = [];
+    let _lbIdx  = 0;
+
+    function openLightbox(url, siblingUrls) {{
+      const lb  = document.getElementById('photoLightbox');
       const img = document.getElementById('photoLightboxImg');
       if (!lb || !img) return;
-      img.src = url;
+      _lbUrls = siblingUrls && siblingUrls.length > 1 ? siblingUrls : [url];
+      _lbIdx  = _lbUrls.indexOf(url);
+      if (_lbIdx < 0) _lbIdx = 0;
+      img.src = _lbUrls[_lbIdx];
       lb.style.display = 'flex';
       document.body.style.overflow = 'hidden';
+      _updateLightboxNav();
     }}
+
+    function _updateLightboxNav() {{
+      const prev = document.getElementById('lbPrev');
+      const next = document.getElementById('lbNext');
+      const ctr  = document.getElementById('lbCounter');
+      if (!prev || !next) return;
+      const multi = _lbUrls.length > 1;
+      prev.style.display = multi ? 'flex' : 'none';
+      next.style.display = multi ? 'flex' : 'none';
+      if (ctr) ctr.textContent = multi ? (_lbIdx + 1) + ' / ' + _lbUrls.length : '';
+      prev.style.opacity = _lbIdx === 0 ? '0.3' : '1';
+      next.style.opacity = _lbIdx === _lbUrls.length - 1 ? '0.3' : '1';
+    }}
+
+    function lbNavigate(dir) {{
+      const img = document.getElementById('photoLightboxImg');
+      if (!img) return;
+      _lbIdx = Math.max(0, Math.min(_lbUrls.length - 1, _lbIdx + dir));
+      img.src = _lbUrls[_lbIdx];
+      _updateLightboxNav();
+    }}
+
     function closeLightbox(ev) {{
-      // Only close when clicking the backdrop (not the image itself)
       if (ev && ev.target === document.getElementById('photoLightboxImg')) return;
       const lb = document.getElementById('photoLightbox');
       if (lb) lb.style.display = 'none';
       document.body.style.overflow = '';
+      _lbUrls = []; _lbIdx = 0;
     }}
+
     document.addEventListener('keydown', function(e) {{
+      if (document.getElementById('photoLightbox').style.display === 'none') return;
       if (e.key === 'Escape') closeLightbox();
+      else if (e.key === 'ArrowLeft')  lbNavigate(-1);
+      else if (e.key === 'ArrowRight') lbNavigate(1);
     }});
-    // Intercept all photo links on the page and open lightbox instead
-    // of a new tab. Runs after DOM is ready; also called after dynamic
-    // content is injected (reference photos, etc.).
+
     function rewirePhotoLinks(root) {{
       root = root || document;
       root.querySelectorAll('a.req-photo-link, .req-reference-photos a').forEach(function(a) {{
@@ -1581,7 +1613,11 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
         a.addEventListener('click', function(e) {{
           e.preventDefault();
           e.stopPropagation();
-          openLightbox(a.href);
+          // Collect sibling photo links from the same container for navigation
+          const container = a.closest('[data-role="photo-container"]') || a.closest('.req-reference-photos') || root;
+          const siblings = Array.from(container.querySelectorAll('a.req-photo-link, .req-reference-photos a'))
+            .map(function(s) {{ return s.href; }}).filter(Boolean);
+          openLightbox(a.href, siblings);
         }});
       }});
     }}
@@ -1809,7 +1845,10 @@ def generate_html(report: dict, project: dict) -> str:
        backdrop, the X button, or pressing Escape. -->
   <div id="photoLightbox" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:999;align-items:center;justify-content:center;" onclick="closeLightbox(event)">
     <button onclick="closeLightbox()" aria-label="Close" style="position:absolute;top:16px;right:20px;background:none;border:none;color:#fff;font-size:28px;cursor:pointer;line-height:1;padding:4px 8px;opacity:0.8;">&#x2715;</button>
-    <img id="photoLightboxImg" src="" alt="" style="max-width:90vw;max-height:88vh;object-fit:contain;border-radius:6px;box-shadow:0 8px 40px rgba(0,0,0,0.6);" onclick="event.stopPropagation()">
+    <span id="lbCounter" style="position:absolute;top:20px;left:50%;transform:translateX(-50%);color:#fff;font-size:13px;opacity:0.7;pointer-events:none;"></span>
+    <button id="lbPrev" onclick="event.stopPropagation();lbNavigate(-1)" aria-label="Previous" style="display:none;position:absolute;left:16px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,0.5);border:none;color:#fff;font-size:28px;cursor:pointer;width:48px;height:48px;border-radius:50%;align-items:center;justify-content:center;">&#8592;</button>
+    <button id="lbNext" onclick="event.stopPropagation();lbNavigate(1)" aria-label="Next" style="display:none;position:absolute;right:16px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,0.5);border:none;color:#fff;font-size:28px;cursor:pointer;width:48px;height:48px;border-radius:50%;align-items:center;justify-content:center;">&#8594;</button>
+    <img id="photoLightboxImg" src="" alt="" style="max-width:86vw;max-height:88vh;object-fit:contain;border-radius:6px;box-shadow:0 8px 40px rgba(0,0,0,0.6);" onclick="event.stopPropagation()">
   </div>
 
   <!-- Photo picker modal — reviewer+ only, opened by "Select photo" button -->
