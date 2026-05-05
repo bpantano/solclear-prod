@@ -1287,6 +1287,7 @@ def check_candidates_with_vision(candidates: list, requirement: dict) -> dict:
     # part of the evidence set. Keep task-order indexing so photo_urls[1] is
     # just "first screenshot" (a stable, predictable reference).
     all_photo_captions = {}  # populated in single-winner path when EVIDENCE line is present
+    photo_descs = {}         # populated in single-winner path from Sonnet's Step 1 output
     if requirement.get("criteria"):
         all_photo_urls = {}
         for i, photo in enumerate(candidates):
