@@ -423,10 +423,15 @@ REQUIREMENTS = [
         "task_titles": ["MSP Label", "Full Bus Bar / All Breakers"],
         "keywords": ["MSP label", "full bus bar", "all breakers", "busbar", "bus rating", "panel label"],
         "validation_prompt": (
-            "This photo should show the main panel's busbar rating label/sticker. "
-            "Verify: (1) Is a panel label or sticker present? (2) Can the busbar rating be identified? "
-            "PASS if the label is visible, even if zooming would be needed. "
-            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
+            "This photo should show the Main Service Panel (MSP) label or sticker that documents "
+            "the busbar amperage rating (e.g. '200A Bus', '400A Bus', etc.).\n\n"
+            "PASS if: the MSP label or rating sticker is visible AND the busbar amperage rating "
+            "value is clearly legible in the photo.\n"
+            "NEEDS_REVIEW if: a label or sticker is present but the amperage rating is not clearly "
+            "readable due to glare, distance, angle, or image quality.\n"
+            "FAIL if: no panel label is visible, or the photo does not show a main service panel.\n\n"
+            "Work through what you see, then end your response with a final line: "
+            "VERDICT: PASS or VERDICT: FAIL or VERDICT: NEEDS_REVIEW."
         ),
     },
     {
@@ -437,12 +442,18 @@ REQUIREMENTS = [
         "task_titles": ["Backfeed Breaker", "Meter Enclosure"],
         "keywords": ["backfeed breaker", "meter enclosure", "POI", "IPC", "lug", "interconnection"],
         "validation_prompt": (
-            "This photo should show the point of interconnection — a view of IPCs, parallel lugs, "
-            "distribution blocks, breakers, or wire terminations. "
-            "Verify: (1) Are interconnection components visible? (2) Can termination points be seen? "
-            "PASS if the photo documents the point of interconnection. A single well-framed photo showing "
-            "the components is sufficient — do not require both a pullback and close-up in one photo. "
-            "Work through what you see, then end your response with a final line: VERDICT: PASS or VERDICT: FAIL."
+            "This photo should document the Point of Interconnection (POI) — the physical location "
+            "where the solar system connects to the utility grid.\n\n"
+            "Valid POI documentation includes any of the following:\n"
+            "- A dedicated PV breaker installed in the main service panel (most common on residential)\n"
+            "- IPCs (interconnect protection components), parallel lugs, or distribution blocks\n"
+            "- A backfeed breaker, meter enclosure interconnection, or utility disconnect\n\n"
+            "PASS if: any of the above POI components are clearly visible and documented.\n"
+            "NEEDS_REVIEW if: components are present but the photo is unclear or ambiguous about "
+            "whether this is the actual interconnection point.\n"
+            "FAIL if: no POI component is visible, or the photo shows something unrelated.\n\n"
+            "Work through what you see, then end your response with a final line: "
+            "VERDICT: PASS or VERDICT: FAIL or VERDICT: NEEDS_REVIEW."
         ),
     },
     {

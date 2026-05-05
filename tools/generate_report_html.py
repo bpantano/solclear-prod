@@ -353,8 +353,9 @@ def render_section(section_name: str, reqs: list, is_interactive: bool,
     failed = sum(1 for r in applicable if r["status"] in _FAILURE_STATUSES)
     review = sum(1 for r in applicable if r["status"] == "NEEDS_REVIEW")
 
-    sorted_reqs = sorted(applicable, key=lambda r: _STATUS_SORT_ORDER.get(r["status"], 5))
-    rows = "".join(render_requirement(r, is_interactive, checklist_id, project_id) for r in sorted_reqs)
+    # Render in natural requirement code order so "All" tab is predictable.
+    # "Needs attention" tab filters by JS show/hide without reordering.
+    rows = "".join(render_requirement(r, is_interactive, checklist_id, project_id) for r in applicable)
 
     # score-clean only when fully clean; score-review when only review items remain;
     # score-issues for hard failures (which take priority over review).
