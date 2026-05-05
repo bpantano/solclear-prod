@@ -279,9 +279,11 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       padding: 0; -webkit-tap-highlight-color: transparent;
       border-radius: 8px;
     }
-    .theme-toggle:hover { background: rgba(255,255,255,0.08); }
+    .theme-toggle:hover { background: rgba(128,128,128,0.15); }
     .theme-toggle svg { width: 20px; height: 20px; }
-    .mobile-top-bar .theme-toggle { color: var(--text-inverse); }
+    /* Header/sidebar are always dark — force icon to white regardless of theme */
+    .mobile-top-bar .theme-toggle { color: #fff !important; }
+    [data-theme="dark"] #sidebarThemeBtn { color: #fff; }
 
     /* Header actions cluster (bell + theme toggle, etc.) */
     .header-actions { display: flex; align-items: center; gap: 4px; }
@@ -961,7 +963,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <!-- Action cards -->
     <div class="home-cards">
       <div class="home-card" onclick="showStep(1)">
-        <div class="home-card-icon" style="background:#eff6ff;color:#3b82f6;">
+        <div class="home-card-icon" style="background:var(--accent-subtle);color:var(--accent);">
           <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </div>
         <div class="home-card-text">
@@ -972,7 +974,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       </div>
 
       <div class="home-card" onclick="showStep('reports')">
-        <div class="home-card-icon" style="background:#ecfdf5;color:#10b981;">
+        <div class="home-card-icon" style="background:var(--success-subtle);color:var(--success);">
           <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
         </div>
         <div class="home-card-text">
@@ -997,7 +999,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <!-- Recent reports preview -->
     <div style="margin-top:28px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-        <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.1em;color:#9ca3af;font-weight:600;">Latest Reports</div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-muted);font-weight:600;">Latest Reports</div>
         <button onclick="showStep('reports')" style="background:none;border:none;color:#3b82f6;font-size:12px;font-weight:500;cursor:pointer;">View all</button>
       </div>
       <div id="homeRecentList"></div>
@@ -1070,7 +1072,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <button class="back-btn" onclick="showStep(2)">&larr; Back to checklists</button>
     <div class="step-label">Step 3 — Select Manufacturer</div>
     <div id="selectedProjectName2" style="font-weight:600; margin-bottom:4px;"></div>
-    <div id="selectedChecklistName" style="font-size:12px; color:#6b7280; margin-bottom:16px;"></div>
+    <div id="selectedChecklistName" style="font-size:12px; color:var(--text-muted); margin-bottom:16px;"></div>
 
     <div class="param-group">
       <label>Inverter / Equipment Manufacturer</label>
@@ -1081,7 +1083,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
       </div>
     </div>
 
-    <div id="derivedInfo" style="background:#f0fdf4; border-radius:8px; padding:12px 16px; margin-top:12px; font-size:12px; color:#065f46; display:none;">
+    <div id="derivedInfo" style="background:var(--success-subtle); border-radius:8px; padding:12px 16px; margin-top:12px; font-size:12px; color:var(--success-text); display:none;">
       Battery, backup, incentive state, and portal access will be auto-detected from the checklist.
     </div>
 

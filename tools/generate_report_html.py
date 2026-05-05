@@ -396,11 +396,11 @@ def _report_style_block() -> str:
     }
     .report-topbar a:hover { color: #fff; }
     .theme-toggle {
-      background: none; border: none; color: inherit; cursor: pointer;
+      background: none; border: none; color: #fff; cursor: pointer;
       width: 40px; height: 40px; display: flex; align-items: center; justify-content: center;
       border-radius: 8px;
     }
-    .theme-toggle:hover { background: rgba(255,255,255,0.08); }
+    .theme-toggle:hover { background: rgba(128,128,128,0.2); }
     .theme-toggle svg { width: 20px; height: 20px; }
 
     /* Sticky summary card */
@@ -676,14 +676,14 @@ def _report_style_block() -> str:
     }
     .btn-note-reply {
       margin-left: auto; background: none;
-      border: 1px solid var(--border); border-radius: 4px;
-      color: var(--text-muted); font-size: 11px; cursor: pointer;
-      padding: 2px 8px; font-weight: 500; white-space: nowrap;
+      border: 1px solid currentColor; border-radius: 4px;
+      color: var(--text-secondary); font-size: 11px; cursor: pointer;
+      padding: 2px 8px; font-weight: 500; white-space: nowrap; opacity: 0.75;
     }
-    .btn-note-reply:hover {
-      border-color: var(--accent); color: var(--accent);
-      background: none;
-    }
+    .btn-note-reply:hover { opacity: 1; color: var(--accent); }
+    /* On dev notes (amber bg), use the warning text color so button is legible */
+    .note-dev .btn-note-reply { color: var(--warning-text); }
+    .note-dev .btn-note-reply:hover { color: var(--warning-text); opacity: 1; }
     .note-reply-editor {
       margin-left: 20px; margin-top: 4px;
       padding: 8px 10px; background: var(--bg-card);
