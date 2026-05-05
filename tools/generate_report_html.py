@@ -614,7 +614,7 @@ def _report_style_block() -> str:
        Desktop wide lines rarely overflow 3 lines so the pill stays hidden. */
     .reason-expandable {
       display: -webkit-box;
-      -webkit-line-clamp: 3;
+      -webkit-line-clamp: 5;
       -webkit-box-orient: vertical;
       overflow: hidden;
       cursor: pointer;
@@ -1225,6 +1225,11 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
           const linked = _linkifyPhotos(data.reason, data.photo_urls || {{}});
           reasonContainer.innerHTML = '<div class="reason-expandable" onclick="expandReason(event,this)">' + linked + '</div>';
           if (typeof initExpandableReasons === 'function') initExpandableReasons(reasonContainer);
+          // Auto-translate new reason text if user is in Spanish mode
+          const reasonEl = reasonContainer.querySelector('.reason-expandable');
+          if (reasonEl && typeof translateSingleReason === 'function') {{
+            translateSingleReason(reasonEl, data.reason);
+          }}
         }} else {{
           reasonContainer.innerHTML = '';
         }}
@@ -1552,6 +1557,159 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
       return div.innerHTML;
     }}
 
+    // ── Spanish translation ───────────────────────────────────────────────────
+    let _REPORT_LANG = localStorage.getItem('solclear-lang') || 'en';
+
+    function setReportLang(lang) {{
+      _REPORT_LANG = lang;
+      localStorage.setItem('solclear-lang', lang);
+      _updateReportLangToggle();
+      translateReport();
+    }}
+
+    function _updateReportLangToggle() {{
+      ['reportLangEN','reportLangES'].forEach(function(id) {{
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        const isActive = id === 'reportLangEN' ? _REPORT_LANG === 'en' : _REPORT_LANG === 'es';
+        btn.style.opacity = isActive ? '1' : '0.45';
+        btn.style.fontWeight = isActive ? '800' : '600';
+      }});
+    }}
+
+    _updateReportLangToggle();
+    function _translateCacheKey() {{ return 'translations-report-' + REPORT_ID + '-' + _REPORT_LANG; }}
+
+    // Static badge/label translations for the report page
+    const _REPORT_ES = {{
+      'PASS': 'APROBADO', 'FAIL': 'FALLIDO', 'MISSING': 'FALTANTE',
+      'NEEDS REVIEW': 'REQUIERE REVISIÓN', 'ERROR': 'ERROR',
+      'Needs attention': 'Requiere atención', 'Passed': 'Aprobados', 'All': 'Todos',
+      'ACTION REQUIRED': 'SE REQUIERE ACCIÓN', 'READY FOR SUBMISSION': 'LISTO PARA ENVIAR',
+      'CANCELLED — PARTIAL RESULTS': 'CANCELADO — RESULTADOS PARCIALES',
+      'Open in CompanyCam ↗': 'Abrir en CompanyCam ↗',
+      'Mark resolved': 'Marcar como resuelto', 'Undo resolve': 'Deshacer resolución',
+      'Add note': 'Agregar nota', 'Flag bug': 'Reportar error',
+      'Select photo': 'Seleccionar foto', 'Re-check': 'Revisar de nuevo',
+      'Reply': 'Responder', 'See Palmetto reference': 'Ver referencia de Palmetto',
+      'Resolved': 'Resuelto', 'Manual': 'Manual', 'Back to Solclear': 'Volver a Solclear',
+    }};
+
+    async function translateReport() {{
+      // Static label swap (both directions)
+      document.querySelectorAll(
+        '.report-tab, .btn, .badge, .done-label, .report-topbar a, .req-actions button, .req-actions a'
+      ).forEach(function(el) {{
+        const orig = el.dataset.enText;
+        if (_REPORT_LANG === 'en' && orig) {{
+          el.textContent = orig;
+          return;
+        }}
+        const txt = el.dataset.enText || el.textContent.trim();
+        if (!el.dataset.enText) el.dataset.enText = txt; // save original on first pass
+        if (_REPORT_LANG === 'es' && _REPORT_ES[txt]) el.textContent = _REPORT_ES[txt];
+      }});
+
+      // Dynamic elements (reason text + notes)
+      const reasonEls = Array.from(document.querySelectorAll('.reason-expandable'));
+      const noteEls   = Array.from(document.querySelectorAll('.req-note-body'));
+      const allEls    = [...reasonEls, ...noteEls];
+
+      // Save original English text on first pass
+      allEls.forEach(function(el) {{
+        if (!el.dataset.enText) el.dataset.enText = el.textContent.trim();
+      }});
+
+      // Restore English
+      if (_REPORT_LANG === 'en') {{
+        allEls.forEach(function(el) {{
+          if (el.dataset.enText) {{ el.textContent = el.dataset.enText; delete el.dataset.initialized; }}
+        }});
+        setTimeout(function() {{
+          if (typeof initExpandableReasons === 'function') initExpandableReasons();
+        }}, 50);
+        return;
+      }}
+
+      // Strip "Read more ↩" pill text injected by initExpandableReasons before translating
+      const allTexts = allEls.map(function(el) {{
+        const raw = el.dataset.enText || el.textContent.trim();
+        return raw.replace(/\s*Read more\s*\S*\s*$/i, '').trim();
+      }});
+      console.log('[translate] elements found:', allEls.length, 'texts:', allTexts.slice(0,2));
+      if (!allTexts.length) return;
+
+      // Check session cache first
+      let cached = null;
+      try {{ cached = JSON.parse(sessionStorage.getItem(_translateCacheKey())); }} catch(e) {{}}
+      if (cached && cached.length === allTexts.length) {{
+        allEls.forEach(function(el, i) {{
+          if (cached[i]) {{ el.textContent = cached[i]; delete el.dataset.initialized; }}
+        }});
+        setTimeout(function() {{
+          if (typeof initExpandableReasons === 'function') initExpandableReasons();
+        }}, 50);
+        return;
+      }}
+
+      // Fetch translations from server (single batched Haiku call)
+      try {{
+        const r = await fetch('/api/translate', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{texts: allTexts, lang: _REPORT_LANG, report_id: REPORT_ID}})
+        }});
+        if (!r.ok) {{
+          const errText = await r.text();
+          console.error('[translate] server error', r.status, errText);
+          return;
+        }}
+        const data = await r.json();
+        const translations = data.translations;
+        if (!translations || translations.length !== allTexts.length) {{
+          console.error('[translate] bad response:', data);
+          return;
+        }}
+        allEls.forEach(function(el, i) {{
+          if (translations[i]) {{
+            el.textContent = translations[i];
+            delete el.dataset.initialized; // allow re-init of expand pill
+          }}
+        }});
+        try {{ sessionStorage.setItem(_translateCacheKey(), JSON.stringify(translations)); }} catch(e) {{}}
+        // Re-init expand pills after DOM settles (textContent wipe removed them)
+        setTimeout(function() {{
+          if (typeof initExpandableReasons === 'function') initExpandableReasons();
+        }}, 50);
+      }} catch(e) {{
+        console.error('[translate] fetch error:', e);
+        // Try to read the error body
+        try {{ e.response && e.response.text().then(function(t) {{ console.error('[translate] server said:', t); }}); }} catch(_) {{}}
+      }}
+    }}
+
+    async function translateSingleReason(el, text) {{
+      if (_REPORT_LANG === 'en' || !el || !text) return;
+      try {{
+        const r = await fetch('/api/translate', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{texts: [text], lang: _REPORT_LANG, report_id: REPORT_ID}})
+        }});
+        const data = await r.json();
+        if (data.translations && data.translations[0]) {{
+          el.textContent = data.translations[0];
+          // Update session cache
+          try {{
+            const cached = JSON.parse(sessionStorage.getItem(_translateCacheKey()) || '[]');
+            sessionStorage.setItem(_translateCacheKey(), JSON.stringify([...cached, data.translations[0]]));
+          }} catch(e) {{}}
+        }}
+      }} catch(e) {{}}
+    }}
+
+    document.addEventListener('DOMContentLoaded', function() {{ translateReport(); }});
+
     // ── Lightbox ──
     // Lightbox state — tracks the sibling photos so arrows can navigate
     let _lbUrls = [];
@@ -1801,10 +1959,16 @@ def generate_html(report: dict, project: dict) -> str:
 
   <header class="report-topbar">
     <a href="/"><span>&larr;</span> Back to Solclear</a>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <div style="display:flex;border:1px solid rgba(255,255,255,0.3);border-radius:6px;overflow:hidden;font-size:11px;font-weight:700;">
+        <button id="reportLangEN" onclick="setReportLang('en')" style="padding:3px 8px;border:none;cursor:pointer;color:#fff;background:transparent;">EN</button>
+        <button id="reportLangES" onclick="setReportLang('es')" style="padding:3px 8px;border:none;border-left:1px solid rgba(255,255,255,0.3);cursor:pointer;color:#fff;background:transparent;">ES</button>
+      </div>
     <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle dark mode">
       <svg id="themeIconSun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
       <svg id="themeIconMoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:none;"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
     </button>
+    </div>
   </header>
 
   <div class="report-summary {summary_class}">

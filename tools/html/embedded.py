@@ -197,7 +197,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 
     .mobile-top-bar {
       background: var(--header-bg); color: var(--text-inverse); padding: 12px 20px;
-      display: grid; grid-template-columns: 44px 1fr 44px; align-items: center;
+      display: grid; grid-template-columns: 72px 1fr 80px; align-items: center;
     }
     .mobile-top-bar .logo-center { display: flex; justify-content: center; }
 
@@ -798,15 +798,15 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     </div>
     <button class="nav-item" data-nav="home" onclick="navigate('home')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l9-9 9 9"/><path d="M5 10v10h14V10"/></svg>
-      Home
+      <span data-i18n="Home">Home</span>
     </button>
     <button class="nav-item" data-nav="check" onclick="navigate('check')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M7 12h10"/></svg>
-      New Check
+      <span data-i18n="New Check">New Check</span>
     </button>
     <button class="nav-item" data-nav="reports" onclick="navigate('reports')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
-      Reports
+      <span data-i18n="Reports">Reports</span>
     </button>
 
     <!-- Section label gets set by loadMe() to the user's actual role
@@ -819,50 +819,62 @@ EMBEDDED_HTML = """<!DOCTYPE html>
          once crews go live. Same toggleBellPanel as the mobile bell. -->
     <button class="nav-item" id="sidebarBellBtn" onclick="toggleBellPanel(event)" title="Notifications">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-      <span style="flex:1;">Notifications</span>
+      <span style="flex:1;" data-i18n="Notifications">Notifications</span>
       <span id="sidebarBellBadge" style="display:none;background:var(--danger);color:#fff;font-size:10px;font-weight:700;min-width:18px;height:18px;padding:0 5px;border-radius:9px;align-items:center;justify-content:center;line-height:1;">0</span>
     </button>
     <button class="nav-item reviewer-plus" data-nav="orgs" onclick="navigate('orgs')" style="display:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1"/><path d="M9 8h1M9 12h1M9 16h1M14 8h1M14 12h1M14 16h1M3 21h18"/></svg>
-      Organizations
+      <span data-i18n="Organizations">Organizations</span>
     </button>
     <button class="nav-item reviewer-plus" data-nav="reqs" onclick="navigate('reqs')" style="display:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2h11"/></svg>
-      Requirements
+      <span data-i18n="Requirements">Requirements</span>
     </button>
     <button class="nav-item admin-write" data-nav="costs" onclick="navigate('costs')" style="display:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-      Analytics
+      <span data-i18n="Analytics">Analytics</span>
     </button>
     <!-- Dev Notes triage tab — superadmin only. The badge shows the
          count of open (awaiting triage) dev notes, refreshed alongside
          the bell. -->
     <button class="nav-item superadmin-only" data-nav="devnotes" onclick="navigate('devnotes')" style="display:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 13h6M9 17h4"/></svg>
-      <span style="flex:1;">Dev Notes</span>
+      <span style="flex:1;" data-i18n="Dev Notes">Dev Notes</span>
       <span id="sidebarDevNotesBadge" style="display:none;background:var(--warning);color:var(--text-inverse);font-size:10px;font-weight:700;min-width:18px;height:18px;padding:0 5px;border-radius:9px;align-items:center;justify-content:center;line-height:1;">0</span>
     </button>
 
     <div class="sidebar-footer">
+      <div class="nav-item" style="cursor:default;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;flex-shrink:0;"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20"/></svg>
+        <div id="langToggle" style="display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;font-size:12px;font-weight:600;">
+          <button id="langBtnEN" onclick="setLang('en')" style="padding:3px 10px;border:none;cursor:pointer;transition:background 0.15s,color 0.15s;">EN</button>
+          <button id="langBtnES" onclick="setLang('es')" style="padding:3px 10px;border:none;border-left:1px solid var(--border);cursor:pointer;transition:background 0.15s,color 0.15s;">ES</button>
+        </div>
+      </div>
       <button class="nav-item" onclick="toggleTheme()" id="sidebarThemeBtn">
         <svg id="sidebarThemeIconSun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
         <svg id="sidebarThemeIconMoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:none;"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-        <span id="sidebarThemeLabel">Dark mode</span>
+        <span id="sidebarThemeLabel" data-i18n="Dark mode">Dark mode</span>
       </button>
       <a class="nav-item" href="/change-password" style="text-decoration:none;">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-        Change Password
+        <span data-i18n="Change Password">Change Password</span>
       </a>
       <a class="nav-item nav-item-danger" href="/logout" style="text-decoration:none;">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
-        Sign Out
+        <span data-i18n="Sign Out">Sign Out</span>
       </a>
     </div>
   </aside>
 
   <!-- Mobile top bar (<1024px) -->
   <header class="mobile-top-bar">
-    <div></div>
+    <div style="display:flex;align-items:center;">
+      <div style="display:flex;border:1px solid rgba(255,255,255,0.3);border-radius:6px;overflow:hidden;font-size:11px;font-weight:700;">
+        <button id="mobileLangBtnEN" onclick="setLang('en')" style="padding:3px 8px;border:none;cursor:pointer;color:#fff;background:transparent;">EN</button>
+        <button id="mobileLangBtnES" onclick="setLang('es')" style="padding:3px 8px;border:none;border-left:1px solid rgba(255,255,255,0.3);cursor:pointer;color:#fff;background:transparent;">ES</button>
+      </div>
+    </div>
     <div class="logo-center">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 160" height="42" style="flex-shrink:0;" role="img" aria-label="Solclear">
         <g transform="translate(24,36)"><circle cx="44" cy="40" r="12" fill="#F59E0B"/><path d="M16 76 A 28 28 0 0 1 72 76" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round"/></g>
@@ -956,8 +968,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     </div>
 
     <div style="padding:4px 0 20px;">
-      <div style="font-size:15px;font-weight:600;color:var(--text);">Welcome to Solclear</div>
-      <div style="font-size:12px;color:var(--text-muted);">Solar compliance, simplified.</div>
+      <div style="font-size:15px;font-weight:600;color:var(--text);" data-i18n="Welcome to Solclear">Welcome to Solclear</div>
+      <div style="font-size:12px;color:var(--text-muted);" data-i18n="Solar compliance, simplified.">Solar compliance, simplified.</div>
     </div>
 
     <!-- Action cards -->
@@ -967,8 +979,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </div>
         <div class="home-card-text">
-          <div class="home-card-title">New Compliance Check</div>
-          <div class="home-card-desc">Run a photo compliance check on a project</div>
+          <div class="home-card-title" data-i18n="New Compliance Check">New Compliance Check</div>
+          <div class="home-card-desc" data-i18n="Run a photo compliance check on a project">Run a photo compliance check on a project</div>
         </div>
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#9ca3af" stroke-width="2" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg>
       </div>
@@ -978,8 +990,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
         </div>
         <div class="home-card-text">
-          <div class="home-card-title">Recent Reports</div>
-          <div class="home-card-desc">View and share previous compliance results</div>
+          <div class="home-card-title" data-i18n="Recent Reports">Recent Reports</div>
+          <div class="home-card-desc" data-i18n="View and share previous compliance results">View and share previous compliance results</div>
         </div>
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#9ca3af" stroke-width="2" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg>
       </div>
@@ -989,8 +1001,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
           <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 21h18M9 8h1M9 12h1M9 16h1M14 8h1M14 12h1M14 16h1"/><rect x="5" y="3" width="14" height="18" rx="1"/></svg>
         </div>
         <div class="home-card-text">
-          <div class="home-card-title">Organizations</div>
-          <div class="home-card-desc">Manage companies, users, and settings</div>
+          <div class="home-card-title" data-i18n="Organizations">Organizations</div>
+          <div class="home-card-desc" data-i18n="Manage companies, users, and settings">Manage companies, users, and settings</div>
         </div>
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg>
       </div>
@@ -999,8 +1011,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <!-- Recent reports preview -->
     <div style="margin-top:28px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-        <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-muted);font-weight:600;">Latest Reports</div>
-        <button onclick="showStep('reports')" style="background:none;border:none;color:#3b82f6;font-size:12px;font-weight:500;cursor:pointer;">View all</button>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-muted);font-weight:600;" data-i18n="Latest Reports">Latest Reports</div>
+        <button onclick="showStep('reports')" style="background:none;border:none;color:var(--accent);font-size:12px;font-weight:500;cursor:pointer;" data-i18n="View all">View all</button>
       </div>
       <div id="homeRecentList"></div>
     </div>
@@ -1437,19 +1449,19 @@ EMBEDDED_HTML = """<!DOCTYPE html>
   <nav class="bottom-tabs" id="bottomTabs">
     <button class="tab-btn active" data-tab="home" onclick="navigate('home')" aria-label="Home">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l9-9 9 9"/><path d="M5 10v10h14V10"/></svg>
-      Home
+      <span data-i18n="Home">Home</span>
     </button>
     <button class="tab-btn" data-tab="check" onclick="navigate('check')" aria-label="New Check">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M7 12h10"/></svg>
-      Check
+      <span data-i18n="Check">Check</span>
     </button>
     <button class="tab-btn" data-tab="reports" onclick="navigate('reports')" aria-label="Reports">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
-      Reports
+      <span data-i18n="Reports">Reports</span>
     </button>
     <button class="tab-btn" data-tab="account" onclick="openAccountSheet()" aria-label="Account">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 016-6h4a6 6 0 016 6v1"/></svg>
-      Account
+      <span data-i18n="Account">Account</span>
     </button>
   </nav>
 
@@ -1463,24 +1475,32 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <div id="accountSheetRoleLabel" class="sidebar-section-label reviewer-plus" style="display:none;">Admin</div>
     <button class="nav-item reviewer-plus" onclick="closeAccountSheet();navigate('orgs')" style="display:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1"/><path d="M9 8h1M9 12h1M9 16h1M14 8h1M14 12h1M14 16h1M3 21h18"/></svg>
-      Organizations
+      <span data-i18n="Organizations">Organizations</span>
     </button>
     <button class="nav-item reviewer-plus" onclick="closeAccountSheet();navigate('reqs')" style="display:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2h11"/></svg>
-      Requirements
+      <span data-i18n="Requirements">Requirements</span>
     </button>
     <button class="nav-item admin-write" onclick="closeAccountSheet();navigate('costs')" style="display:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-      Analytics
+      <span data-i18n="Analytics">Analytics</span>
     </button>
-    <div class="sidebar-section-label">Account</div>
+    <div class="sidebar-section-label" data-i18n="Account">Account</div>
+    <!-- Language toggle for mobile -->
+    <div class="nav-item" style="cursor:default;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;flex-shrink:0;"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20"/></svg>
+      <div style="display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;font-size:12px;font-weight:600;">
+        <button id="mobileLangBtnEN" onclick="setLang('en')" style="padding:3px 10px;border:none;cursor:pointer;">EN</button>
+        <button id="mobileLangBtnES" onclick="setLang('es')" style="padding:3px 10px;border:none;border-left:1px solid var(--border);cursor:pointer;">ES</button>
+      </div>
+    </div>
     <a class="nav-item" href="/change-password" style="text-decoration:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-      Change Password
+      <span data-i18n="Change Password">Change Password</span>
     </a>
     <a class="nav-item nav-item-danger" href="/logout" style="text-decoration:none;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
-      Sign Out
+      <span data-i18n="Sign Out">Sign Out</span>
     </a>
   </aside>
 

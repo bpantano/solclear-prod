@@ -915,6 +915,8 @@ class LiveHandler(BaseHTTPRequestHandler):
             self._api_change_password(body, session)
         # Cancel the currently-running compliance check. Any authenticated
         # user can request it — there's only ever one running at a time.
+        elif path == "/api/translate":
+            self._api_translate(body, session)
         elif path == "/api/cancel":
             self._api_cancel_check(body)
         elif path == "/api/notifications/read-all":
@@ -1988,6 +1990,103 @@ class LiveHandler(BaseHTTPRequestHandler):
                 "manual_edits": manual,
             })
         except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_translate(self, body, session):
+        """Translate an array of texts to the requested language using Claude Haiku.
+        Costs are logged to api_call_log with purpose='translation' so they
+        appear in the Analytics cost dashboard alongside check costs.
+
+        Body: {"texts": [...], "lang": "es", "report_id": null}
+        Returns: {"translations": [...]}  — same length and order as input."""
+        if not session:
+            self._send_json({"error": "Not authenticated"}, 401)
+            return
+        try:
+            import json as _json
+            data = _json.loads(body) if body else {}
+            texts = data.get("texts") or []
+            lang = (data.get("lang") or "es").strip().lower()
+            report_id = data.get("report_id")
+
+            if not texts:
+                self._send_json({"translations": []})
+                return
+            if lang not in ("es",):
+                self._send_json({"error": f"Unsupported language: {lang}"}, 400)
+                return
+            if len(texts) > 100:
+                self._send_json({"error": "Maximum 100 texts per request"}, 400)
+                return
+
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            if not api_key:
+                self._send_json({"error": "Translation not configured"}, 503)
+                return
+
+            lang_name = {"es": "Spanish"}[lang]
+            prompt = (
+                f"Translate each string in the following JSON array to {lang_name}. "
+                f"Return ONLY a valid JSON array of the same length, in the same order. "
+                f"Preserve technical terms exactly as-is: PASS, FAIL, NEEDS_REVIEW, MISSING, ERROR, "
+                f"EGC, MSP, POI, CT, kW, kWh, AC, DC, IPC, LightReach, CompanyCam, Palmetto, Sonnet. "
+                f"Do not add explanations or any text outside the JSON array.\n\n"
+                f"Input: {_json.dumps(texts, ensure_ascii=False)}"
+            )
+
+            import time as _t
+            t0 = _t.time()
+            resp = http_requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-haiku-4-5-20251001",
+                    "max_tokens": max(500, len(texts) * 150),
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+                timeout=30,
+            )
+            duration_ms = int((_t.time() - t0) * 1000)
+            resp.raise_for_status()
+            result = resp.json()
+            raw = result.get("content", [{}])[0].get("text", "").strip()
+            # Extract JSON array even if Haiku wraps the output in prose
+            start, end = raw.find("["), raw.rfind("]")
+            if start != -1 and end != -1:
+                raw = raw[start:end + 1]
+            else:
+                raw = "[]"  # Haiku returned empty or non-JSON — fallback
+            translations = _json.loads(raw)
+            if not isinstance(translations, list) or len(translations) != len(texts):
+                translations = texts  # fallback to originals on bad response
+
+            # Log cost to api_call_log for Analytics visibility
+            try:
+                usage = result.get("usage", {})
+                in_tok  = usage.get("input_tokens", 0)
+                out_tok = usage.get("output_tokens", 0)
+                model   = result.get("model", "claude-haiku-4-5-20251001")
+                from tools.compliance_check import _calculate_cost
+                cost = _calculate_cost(model, in_tok, out_tok)
+                execute(
+                    """INSERT INTO api_call_log
+                       (report_id, requirement_code, purpose, model,
+                        input_tokens, output_tokens, cost_usd, duration_ms, called_at)
+                       VALUES (%s, NULL, 'translation', %s, %s, %s, %s, %s, NOW())""",
+                    (report_id, model, in_tok, out_tok, cost, duration_ms),
+                )
+            except Exception:
+                pass  # cost logging is best-effort
+
+            self._send_json({"translations": translations})
+        except Exception as e:
+            import traceback
+            print(f"[translate] ERROR: {e}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
             self._send_json({"error": str(e)}, 500)
 
     def _api_requirements_monitor(self):
@@ -3429,8 +3528,37 @@ class LiveHandler(BaseHTTPRequestHandler):
                 body=note_body,
                 parent_note_id=parent_note_id,
             )
-            # Notifications: new dev notes alert superadmins; replies notify
-            # thread participants. Public notes are silent (visible inline).
+            # Notify prior commenters on this requirement when any new non-reply
+            # note is added — covers public notes too so a response like
+            # Dylan's "Add note" still reaches previous commenters.
+            if not parent_note_id:
+                try:
+                    commenter_id = session.get("user_id")
+                    prior_commenters = fetch_all(
+                        """SELECT DISTINCT author_user_id FROM notes
+                           WHERE requirement_result_id = %s
+                             AND author_user_id != %s
+                             AND author_user_id IS NOT NULL
+                             AND id != %s""",
+                        (row["id"], commenter_id, created.get("id", 0)),
+                    )
+                    if prior_commenters:
+                        from tools.notifications import notify
+                        commenter = fetch_one(
+                            "SELECT full_name, email FROM users WHERE id = %s",
+                            (commenter_id,),
+                        ) or {}
+                        name = commenter.get("full_name") or commenter.get("email") or "Someone"
+                        snippet = note_body[:200] + ("..." if len(note_body) > 200 else "")
+                        link = f"/report/{report_id}"
+                        for pc in prior_commenters:
+                            notify(pc["author_user_id"], "note_on_requirement",
+                                   f"{name} commented on {req_code}",
+                                   snippet, link, send_email=True)
+                except Exception as e:
+                    print(f"notify prior commenters failed: {e}", file=sys.stderr)
+
+            # Dev note specific notifications
             if visibility == "dev" and not parent_note_id:
                 try:
                     from tools.notifications import notify_dev_note_filed

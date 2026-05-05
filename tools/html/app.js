@@ -50,6 +50,127 @@
       updateThemeIcon();
     })();
 
+    // ── Language toggle (EN / ES) ─────────────────────────────────────────────
+    const _ES = {
+      // Navigation
+      'Home': 'Inicio', 'New Check': 'Nueva revisión', 'Reports': 'Reportes',
+      'Notifications': 'Notificaciones', 'Analytics': 'Analítica',
+      'Organizations': 'Organizaciones', 'Requirements': 'Requisitos',
+      'Dev Notes': 'Notas de desarrollo', 'Dark mode': 'Modo oscuro',
+      'Light mode': 'Modo claro', 'Change Password': 'Cambiar contraseña',
+      'Sign Out': 'Cerrar sesión',
+      // Status badges
+      'PASS': 'APROBADO', 'FAIL': 'FALLIDO', 'MISSING': 'FALTANTE',
+      'NEEDS REVIEW': 'REQUIERE REVISIÓN', 'ERROR': 'ERROR',
+      'CANCELLED': 'CANCELADO', 'RUNNING': 'EN PROCESO',
+      // Report actions
+      'Open in CompanyCam ↗': 'Abrir en CompanyCam ↗',
+      'Mark resolved': 'Marcar como resuelto', 'Undo resolve': 'Deshacer resolución',
+      'Add note': 'Agregar nota', 'Flag bug': 'Reportar error',
+      'Select photo': 'Seleccionar foto', 'Re-check': 'Revisar de nuevo',
+      'Reply': 'Responder', 'Post reply': 'Publicar respuesta',
+      'Post note': 'Publicar nota', 'Cancel': 'Cancelar',
+      'See Palmetto reference': 'Ver referencia de Palmetto',
+      // Report header
+      'Needs attention': 'Requiere atención', 'Passed': 'Aprobados', 'All': 'Todos',
+      'ACTION REQUIRED': 'SE REQUIERE ACCIÓN', 'READY FOR SUBMISSION': 'LISTO PARA ENVIAR',
+      'Re-run failed items': 'Re-ejecutar elementos fallidos',
+      'Re-run': 'Re-ejecutar',
+      // Check flow
+      'Run Compliance Check': 'Ejecutar revisión de cumplimiento',
+      'Cancel checks': 'Cancelar revisiones', 'Cancelling…': 'Cancelando…',
+      'Starting...': 'Iniciando...', 'View Report': 'Ver reporte',
+      'View Partial Report': 'Ver reporte parcial',
+      'No projects found': 'No se encontraron proyectos',
+      'No reports yet. Run your first compliance check!': '¡Sin reportes aún. Ejecuta tu primera revisión!',
+      // Common UI
+      'Loading...': 'Cargando...', 'Save Changes': 'Guardar cambios',
+      'Resolved': 'Resuelto', 'Manual': 'Manual', 'Optional': 'Opcional',
+      'OPEN': 'ABIERTO', 'ACKNOWLEDGED': 'RECONOCIDO', 'CORRECTED': 'CORREGIDO',
+      // Sections
+      'ROOF': 'TECHO', 'ELECTRICAL': 'ELÉCTRICO', 'STORAGE': 'ALMACENAMIENTO',
+      'COMMISSIONING': 'PUESTA EN MARCHA', 'SITE IMPROVEMENTS': 'MEJORAS DEL SITIO',
+      'PROJECT SITE': 'SITIO DEL PROYECTO',
+      // Home page
+      'Welcome to Solclear': 'Bienvenido a Solclear',
+      'Solar compliance, simplified.': 'Cumplimiento solar, simplificado.',
+      'New Compliance Check': 'Nueva revisión de cumplimiento',
+      'Run a photo compliance check on a project': 'Ejecuta una revisión fotográfica en un proyecto',
+      'Recent Reports': 'Reportes recientes',
+      'View and share previous compliance results': 'Ver y compartir resultados de revisiones anteriores',
+      'Organizations': 'Organizaciones',
+      'Manage companies, users, and settings': 'Gestionar empresas, usuarios y configuraciones',
+      'Latest Reports': 'Últimos reportes',
+      'View all': 'Ver todos',
+      'Account': 'Cuenta', 'Check': 'Revisión',
+      // Report list
+      'No reports yet. Run your first compliance check!': '¡Sin reportes aún. Ejecuta tu primera revisión!',
+      'passed': 'aprobados', 'failed': 'fallidos', 'missing': 'faltantes', 'review': 'revisión',
+    };
+
+    let _currentLang = localStorage.getItem('solclear-lang') || 'en';
+
+    function setLang(lang) {
+      _currentLang = lang;
+      localStorage.setItem('solclear-lang', lang);
+      _applyLangToggle();
+    }
+
+    function _applyLangToggle() {
+      // Update pill button styles
+      const enBtn = document.getElementById('langBtnEN');
+      const esBtn = document.getElementById('langBtnES');
+      if (enBtn && esBtn) {
+        const activeStyle = 'padding:3px 10px;border:none;cursor:pointer;transition:background 0.15s,color 0.15s;background:var(--accent);color:#fff;font-weight:700;';
+        const inactiveStyle = 'padding:3px 10px;border:none;cursor:pointer;transition:background 0.15s,color 0.15s;background:var(--bg-subtle);color:var(--text-muted);font-weight:600;';
+        enBtn.style.cssText = _currentLang === 'en' ? activeStyle : inactiveStyle;
+        esBtn.style.cssText = _currentLang === 'es' ? activeStyle : inactiveStyle;
+        esBtn.style.borderLeft = '1px solid var(--border)';
+      }
+      // Update mobile top bar pill (always-dark header, use opacity for inactive)
+      ['mobileLangBtnEN', 'mobileLangBtnES'].forEach(function(id) {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        const isActive = (id === 'mobileLangBtnEN') ? _currentLang === 'en' : _currentLang === 'es';
+        btn.style.opacity = isActive ? '1' : '0.45';
+        btn.style.fontWeight = isActive ? '800' : '600';
+      });
+      // Update account sheet pill
+      const menBtn = document.getElementById('mobileSheetLangEN');
+      const mesBtn = document.getElementById('mobileSheetLangES');
+      if (menBtn && mesBtn) {
+        const activeStyle = 'padding:3px 10px;border:none;cursor:pointer;background:var(--accent);color:#fff;font-weight:700;';
+        const inactiveStyle = 'padding:3px 10px;border:none;cursor:pointer;background:var(--bg-subtle);color:var(--text-muted);font-weight:600;';
+        menBtn.style.cssText = _currentLang === 'en' ? activeStyle : inactiveStyle;
+        mesBtn.style.cssText = (_currentLang === 'es' ? activeStyle : inactiveStyle) + 'border-left:1px solid var(--border);';
+      }
+      // Swap all data-i18n elements
+      document.querySelectorAll('[data-i18n]').forEach(function(el) {
+        const key = el.dataset.i18n;
+        el.textContent = _currentLang === 'es' ? (_ES[key] || key) : key;
+      });
+      // Also update the sidebar theme label
+      const themeLabel = document.getElementById('sidebarThemeLabel');
+      if (themeLabel) {
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        themeLabel.textContent = _currentLang === 'es'
+          ? (isDark ? 'Modo claro' : 'Modo oscuro')
+          : (isDark ? 'Light mode' : 'Dark mode');
+      }
+    }
+
+    function t(str) {
+      if (_currentLang !== 'es') return str;
+      return _ES[str] || str;
+    }
+
+    // Apply saved lang on load
+    (function() {
+      const saved = localStorage.getItem('solclear-lang');
+      if (saved) _currentLang = saved;
+      _applyLangToggle();
+    })();
+
     // ── Nav/tab active state ──
     // Map step names to the tab/sidebar key they belong to (for active highlighting).
     const STEP_TO_NAV = {
