@@ -244,7 +244,7 @@ def notify_dev_note_reply(
         "report_id": parent_note.get("report_id"),
     }
     for uid in recipients:
-        notify(uid, "dev_note_reply", title, snippet, link, metadata, send_email=False)
+        notify(uid, "dev_note_reply", title, snippet, link, metadata, send_email=True)
 
 
 def notify_check_completed(

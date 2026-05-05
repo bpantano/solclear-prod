@@ -133,7 +133,7 @@ def _format_note_timestamp_utc_fallback(iso_ts: str) -> str:
         return iso_ts
 
 
-def _render_note(note: dict) -> str:
+def _render_note(note: dict, is_interactive: bool = False, code: str = "") -> str:
     """Render one note row in the comment thread. Notes are immutable, so
     there's no edit/delete UI — just author, timestamp, and body.
 
@@ -145,27 +145,42 @@ def _render_note(note: dict) -> str:
     Dev-visibility notes get the `note-dev` modifier class so reviewers
     can distinguish their bug-tracker comments from public crew notes.
     A pill shows the dev-status ('open', 'acknowledged', 'corrected')
-    when present."""
+    when present. `is_reply` renders the note indented without status pill.
+    `code` is needed to wire the Reply button onclick."""
     author = note.get("author_name") or note.get("author_email") or "Unknown author"
     iso = note.get("created_at", "") or ""
     fallback = _format_note_timestamp_utc_fallback(iso)
     body = _esc(note.get("body", ""))
     visibility = note.get("visibility") or "public"
+    is_reply = bool(note.get("parent_note_id"))
     visibility_cls = "note-dev" if visibility == "dev" else "note-public"
+    reply_cls = " note-reply" if is_reply else ""
     dev_pill = ""
-    if visibility == "dev":
+    if visibility == "dev" and not is_reply:
         status = note.get("dev_status") or "open"
         dev_pill = f'<span class="note-dev-pill note-dev-{_esc(status)}">{_esc(status.upper())}</span>'
     time_html = (
         f'<time class="ts-relative req-note-time" datetime="{_esc(iso)}">{_esc(fallback)}</time>'
         if iso else ""
     )
+    # Reply button — only on top-level dev notes in interactive reports
+    reply_btn = ""
+    note_id = note.get("id", "")
+    reply_btn = ""
+    if visibility == "dev" and not is_reply and is_interactive and code:
+        reply_btn = (
+            f'<button class="btn-note-reply reviewer-plus" style="display:none;" '
+            f'data-reply-note-id="{note_id}" data-reply-req-code="{_esc(code)}" '
+            f'onclick="event.stopPropagation();openReplyEditor(this.dataset.replyNoteId,this.dataset.replyReqCode)">'
+            f'Reply</button>'
+        )
     return (
-        f'<div class="req-note {visibility_cls}">'
+        f'<div class="req-note {visibility_cls}{reply_cls}" data-note-id="{_esc(str(note_id))}">'
         f'<div class="req-note-meta">'
         f'<span class="req-note-author">{_esc(author)}</span>'
         f'{time_html}'
         f'{dev_pill}'
+        f'{reply_btn}'
         f'</div>'
         f'<div class="req-note-body">{body}</div>'
         f'</div>'
@@ -240,9 +255,19 @@ def render_requirement(req: dict, is_interactive: bool, checklist_id: str, proje
     notes_thread = req.get("notes_thread") or []
     note_html = ""
     if notes_thread:
-        note_html = '<div class="req-notes-thread">' + "".join(
-            _render_note(n) for n in notes_thread
-        ) + '</div>'
+        # Group replies under their parent notes
+        top_level = [n for n in notes_thread if not n.get("parent_note_id")]
+        replies_by_parent: dict = {}
+        for n in notes_thread:
+            pid = n.get("parent_note_id")
+            if pid:
+                replies_by_parent.setdefault(pid, []).append(n)
+        parts = []
+        for n in top_level:
+            parts.append(_render_note(n, is_interactive=is_interactive, code=code))
+            for reply in replies_by_parent.get(n.get("id"), []):
+                parts.append(_render_note(reply, is_interactive=is_interactive, code=code))
+        note_html = '<div class="req-notes-thread">' + "".join(parts) + '</div>'
 
     # Actions — available on every interactive non-N/A row, including
     # PASS rows. Reviewers need to be able to flag a PASS that looks
@@ -644,6 +669,35 @@ def _report_style_block() -> str:
     .req-note-author { font-weight: 600; color: var(--text); }
     .req-note-time { opacity: 0.8; }
     .req-note-body { white-space: pre-wrap; }
+    .req-note.note-reply {
+      margin-left: 20px; margin-top: 4px;
+      border-left-color: var(--border); background: var(--bg-card);
+      font-size: var(--text-xs);
+    }
+    .btn-note-reply {
+      margin-left: auto; background: none;
+      border: 1px solid var(--border); border-radius: 4px;
+      color: var(--text-muted); font-size: 11px; cursor: pointer;
+      padding: 2px 8px; font-weight: 500; white-space: nowrap;
+    }
+    .btn-note-reply:hover {
+      border-color: var(--accent); color: var(--accent);
+      background: none;
+    }
+    .note-reply-editor {
+      margin-left: 20px; margin-top: 4px;
+      padding: 8px 10px; background: var(--bg-card);
+      border-radius: 6px; border: 1px solid var(--border);
+    }
+    .note-reply-editor textarea {
+      width: 100%; min-height: 56px; resize: vertical;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 4px; padding: 6px 8px; font-size: var(--text-xs);
+      color: var(--text); font-family: inherit;
+    }
+    .note-reply-editor-actions {
+      display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px;
+    }
     .note-dev-pill {
       display: inline-block; padding: 1px 6px; border-radius: 10px;
       font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
@@ -1288,7 +1342,7 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
           // Replace the entire thread with the refreshed version from
           // server. Includes the new note + any others added concurrently
           // by other users since the page loaded.
-          _replaceNotesThread(row, data.notes || []);
+          _replaceNotesThread(row, data.notes || [], reqCode);
           editor.remove();
         }} catch (e) {{
           alert('Could not post note: ' + e.message);
@@ -1297,7 +1351,8 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
       }};
     }}
 
-    function _replaceNotesThread(row, notes) {{
+    function _replaceNotesThread(row, notes, reqCode) {{
+      reqCode = reqCode || (row ? row.dataset.id : '');
       let thread = row.querySelector('.req-notes-thread');
       if (!thread) {{
         thread = document.createElement('div');
@@ -1305,40 +1360,106 @@ def _report_script_block(db_report_id, is_interactive, cc_url, failed_ids, param
         const actions = row.querySelector('.req-actions');
         row.insertBefore(thread, actions);
       }}
-      thread.innerHTML = notes.map(_renderNoteEl).join('');
-      // Localize fresh DOM so tooltips/relative format are correct
-      // immediately rather than waiting for the next 60s tick.
+      // Group replies under their parents
+      const topLevel = notes.filter(n => !n.parent_note_id);
+      const repliesByParent = {{}};
+      notes.filter(n => n.parent_note_id).forEach(n => {{
+        (repliesByParent[n.parent_note_id] = repliesByParent[n.parent_note_id] || []).push(n);
+      }});
+      const parts = [];
+      topLevel.forEach(n => {{
+        parts.push(_renderNoteEl(n, reqCode));
+        (repliesByParent[n.id] || []).forEach(r => parts.push(_renderNoteEl(r, reqCode)));
+      }});
+      thread.innerHTML = parts.join('');
       localizeTimestamps(thread);
+      // Re-apply role visibility so reply buttons show for reviewer+
+      if (typeof _me !== 'undefined' && _me) {{
+        const role = _me.role;
+        if (['superadmin','admin','reviewer'].includes(role)) {{
+          thread.querySelectorAll('.reviewer-plus').forEach(el => {{ el.style.display = ''; }});
+        }}
+      }}
       if (!notes.length) thread.remove();
     }}
 
-    function _renderNoteEl(n) {{
+    function _renderNoteEl(n, reqCode) {{
       const author = _esc(n.author_name || n.author_email || 'Unknown author');
       const iso = n.created_at || '';
-      // Emit <time class="ts-relative"> so the periodic localizeTimestamps()
-      // tick keeps the relative age fresh ("just now" → "1 min ago" → ...)
-      // for as long as the user has the page open.
       const timeHtml = iso
         ? '<time class="ts-relative req-note-time" datetime="' + _esc(iso) + '">' + _esc(formatTimestamp(iso)) + '</time>'
         : '';
       const body = _esc(n.body || '');
       const isDev = n.visibility === 'dev';
+      const isReply = !!n.parent_note_id;
       const visCls = isDev ? 'note-dev' : 'note-public';
+      const replyCls = isReply ? ' note-reply' : '';
       let devPill = '';
-      if (isDev) {{
+      if (isDev && !isReply) {{
         const s = (n.dev_status || 'open').toLowerCase();
         devPill = '<span class="note-dev-pill note-dev-' + _esc(s) + '">' + _esc(s.toUpperCase()) + '</span>';
       }}
+      // Reply button on top-level dev notes (reviewer+ — hidden by default, revealed by loadMe).
+      // Use data-* attributes to avoid quote-nesting issues in onclick.
+      let replyBtn = '';
+      if (isDev && !isReply && reqCode) {{
+        replyBtn = '<button class="btn-note-reply reviewer-plus" style="display:none;"' +
+          ' data-reply-note-id="' + n.id + '" data-reply-req-code="' + _esc(reqCode) + '"' +
+          ' onclick="event.stopPropagation();openReplyEditor(this.dataset.replyNoteId,this.dataset.replyReqCode)">' +
+          'Reply</button>';
+      }}
       return (
-        '<div class="req-note ' + visCls + '">' +
+        '<div class="req-note ' + visCls + replyCls + '" data-note-id="' + n.id + '">' +
           '<div class="req-note-meta">' +
             '<span class="req-note-author">' + author + '</span>' +
             timeHtml +
             devPill +
+            replyBtn +
           '</div>' +
           '<div class="req-note-body">' + body + '</div>' +
         '</div>'
       );
+    }}
+
+    function openReplyEditor(noteId, reqCode) {{
+      if (!IS_INTERACTIVE || !REPORT_ID) return;
+      // Remove any existing reply editor first
+      const existing = document.querySelector('.note-reply-editor');
+      if (existing) existing.remove();
+      const parentNote = document.querySelector('.req-note[data-note-id="' + noteId + '"]');
+      if (!parentNote) return;
+      const editor = document.createElement('div');
+      editor.className = 'note-reply-editor';
+      editor.innerHTML =
+        '<textarea placeholder="Reply to this bug flag…"></textarea>' +
+        '<div class="note-reply-editor-actions">' +
+          '<button class="btn btn-sm btn-subtle">Cancel</button>' +
+          '<button class="btn btn-sm btn-warning">Post reply</button>' +
+        '</div>';
+      parentNote.after(editor);
+      const ta = editor.querySelector('textarea');
+      ta.focus();
+      const [cancelBtn, saveBtn] = editor.querySelectorAll('button');
+      cancelBtn.onclick = () => editor.remove();
+      saveBtn.onclick = async () => {{
+        if (!ta.value.trim()) {{ ta.focus(); return; }}
+        saveBtn.disabled = true;
+        try {{
+          const r = await fetch('/api/report/' + REPORT_ID + '/item/' + reqCode + '/note', {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{note: ta.value, parent_note_id: noteId}})
+          }});
+          const data = await r.json();
+          if (data.error) throw new Error(data.error);
+          const row = editor.closest('.requirement');
+          _replaceNotesThread(row, data.notes || [], reqCode);
+          editor.remove();
+        }} catch (e) {{
+          alert('Could not post reply: ' + e.message);
+          saveBtn.disabled = false;
+        }}
+      }};
     }}
 
     // ── Timestamp localization ──

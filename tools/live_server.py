@@ -3400,11 +3400,23 @@ class LiveHandler(BaseHTTPRequestHandler):
             if not note_body:
                 self._send_json({"error": "Note body is empty"}, 400)
                 return
-            visibility = data.get("visibility") or "public"
+            parent_note_id = data.get("parent_note_id") or None
+            if parent_note_id:
+                parent_note_id = int(parent_note_id)
+            role = session.get("role") or ""
+            # Replies inherit visibility from parent; new notes use submitted value
+            if parent_note_id:
+                from tools.notes_db import get_note as _get_note
+                parent = _get_note(parent_note_id)
+                if not parent:
+                    self._send_json({"error": "Parent note not found"}, 404)
+                    return
+                visibility = parent.get("visibility", "dev")
+            else:
+                visibility = data.get("visibility") or "public"
             if visibility not in ("public", "dev"):
                 self._send_json({"error": "Invalid visibility"}, 400)
                 return
-            role = session.get("role") or ""
             if visibility == "dev" and not can_file_dev_note(role):
                 self._send_json({"error": "Forbidden"}, 403)
                 return
@@ -3415,16 +3427,13 @@ class LiveHandler(BaseHTTPRequestHandler):
                 author_user_id=session.get("user_id"),
                 visibility=visibility,
                 body=note_body,
+                parent_note_id=parent_note_id,
             )
-            # Notify superadmins on dev-note filings (in-app + email).
-            # Public notes don't fire notifications today — they're already
-            # visible inline on the report; pinging on every crew comment
-            # would be too noisy. May add per-user opt-in later.
-            if visibility == "dev":
+            # Notifications: new dev notes alert superadmins; replies notify
+            # thread participants. Public notes are silent (visible inline).
+            if visibility == "dev" and not parent_note_id:
                 try:
                     from tools.notifications import notify_dev_note_filed
-                    # Session only carries user_id; look up name for the
-                    # "From: Javier" line in Brandon's email.
                     filer = fetch_one(
                         "SELECT full_name, email FROM users WHERE id = %s",
                         (session.get("user_id"),),
@@ -3436,8 +3445,21 @@ class LiveHandler(BaseHTTPRequestHandler):
                         filer_name=filer.get("full_name") or filer.get("email"),
                     )
                 except Exception as e:
-                    # Notification failure must NEVER break note creation
                     print(f"notify_dev_note_filed failed: {e}", file=sys.stderr)
+            elif visibility == "dev" and parent_note_id:
+                try:
+                    from tools.notifications import notify_dev_note_reply
+                    replier = fetch_one(
+                        "SELECT full_name, email FROM users WHERE id = %s",
+                        (session.get("user_id"),),
+                    ) or {}
+                    notify_dev_note_reply(
+                        parent,
+                        created,
+                        replier_name=replier.get("full_name") or replier.get("email"),
+                    )
+                except Exception as e:
+                    print(f"notify_dev_note_reply failed: {e}", file=sys.stderr)
 
             thread = list_notes_for_req_result(row["id"], role)
             # Serialize timestamps for JSON

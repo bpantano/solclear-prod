@@ -155,7 +155,7 @@ def list_notes_for_req_result(
         f"""
         SELECT n.id, n.report_id, n.requirement_result_id, n.author_user_id,
                n.visibility, n.body, n.dev_status, n.resolved_at,
-               n.resolved_by_user_id, n.created_at,
+               n.resolved_by_user_id, n.parent_note_id, n.created_at,
                u.full_name AS author_name, u.email AS author_email,
                ru.full_name AS resolver_name
         FROM notes n
