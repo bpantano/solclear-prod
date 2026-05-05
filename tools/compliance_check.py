@@ -650,10 +650,10 @@ REQUIREMENTS = [
             "confirmed SOMEWHERE in the set."
         ),
         "criteria": [
-            "LightReach is added as a monitoring/service partner (installer partner entry)",
-            "Inverter and CTs (current transformers) are enabled — not in an error/alert state",
-            "Networking is connected via Cellular (cellular shown as active connection type)",
-            "Operations settings show both a panel current limit value AND PCS (power control system) settings configured",
+            "LightReach is listed as the Partner on the Registration screen (look for 'Partner: LIGHTREACH' or similar)",
+            "Inverter State is Active and the system is not in an error or alert state",
+            "Network shows Cellular as the active connection type (visible on Summary or Networking screen)",
+            "Summary screen shows Panel Maximum Current Limit value AND PCS controlled source(s) output-circuit current value",
         ],
     },
     {
