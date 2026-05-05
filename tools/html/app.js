@@ -83,7 +83,7 @@
     // Top-level sections get a real history entry so the browser back button
     // returns to them after viewing a report. Wizard sub-steps and detail
     // pages use replaceState — no separate history entry.
-    const _PUSH_STEPS = new Set(['home', 'reports', 'reqs', 'orgs', 'orgCreate', 'costs', 'devnotes', 1]);
+    const _PUSH_STEPS = new Set(['home', 'reports', 'reqs', 'reqDetail', 'orgs', 'orgCreate', 'orgDetail', 'costs', 'devnotes', 1]);
 
     function showStep(n, _fromPopstate) {
       if (!_fromPopstate) {
